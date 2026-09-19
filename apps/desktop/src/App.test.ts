@@ -9,3 +9,12 @@ test("an empty registry offers setup without a pretend sync action", () => {
   expect(wrapper.text()).toContain("Ordnerpaar hinzufügen");
   expect(wrapper.find('[data-testid="start-sync"]').exists()).toBe(false);
 });
+
+test("a settings load failure is visible instead of pretending setup is empty", () => {
+  const wrapper = mount(App, { props: {
+    initialSettings: null,
+    initialError: { code: "invalid_settings", retryable: false },
+  } });
+  expect(wrapper.text()).toContain("Einstellungen konnten nicht geladen werden");
+  expect(wrapper.text()).not.toContain("Ordnerpaar hinzufügen");
+});

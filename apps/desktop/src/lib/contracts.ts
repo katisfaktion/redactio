@@ -46,8 +46,14 @@ export const SettingsSchema = z.object({
   selected_sync_pair_id: z.uuid().nullable(),
 }).strict();
 
+export const SafeErrorSchema = z.object({
+  code: z.string(),
+  retryable: z.boolean(),
+}).strict();
+
 export type EntityType = z.infer<typeof EntityTypeSchema>;
 export type CustomRule = z.infer<typeof CustomRuleSchema>;
 export type ProcessingConfig = z.infer<typeof ProcessingConfigSchema>;
 export type SyncPair = z.infer<typeof SyncPairSchema>;
 export type Settings = z.infer<typeof SettingsSchema>;
+export type SafeError = z.infer<typeof SafeErrorSchema>;

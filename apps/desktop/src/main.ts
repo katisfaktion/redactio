@@ -7,13 +7,17 @@ import "sit-onyx/style.css";
 import "sit-onyx/global.css";
 import "./styles.css";
 import App from "./App.vue";
-import type { Settings } from "./lib/contracts";
+import { pairApi, safeError } from "./lib/ipc";
+import type { SafeError, Settings } from "./lib/contracts";
 
-const initialSettings: Settings = {
-  schema_version: 1,
-  sync_pairs: [],
-  selected_sync_pair_id: null,
-};
-const app = createApp(App, { initialSettings });
+let initialSettings: Settings | null = null;
+let initialError: SafeError | null = null;
+try {
+  initialSettings = await pairApi.listPairs();
+} catch (error) {
+  initialError = safeError(error);
+}
+
+const app = createApp(App, { initialSettings, initialError });
 app.use(createOnyx({ i18n: { locale: ref("de-DE"), messages: { "de-DE": onyxDeDE } } }));
 app.mount("#app");

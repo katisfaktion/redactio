@@ -1,11 +1,24 @@
 <script setup lang="ts">
-import { OnyxAppLayout, OnyxButton, OnyxPageLayout } from "sit-onyx";
+import { OnyxAppLayout, OnyxPageLayout } from "sit-onyx";
+import PairManager from "./components/PairManager.vue";
+import { usePairs } from "./composables/usePairs";
+import type { SafeError, Settings } from "./lib/contracts";
 
-import type { Settings } from "./lib/contracts";
+const props = withDefaults(defineProps<{
+  initialSettings: Settings | null;
+  initialError?: SafeError | null;
+}>(), { initialError: null });
 
-defineProps<{
-  initialSettings: Settings;
-}>();
+const empty: Settings = { schema_version: 1, sync_pairs: [], selected_sync_pair_id: null };
+const pairs = usePairs(props.initialSettings ?? empty);
+const errorText: Record<string, string> = {
+  invalid_settings: "Einstellungen konnten nicht geladen werden. Die vorhandene Datei wurde nicht verändert.",
+  invalid_mapping: "Die Zuordnungsdatei ist ungültig und wurde nicht verändert.",
+  invalid_pair_name: "Bitte geben Sie einen Namen ein.",
+  duplicate_pair_name: "Dieser Name wird bereits verwendet.",
+  target_not_empty: "Der Zielordner ist nicht leer und gehört noch nicht zu dieser Quelle.",
+  confirmation_required: "Das Anlegen des Zielordners muss bestätigt werden.",
+};
 </script>
 
 <template>
@@ -17,51 +30,38 @@ defineProps<{
           <h1>Dokumente sicher schwärzen</h1>
         </header>
 
-        <section v-if="initialSettings.sync_pairs.length === 0" class="setup" aria-labelledby="setup-heading">
-          <div>
-            <h2 id="setup-heading">Noch kein Ordnerpaar eingerichtet</h2>
-            <p>Wählen Sie einen Quellordner und einen getrennten Zielordner aus.</p>
-          </div>
-          <OnyxButton label="Ordnerpaar hinzufügen" />
+        <section v-if="initialError" class="error" role="alert">
+          <h2>Einstellungen konnten nicht geladen werden</h2>
+          <p>{{ errorText[initialError.code] ?? "Die lokalen Einstellungen sind derzeit nicht verfügbar." }}</p>
         </section>
+
+        <template v-else>
+          <p v-if="pairs.error.value" class="error" role="alert">
+            {{ errorText[pairs.error.value.code] ?? "Die Änderung konnte nicht gespeichert werden." }}
+          </p>
+          <PairManager
+            :settings="pairs.settings.value"
+            :busy="pairs.busy.value"
+            @add="pairs.addPair"
+            @rename="pairs.renamePair"
+            @select="pairs.selectPair"
+            @remove="pairs.removePair"
+          />
+          <section v-if="pairs.selectedPair.value" data-testid="document-view" aria-labelledby="documents-heading">
+            <h2 id="documents-heading">Dokumente: {{ pairs.selectedPair.value.name }}</h2>
+            <p>Die Dokumentliste wird nach dem Einlesen dieses Ordnerpaars angezeigt.</p>
+          </section>
+        </template>
       </main>
     </OnyxPageLayout>
   </OnyxAppLayout>
 </template>
 
 <style scoped>
-.shell {
-  display: grid;
-  gap: var(--onyx-spacing-2xl);
-  min-height: 100%;
-  padding-block: var(--onyx-spacing-2xl);
-}
-
-.eyebrow {
-  color: var(--onyx-color-text-icons-neutral-intense);
-  font-weight: var(--onyx-font-weight-semibold);
-  margin: 0 0 var(--onyx-spacing-xs);
-}
-
-h1,
-h2,
-p {
-  margin-top: 0;
-}
-
-.setup {
-  align-items: center;
-  background: var(--onyx-color-base-background-blank);
-  border: var(--onyx-1px-in-rem) solid var(--onyx-color-component-border-neutral);
-  border-radius: var(--onyx-radius-md);
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--onyx-spacing-xl);
-  justify-content: space-between;
-  padding: var(--onyx-spacing-xl);
-}
-
-.setup p {
-  margin-bottom: 0;
-}
+.shell { display: grid; gap: var(--onyx-spacing-lg); }
+.shell { min-height: 100%; padding-block: var(--onyx-spacing-2xl); }
+.eyebrow { font-weight: var(--onyx-font-weight-semibold); margin: 0 0 var(--onyx-spacing-xs); }
+h1, h2, h3, p { margin-block: 0; }
+:deep(.pair-manager), .error, [data-testid="document-view"] { background: var(--onyx-color-base-background-blank); border: var(--onyx-1px-in-rem) solid var(--onyx-color-component-border-neutral); border-radius: var(--onyx-radius-md); padding: var(--onyx-spacing-xl); }
+.error { color: var(--onyx-color-text-icons-danger-intense); }
 </style>

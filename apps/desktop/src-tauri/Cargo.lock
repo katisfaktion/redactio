@@ -2428,6 +2428,8 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-dialog",
  "tempfile",
+ "time",
+ "uuid",
  "windows-sys 0.61.2",
 ]
 

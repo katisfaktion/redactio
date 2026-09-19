@@ -41,7 +41,7 @@ impl ValidatedWrite {
         })
     }
 
-    fn revalidate(&self) -> Result<(), AppError> {
+    pub fn validate(&self) -> Result<(), AppError> {
         for (path, expected) in &self.directories {
             let metadata = fs::symlink_metadata(path).map_err(|_| AppError::new("path_changed"))?;
             if !metadata.is_dir()
@@ -60,7 +60,7 @@ impl ValidatedWrite {
     }
 
     pub fn write_atomic(self, bytes: &[u8]) -> Result<(), AppError> {
-        self.revalidate()?;
+        self.validate()?;
         let parent = self
             .path
             .parent()
@@ -71,7 +71,7 @@ impl ValidatedWrite {
             .iter()
             .map(|(path, _)| open_directory(path))
             .collect::<Result<Vec<_>, _>>()?;
-        self.revalidate()?;
+        self.validate()?;
         let directory = &directories[0];
         let io_parent = anchored_parent(parent, directory);
         let destination = io_parent.join(
@@ -85,7 +85,7 @@ impl ValidatedWrite {
         temporary.write_all(bytes)?;
         temporary.as_file().sync_all()?;
         let expected_temp = snapshot_file(temporary.as_file())?;
-        self.revalidate()?;
+        self.validate()?;
         if file_snapshot(temporary.path())? != expected_temp {
             return Err(AppError::new("path_changed"));
         }
@@ -104,13 +104,13 @@ impl ValidatedWrite {
         if self.destination.is_some() {
             return Err(AppError::new("path_exists"));
         }
-        self.revalidate()?;
+        self.validate()?;
         let directories = self
             .directories
             .iter()
             .map(|(path, _)| open_directory(path))
             .collect::<Result<Vec<_>, _>>()?;
-        self.revalidate()?;
+        self.validate()?;
         let parent = self
             .path
             .parent()
