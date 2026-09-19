@@ -82,6 +82,7 @@ jobs:
           $env:REDACTIO_REAL_SIDECAR_PYTHON = $env:REDACTIO_TEST_PYTHON
           $env:REDACTIO_REAL_MODEL_DIR = $env:REDACTIO_MODEL_DIR
           cargo test --locked --offline --manifest-path apps/desktop/src-tauri/Cargo.toml --test sidecar reviewed_cli_roundtrips_through_the_bundled_model -- --ignored
+          cargo test --locked --offline --manifest-path apps/desktop/src-tauri/Cargo.toml --test sync real_two_pair_batches_cover_errors_cancellation_and_rule_isolation -- --ignored
       - name: Windows package negative checks
         if: runner.os == 'Windows'
         run: ./scripts/test-check-package.ps1

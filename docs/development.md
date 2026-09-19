@@ -79,6 +79,14 @@ export REDACTIO_TEST_PYTHON="$PWD/apps/sidecar/.venv/bin/python"
 cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test sidecar
 ```
 
+For cross-built Windows test executables, set `REDACTIO_TEST_MANIFEST_DIR` to the
+native Windows path of `apps/desktop/src-tauri` in a checkout or fixture mirror.
+The mirror must contain `tests/fake_sidecar.py` and the sibling
+`apps/sidecar/tests/test_contract.py`; use a locked native Python test environment
+with the current sidecar and pytest installed. Run from an unrelated local Windows
+working directory. With no override, tests use Cargo's build-time manifest path.
+This override affects test fixtures only; it is not an application resource override.
+
 On Windows PowerShell:
 
 ```powershell

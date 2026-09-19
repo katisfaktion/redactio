@@ -118,6 +118,15 @@ documents to produce repository or CI evidence.
   token (`WinError 1314`, required privilege absent). No Developer Mode/security setting
   was changed. This criterion remains unverified; ordinary junction tests do run.
 
+Stage 1b on reviewed integration `e68198e`: actual Windows MSVC release executables
+passed 127 default tests plus both real-model opt-ins (129 total), including native
+transport, the Python contract emitter, two-pair batch/error/cancellation/rule isolation,
+and six concurrent audit writers ×30 appends. The known file-symlink fixture was
+explicitly filtered as unverified; its regression remains enabled for capable hosts.
+Test fixtures ran from a dedicated native TEMP mirror and local cwd using the test-only
+`REDACTIO_TEST_MANIFEST_DIR` override. Linux debug checks passed 133 default tests plus
+both real-model opt-ins. No final package/GUI/network acceptance follows from these tests.
+
 Detailed command outputs and local synthetic evidence locations are maintained in the
 P5.2 task report. Remote CI has not run: no remote or publishing action was authorized.
 CI definitions use frozen/locked dependencies and build-time hash-pinned model downloads,
