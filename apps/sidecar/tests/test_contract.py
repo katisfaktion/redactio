@@ -290,6 +290,19 @@ def test_document_metadata_requires_rfc3339_timestamp_string(timestamp):
         REQUEST_ADAPTER.validate_python(message)
 
 
+def test_document_metadata_accepts_lowercase_rfc3339_separators():
+    payload = document_meta()
+    payload["redacted_at"] = "2026-09-19t10:00:00z"
+    request = REQUEST_ADAPTER.validate_python(
+        {
+            "id": "lowercase-time",
+            "type": "process_document",
+            "payload": {**payload, "source_path": "synthetic.docx"},
+        }
+    )
+    assert request.payload.redacted_at == datetime(2026, 9, 19, 10, 0, tzinfo=UTC)
+
+
 def test_internal_model_construction_accepts_aware_datetime():
     payload = document_meta()
     payload["redacted_at"] = datetime(2026, 9, 19, 8, 0, tzinfo=UTC)

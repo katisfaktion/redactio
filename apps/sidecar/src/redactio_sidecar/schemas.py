@@ -29,8 +29,8 @@ def _canonical_uuid(value: str) -> str:
 
 
 _RFC3339 = re.compile(
-    r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}"
-    r"(?:\.[0-9]+)?(?:Z|[+-][0-9]{2}:[0-9]{2})$"
+    r"^[0-9]{4}-[0-9]{2}-[0-9]{2}[Tt][0-9]{2}:[0-9]{2}:[0-9]{2}"
+    r"(?:\.[0-9]+)?(?:[Zz]|[+-][0-9]{2}:[0-9]{2})$"
 )
 
 
@@ -40,7 +40,10 @@ def _parse_rfc3339(value: object) -> datetime:
     if not isinstance(value, str) or _RFC3339.fullmatch(value) is None:
         raise ValueError("timestamp must be an RFC-3339 string")
     try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        normalized = value[:10] + "T" + value[11:]
+        if normalized.endswith(("Z", "z")):
+            normalized = normalized[:-1] + "+00:00"
+        return datetime.fromisoformat(normalized)
     except ValueError as error:
         raise ValueError("invalid RFC-3339 timestamp") from error
 
