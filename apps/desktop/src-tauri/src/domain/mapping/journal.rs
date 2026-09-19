@@ -442,7 +442,7 @@ fn recover_one(
     persist(mapping, data)
 }
 
-fn validate_context(
+pub(crate) fn validate_context(
     pair: &SyncPair,
     mapping: &Mapping,
     guard: &CollectionGuard,

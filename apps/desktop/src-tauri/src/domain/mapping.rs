@@ -14,6 +14,7 @@ use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use uuid::Uuid;
 
 mod journal;
+pub(crate) use journal::validate_context;
 pub use journal::{
     commit_generation, recover_pending, CommitCandidate, PendingCommit, ReviewRecord,
 };
