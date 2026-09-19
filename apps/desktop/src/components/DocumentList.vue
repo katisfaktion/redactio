@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { OnyxButton, OnyxTable } from "sit-onyx";
 import { computed, ref, watch } from "vue";
-import type { SafeError, ScanReport, ScanState } from "../lib/contracts";
+import type { DocumentKey, SafeError, ScanReport, ScanState } from "../lib/contracts";
 import { pairApi, safeError } from "../lib/ipc";
 
 const props = defineProps<{
@@ -9,7 +9,7 @@ const props = defineProps<{
   disabled?: boolean;
   scan?: (pairId: string) => Promise<ScanReport>;
 }>();
-const emit = defineEmits<{ scanned: [report: ScanReport]; reprocess: [files: { relative_path: string; doc_id: string }[]]; review: [docId: string] }>();
+const emit = defineEmits<{ scanned: [report: ScanReport]; reprocess: [files: { relative_path: string; doc_id: string }[]]; review: [docId: string]; export: [keys: DocumentKey[]] }>();
 const selected = ref<string[]>([]);
 const selectedFiles = computed(() => report.value?.files.flatMap((file) => file.doc_id && selected.value.includes(file.doc_id)
   ? [{ relative_path: file.relative_path, doc_id: file.doc_id }] : []) ?? []);
@@ -102,6 +102,7 @@ function formatMtime(value: string | null): string {
         </tr>
       </OnyxTable>
       <OnyxButton v-if="report.files.some((file) => file.doc_id)" label="Auswahl erneut verarbeiten" type="button" :disabled="busy || disabled || !selectedFiles.length" @click="emit('reprocess', selectedFiles)" />
+      <OnyxButton v-if="report.files.some((file) => file.doc_id)" data-testid="export-selection" label="Auswahl freigegeben exportieren" type="button" :disabled="busy || disabled || !selectedFiles.length" @click="emit('export', selectedFiles.map(file => ({ sync_pair_id: pairId, doc_id: file.doc_id })))" />
       <p>{{ report.files.length }} Dokumente gefunden; {{ report.errors.length }} Lesefehler.</p>
       <p v-if="!report.files.length && !report.errors.length" class="empty">
         Keine geeigneten DOCX-Dokumente gefunden.

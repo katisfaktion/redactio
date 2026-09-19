@@ -90,3 +90,23 @@ test("busy work disables discovery and selected reprocessing names exact stable 
   await wrapper.setProps({ disabled: true });
   expect(wrapper.findAll("button").every((button) => button.attributes("disabled") !== undefined)).toBe(true);
 });
+
+
+test("export emits a copied full-key selection and clears it on pair changes", async () => {
+  const wrapper = mountList(async () => ({ ...report, files: [{ ...report.files[0], doc_id: "doc-0001", state: "current" }] }));
+  await wrapper.get("button").trigger("click");
+  const start = () => wrapper.get('[data-testid="export-selection"]');
+  expect(start().attributes("disabled")).toBeDefined();
+  await wrapper.get('input[type="checkbox"]').setValue(true);
+  await start().trigger("click");
+  const emitted = wrapper.emitted("export")![0]![0];
+  expect(emitted).toEqual([{ sync_pair_id: pairA, doc_id: "doc-0001" }]);
+  await wrapper.setProps({ pairId: pairB });
+  await wrapper.get("button").trigger("click");
+  expect(start().attributes("disabled")).toBeDefined();
+  await wrapper.get('input[type="checkbox"]').setValue(true);
+  await start().trigger("click");
+  expect(wrapper.emitted("export")![1]![0]).toEqual([{ sync_pair_id: pairB, doc_id: "doc-0001" }]);
+  expect(emitted).toEqual([{ sync_pair_id: pairA, doc_id: "doc-0001" }]);
+  wrapper.unmount();
+});

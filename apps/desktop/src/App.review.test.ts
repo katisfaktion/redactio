@@ -2,6 +2,8 @@ import { flushPromises, mount } from "@vue/test-utils";
 import { afterEach, expect, test, vi } from "vitest";
 import App from "./App.vue";
 import PairManager from "./components/PairManager.vue";
+import DocumentList from "./components/DocumentList.vue";
+import ExportDialog from "./components/ExportDialog.vue";
 import ReviewView from "./components/ReviewView.vue";
 import { detectionApi, pairApi, reviewApi, runApi } from "./lib/ipc";
 import type { ReviewViewData, Settings } from "./lib/contracts";
@@ -160,5 +162,25 @@ test("dismissing the modal acts as stay and permits a later navigation request",
   expect(review.notes.value).toBe("keep");
   await wrapper.get('[data-testid="documents-nav"]').trigger("click");
   expect(wrapper.find('[data-testid="leave-stay"]').exists()).toBe(true);
+  wrapper.unmount();
+});
+
+
+test("export uses the dirty-review guard and captures keys before deferred navigation", async () => {
+  Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value() { this.open = true; } });
+  Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value() { this.open = false; } });
+  const { wrapper, review, save } = await setup();
+  review.notes.value = "private unsaved note";
+  const keys = [{ sync_pair_id: pairA, doc_id: "doc-0001" }];
+  wrapper.getComponent(DocumentList).vm.$emit("export", keys); await flushPromises();
+  expect(wrapper.findComponent(ExportDialog).exists()).toBe(false);
+  await wrapper.get('[data-testid="leave-stay"]').trigger("click");
+  expect(review.notes.value).toBe("private unsaved note");
+  wrapper.getComponent(DocumentList).vm.$emit("export", keys); await flushPromises();
+  keys[0]!.sync_pair_id = pairB;
+  await wrapper.get('[data-testid="leave-save"]').trigger("click"); await flushPromises();
+  expect(save).toHaveBeenCalledOnce();
+  expect(wrapper.getComponent(ExportDialog).props("keys")).toEqual([{ sync_pair_id: pairA, doc_id: "doc-0001" }]);
+  expect(wrapper.findComponent(ReviewView).exists()).toBe(false);
   wrapper.unmount();
 });

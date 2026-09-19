@@ -9,12 +9,13 @@ import PairManager from "./components/PairManager.vue";
 import RunPanel from "./components/RunPanel.vue";
 import DetectionSettings from "./components/DetectionSettings.vue";
 import ReviewView from "./components/ReviewView.vue";
+import ExportDialog from "./components/ExportDialog.vue";
 import { useReview } from "./composables/useReview";
 import { useDetection } from "./composables/useDetection";
 import { usePairs } from "./composables/usePairs";
 import { useRun } from "./composables/useRun";
 import { runApi, safeError } from "./lib/ipc";
-import type { SafeError, ScanReport, Settings } from "./lib/contracts";
+import type { DocumentKey, SafeError, ScanReport, Settings } from "./lib/contracts";
 
 const props = withDefaults(defineProps<{
   initialSettings: Settings | null;
@@ -33,7 +34,8 @@ const reviewDocuments = ref<{ value: string; label: string }[]>([]);
 const selectedId = computed(() => pairs.selectedPair.value?.id ?? null);
 const run = useRun(selectedId);
 const scanned = ref(false), confirming = ref(false);
-const busy = computed(() => pairs.busy.value || run.busy.value || detection.busy.value || review.busy.value || confirming.value);
+const exportSelection = shallowRef<{ pairId: string; pairName: string; keys: DocumentKey[] } | null>(null);
+const busy = computed(() => !!exportSelection.value || pairs.busy.value || run.busy.value || detection.busy.value || review.busy.value || confirming.value);
 const leaveAction = shallowRef<(() => void | Promise<void>) | null>(null);
 const closeError = ref("");
 function guard(action: () => void | Promise<void>) {
@@ -59,6 +61,12 @@ function openReview(docId: string) {
   const pairId = selectedId.value;
   if (!pairId || (view.value === "review" && review.key.value?.doc_id === docId)) return;
   guard(async () => { view.value = "review"; await review.open({ sync_pair_id: pairId, doc_id: docId }); });
+}
+function openExport(keys: DocumentKey[]) {
+  const pair = pairs.selectedPair.value;
+  if (!pair || !keys.length || keys.some(key => key.sync_pair_id !== pair.id)) return;
+  const selection = { pairId: pair.id, pairName: pair.name, keys: keys.map(key => ({ ...key })) };
+  guard(() => { review.clear(); view.value = "documents"; exportSelection.value = selection; });
 }
 function onScanned(report: ScanReport) {
   scanned.value = true;
@@ -159,7 +167,7 @@ const errorText: Record<string, string> = {
           <section v-if="pairs.selectedPair.value" v-show="view === 'documents'" data-testid="document-view" aria-labelledby="documents-heading">
             <h2 id="documents-heading">Dokumente: {{ pairs.selectedPair.value.name }}</h2>
             <p>Der Arbeitsordner enthält auch ungeprüfte Ergebnisse. Prüfen Sie Dokumente vor der Weitergabe.</p>
-            <DocumentList :key="`${pairs.selectedPair.value.id}:${pairs.selectedPair.value.processing_revision}`" :pair-id="pairs.selectedPair.value.id" :disabled="busy" @scanned="onScanned" @reprocess="reprocess" @review="openReview" />
+            <DocumentList :key="`${pairs.selectedPair.value.id}:${pairs.selectedPair.value.processing_revision}`" :pair-id="pairs.selectedPair.value.id" :disabled="busy" @scanned="onScanned" @reprocess="reprocess" @review="openReview" @export="openExport" />
             <RunPanel
               :pair-name="pairs.selectedPair.value.name"
               :counts="run.progress.value ?? emptyCounts"
@@ -184,6 +192,7 @@ const errorText: Record<string, string> = {
             <p v-if="auditError" role="alert">Der Protokollordner ist derzeit nicht verfügbar.</p>
           </section>
         </template>
+        <ExportDialog v-if="exportSelection" :pair-id="exportSelection.pairId" :pair-name="exportSelection.pairName" :keys="exportSelection.keys" @close="exportSelection = null" />
         <OnyxModal label="Ungespeicherte Prüfung" :open="!!leaveAction" :alert="true" @update:open="open => !open && leave('stay')">
           <div class="leave-dialog">
             <h2>Ungespeicherte Prüfung</h2>
