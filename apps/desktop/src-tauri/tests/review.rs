@@ -124,6 +124,14 @@ main()
                 .expect("models required")
                 .into(),
         );
+        let settings = redactio_lib::domain::detection::refresh_processing_config(
+            &redactio_lib::domain::sync::RunController::new(path.clone()),
+            &sidecar,
+            pair.id,
+        )
+        .await
+        .unwrap();
+        let pair = settings.sync_pairs[0].clone();
         let config_guard = CollectionGuard::acquire(&config).unwrap();
         let guard = CollectionGuard::acquire(&source).unwrap();
         let engine = configure_pair(&pair, &sidecar).await.unwrap().engine;
@@ -497,5 +505,97 @@ fn real_review_corrections_approval_and_tampering() {
             }
             assert!(!f.path.parent().unwrap().join("audit-log.jsonl").exists());
             f.sidecar.shutdown().await;
+        });
+}
+
+#[test]
+#[ignore = "requires the reviewed sidecar interpreter and bundled models"]
+fn real_configured_commands_approve_reopen_and_reject_changed_settings() {
+    use redactio_lib::domain::{
+        detection,
+        review::{open_configured, save_configured},
+        settings::load_settings,
+        sync::RunController,
+    };
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let f = Fixture::new().await;
+            let key = f.seed("normal").await;
+            let Fixture {
+                _root,
+                path,
+                pair,
+                config_guard,
+                guard,
+                sidecar,
+                ..
+            } = f;
+            drop(guard);
+            drop(config_guard);
+            let controller = RunController::new(path.clone());
+            let settings_bytes = fs::read(&path).unwrap();
+            let opened = open_configured(&controller, &sidecar, &key).await.unwrap();
+            assert_eq!(opened.status, ReviewStatus::Pending);
+            assert!(opened.body.contains("<EMAIL_ADDRESS_1>"));
+            let approved = save_configured(
+                &controller,
+                &sidecar,
+                &key,
+                input(&opened, ReviewStatus::Approved),
+            )
+            .await
+            .unwrap();
+            assert_eq!(approved.status, ReviewStatus::Approved);
+            assert_eq!(
+                digest(approved.markdown.as_bytes()),
+                approved.expected_output_hash
+            );
+            assert!(!approved.markdown.contains("PRIVATE_NOTE_CANARY"));
+            let reopened = open_configured(&controller, &sidecar, &key).await.unwrap();
+            assert_eq!(reopened.status, ReviewStatus::Approved);
+            assert_eq!(reopened.expected_output_hash, approved.expected_output_hash);
+            assert_eq!(
+                fs::read(&path).unwrap(),
+                settings_bytes,
+                "review preserves equivalent saved configuration"
+            );
+            let output_bytes = fs::read(pair.target_folder.join("doc-0001.md")).unwrap();
+            let mut changed = pair.config.clone();
+            changed.include_positions = false;
+            detection::save_processing_config(&controller, &sidecar, pair.id, changed)
+                .await
+                .unwrap();
+            assert_ne!(
+                load_settings(&path).unwrap().sync_pairs[0].processing_revision,
+                pair.processing_revision
+            );
+            assert_eq!(
+                open_configured(&controller, &sidecar, &key)
+                    .await
+                    .unwrap_err()
+                    .code,
+                "reprocess_required"
+            );
+            assert_eq!(
+                save_configured(
+                    &controller,
+                    &sidecar,
+                    &key,
+                    input(&approved, ReviewStatus::Approved)
+                )
+                .await
+                .unwrap_err()
+                .code,
+                "reprocess_required"
+            );
+            assert_eq!(
+                fs::read(pair.target_folder.join("doc-0001.md")).unwrap(),
+                output_bytes
+            );
+            assert!(controller.try_operation().is_ok());
+            sidecar.shutdown().await;
         });
 }

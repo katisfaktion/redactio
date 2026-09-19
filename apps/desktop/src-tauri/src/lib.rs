@@ -28,6 +28,8 @@ pub fn run() {
             commands::refresh_processing_config,
             commands::preview_rules,
             commands::list_models,
+            commands::open_review,
+            commands::save_review,
             commands::start_sync,
             commands::cancel_sync,
             commands::get_run_summary,

@@ -101,6 +101,56 @@ export type ModelInfo = z.infer<typeof ModelInfoSchema>;
 export type Detection = z.infer<typeof DetectionSchema>;
 export type RulePreview = { pairId: string; config: ProcessingConfig; text: string; detections: Detection[] };
 
+export const DocumentKeySchema = z.object({
+  sync_pair_id: z.uuid(),
+  doc_id: z.string().regex(/^doc-(?!0000$)(?:[0-9]{4}|[1-9][0-9]{4,19})$/),
+}).strict();
+export const ReviewStatusSchema = z.enum(["pending", "approved", "rejected", "needs-rework"]);
+const HashSchema = z.string().regex(/^[0-9a-f]{64}$/);
+const WarningCodesSchema = z.array(z.string().regex(/^[a-z][a-z0-9_]{0,127}$/))
+  .refine(codes => new Set(codes).size === codes.length);
+export const DecisionsSchema = z.object({
+  dismissed_ids: z.array(z.string().min(1).max(128)).refine(ids => new Set(ids).size === ids.length),
+  manual: z.array(DetectionSchema.refine(span => span.origin === "manual" && span.confidence === null)),
+}).strict().refine(decisions => new Set(decisions.manual.map(span => span.id)).size === decisions.manual.length);
+export const OutputEntrySchema = z.object({
+  start_offset: z.int().nonnegative(), end_offset: z.int().positive(), entity_type: EntityTypeSchema,
+  placeholder: z.string().min(1), confidence: z.number().min(0).max(1).nullable(),
+  recognizer: z.string().min(1), origin: z.enum(["automatic", "manual", "merged"]),
+}).strict().refine(span => span.end_offset > span.start_offset);
+export const SaveReviewSchema = z.object({
+  expected_output_hash: HashSchema, decisions: DecisionsSchema, status: ReviewStatusSchema,
+  notes: z.string(), acknowledged_warnings: WarningCodesSchema,
+}).strict();
+export const ReviewViewDataSchema = z.object({
+  key: DocumentKeySchema, source_hash: HashSchema, revision: z.uuid(), expected_output_hash: HashSchema,
+  original_text: z.string(), markdown: z.string(), body: z.string(), detections: z.array(DetectionSchema),
+  redactions: z.array(OutputEntrySchema), decisions: DecisionsSchema, warnings: WarningCodesSchema,
+  acknowledged_warnings: WarningCodesSchema, notes: z.string(), status: ReviewStatusSchema,
+}).strict().refine(view => {
+  const length = Array.from(view.original_text).length;
+  const body = Array.from(view.body);
+  const automaticIds = new Set(view.detections.map(span => span.id));
+  const allSpans = [...view.detections, ...view.decisions.manual];
+  return length <= 1_000_000
+    && new Set(allSpans.map(span => span.id)).size === allSpans.length
+    && view.detections.every(span => span.origin === "automatic")
+    && allSpans.every(span => span.end <= length)
+    && view.decisions.dismissed_ids.every(id => automaticIds.has(id))
+    && view.redactions.every(span => span.end_offset <= body.length
+      && body.slice(span.start_offset, span.end_offset).join("") === span.placeholder)
+    && view.acknowledged_warnings.every(code => view.warnings.includes(code))
+    && (/[^\p{White_Space}]/u.test(view.original_text) || view.status === "needs-rework")
+    && (view.status !== "approved" || (!view.warnings.includes("empty_document")
+      && view.warnings.every(code => view.acknowledged_warnings.includes(code))));
+});
+export type DocumentKey = z.infer<typeof DocumentKeySchema>;
+export type ReviewStatus = z.infer<typeof ReviewStatusSchema>;
+export type Decisions = z.infer<typeof DecisionsSchema>;
+export type OutputEntry = z.infer<typeof OutputEntrySchema>;
+export type SaveReview = z.infer<typeof SaveReviewSchema>;
+export type ReviewViewData = z.infer<typeof ReviewViewDataSchema>;
+
 export const RecoveryPairSchema = z.object({
   id: z.uuid(), name: z.string(), source_folder: z.string(), target_folder: z.string(),
   pending_target: z.string().nullable(),

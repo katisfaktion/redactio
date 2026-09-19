@@ -248,6 +248,9 @@ def main() -> None:
             "process_document",
             "render_review",
         }:
+            if mode == "batch-review-pause" and request["type"] == "render_review":
+                marker.write_text("rendering", encoding="utf-8")
+                time.sleep(60)
             source = Path(payload["source_path"]).read_bytes()
             if source == b"invalid":
                 print(

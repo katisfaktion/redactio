@@ -6,7 +6,7 @@ use super::{
     scan::hash_output,
     settings::SyncPair,
     storage::ValidatedWrite,
-    sync::{now, same_timestamp},
+    sync::{now, same_timestamp, RunController},
 };
 use crate::{
     error::AppError,
@@ -67,6 +67,64 @@ struct CurrentReview {
     source: ValidatedWrite,
     output: ValidatedWrite,
     source_path: String,
+}
+
+/// Direct document commands refresh the saved engine binding even if the pair
+/// has not been activated or scanned in this app session.
+pub async fn open_configured(
+    controller: &RunController,
+    sidecar: &Sidecar,
+    key: &DocumentKey,
+) -> Result<ReviewViewData, AppError> {
+    let (mut pair, guard) = controller.lock_pair(key.sync_pair_id)?;
+    let config = pair.config.clone();
+    let configured = super::detection::apply_configuration(
+        controller.settings_path(),
+        &guard,
+        &mut pair,
+        config,
+        sidecar,
+    )
+    .await?;
+    open_review(
+        &pair,
+        key,
+        controller.settings_path(),
+        &guard.config,
+        &guard.source,
+        sidecar,
+        &configured.engine,
+    )
+    .await
+}
+
+pub async fn save_configured(
+    controller: &RunController,
+    sidecar: &Sidecar,
+    key: &DocumentKey,
+    input: SaveReview,
+) -> Result<ReviewViewData, AppError> {
+    let (mut pair, guard) = controller.lock_pair(key.sync_pair_id)?;
+    let config = pair.config.clone();
+    let configured = super::detection::apply_configuration(
+        controller.settings_path(),
+        &guard,
+        &mut pair,
+        config,
+        sidecar,
+    )
+    .await?;
+    save_review(
+        &pair,
+        key,
+        input,
+        controller.settings_path(),
+        &guard.config,
+        &guard.source,
+        sidecar,
+        &configured.engine,
+    )
+    .await
 }
 
 /// Caller retains the app operation lock and config → source guards and configures

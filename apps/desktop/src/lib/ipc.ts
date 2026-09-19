@@ -9,6 +9,11 @@ import {
   RunSummarySchema,
   ModelInfoSchema,
   DetectionSchema,
+  DocumentKeySchema,
+  ReviewViewDataSchema,
+  SaveReviewSchema,
+  type DocumentKey,
+  type SaveReview,
   type ProcessingConfig,
   type SafeError,
   type Settings,
@@ -53,6 +58,29 @@ export const detectionApi = {
     await invoke<unknown>("preview_rules", { pairId, config, text })),
 };
 export type DetectionApi = typeof detectionApi;
+
+function reviewResult(value: unknown, key: DocumentKey) {
+  const result = ReviewViewDataSchema.parse(value);
+  if (result.key.sync_pair_id !== key.sync_pair_id || result.key.doc_id !== key.doc_id) {
+    throw { code: "ipc_error", retryable: false };
+  }
+  return result;
+}
+export const reviewApi = {
+  open: async (key: DocumentKey) => {
+    const requested = DocumentKeySchema.parse(key);
+    return reviewResult(await invoke<unknown>("open_review", { key: requested }), requested);
+  },
+  save: async (key: DocumentKey, input: SaveReview) => {
+    const requested = DocumentKeySchema.parse(key);
+    const saved = SaveReviewSchema.parse(input);
+    return reviewResult(await invoke<unknown>("save_review", {
+      key: requested, expectedOutputHash: saved.expected_output_hash, decisions: saved.decisions,
+      status: saved.status, notes: saved.notes, acknowledgedWarnings: saved.acknowledged_warnings,
+    }), requested);
+  },
+};
+export type ReviewApi = typeof reviewApi;
 
 export function safeError(error: unknown): SafeError {
   const parsed = SafeErrorSchema.safeParse(error);

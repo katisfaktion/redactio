@@ -5,6 +5,7 @@ use crate::{
         mapping::CollectionGuard,
         paths::{create_target as create_target_directory, validate_roots},
         recovery::{fresh_start, recovery_pairs, RecoveryPair},
+        review::{self, ReviewViewData, SaveReview},
         scan::ScanReport,
         settings::{load_settings, save_settings, ProcessingConfig, Settings},
         sync::{RunController, RunSummary},
@@ -225,6 +226,34 @@ pub async fn preview_rules(
 #[tauri::command]
 pub fn list_models() -> Result<Vec<crate::protocol::ModelInfo>, AppError> {
     crate::resources::list_models(&crate::resources::resolve()?.model_root)
+}
+
+#[tauri::command]
+pub async fn open_review(
+    state: State<'_, AppState>,
+    key: crate::protocol::DocumentKey,
+) -> Result<ReviewViewData, AppError> {
+    review::open_configured(&state.runs, &state.sidecar()?, &key).await
+}
+
+#[tauri::command]
+pub async fn save_review(
+    state: State<'_, AppState>,
+    key: crate::protocol::DocumentKey,
+    expected_output_hash: String,
+    decisions: crate::protocol::Decisions,
+    status: crate::protocol::ReviewStatus,
+    notes: String,
+    acknowledged_warnings: Vec<String>,
+) -> Result<ReviewViewData, AppError> {
+    let input = SaveReview {
+        expected_output_hash,
+        decisions,
+        status,
+        notes,
+        acknowledged_warnings,
+    };
+    review::save_configured(&state.runs, &state.sidecar()?, &key, input).await
 }
 
 fn mutate(
