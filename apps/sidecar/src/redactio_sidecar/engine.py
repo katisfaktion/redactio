@@ -32,7 +32,7 @@ from presidio_analyzer.predefined_recognizers import (
 from pydantic import ValidationError
 
 from .extract import Extraction, extract_document
-from .frontmatter import render_document
+from .frontmatter import normalize_body, render_document
 from .ipc import EngineError
 from .redaction import apply_redactions
 from .schemas import (
@@ -355,6 +355,7 @@ class Engine:
         reviewed_at: datetime | None,
         snapshot: _Snapshot,
     ) -> ProcessResult:
+        body = normalize_body(body)
         try:
             markdown = render_document(
                 request,

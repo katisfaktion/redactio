@@ -495,12 +495,14 @@ def test_real_jsonl_process_and_review_are_private_and_repeatable(tmp_path, caps
     ]
     processed = replies[2]["payload"]
     assert processed["original_text"] == "Synthetic_1\n---\nraw: Käthe"
-    assert processed["body"] == "<CUSTOM_1>\n---\nraw: Käthe"
+    assert processed["body"] == "<CUSTOM_1>\n---\nraw: Käthe\n"
+    assert processed["markdown"].partition("\n---\n")[2] == processed["body"]
     assert processed["redactions"]
     assert "redactions:" not in processed["markdown"]
     rendered = replies[3]["payload"]
     assert rendered["review_status"] == "approved"
-    assert rendered["body"] == "<CUSTOM_1>\n---\nraw: Käthe"
+    assert rendered["body"] == "<CUSTOM_1>\n---\nraw: Käthe\n"
+    assert rendered["markdown"].partition("\n---\n")[2] == rendered["body"]
     assert rendered["markdown"] == replies[4]["payload"]["markdown"]
     frontmatter = yaml.safe_load(rendered["markdown"].split("---", 2)[1])
     assert frontmatter["reviewed_at"] == TIMESTAMP
@@ -533,7 +535,8 @@ def test_review_uses_stored_spans_and_enforces_warning_approval(tmp_path):
     approved = engine.render_review(
         request.model_copy(update={"acknowledged_warnings": ["headers_footers"]})
     )
-    assert approved.body == "Synthetic_1"
+    assert approved.body == "Synthetic_1\n"
+    assert approved.markdown.partition("\n---\n")[2] == approved.body
     assert approved.redactions == []
     assert approved.review_status == "approved"
     assert approved.warnings == ["headers_footers"]
@@ -595,7 +598,8 @@ def test_empty_processing_needs_rework_and_cannot_be_approved(tmp_path):
             {"id": "empty", "type": "process_document", "payload": payload}
         ).payload
     )
-    assert processed.body == ""
+    assert processed.body == "\n"
+    assert processed.markdown.partition("\n---\n")[2] == processed.body
     assert processed.body_was_empty is True
     assert processed.review_status == "needs-rework"
 

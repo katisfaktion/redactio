@@ -85,6 +85,10 @@ def _summary(entries: list[OutputEntry]) -> dict[EntityType, _Summary]:
     return summary
 
 
+def normalize_body(body: str) -> str:
+    return body if body.endswith("\n") else body + "\n"
+
+
 def render_document(
     meta: DocumentMeta,
     engine: EngineInfo,
@@ -125,4 +129,4 @@ def render_document(
         allow_unicode=True,
         sort_keys=False,
     )
-    return f"---\n{yaml_document}---\n{body}{'' if body.endswith(chr(10)) else chr(10)}"
+    return f"---\n{yaml_document}---\n{normalize_body(body)}"
