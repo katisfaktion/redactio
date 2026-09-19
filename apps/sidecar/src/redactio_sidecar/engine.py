@@ -4,12 +4,14 @@ import json
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any, cast
 from uuid import UUID, uuid5
 
 import spacy
+import tldextract
 from presidio_analyzer import (
     AnalyzerEngine,
     EntityRecognizer,
@@ -29,14 +31,23 @@ from presidio_analyzer.predefined_recognizers import (
 )
 from pydantic import ValidationError
 
+from .extract import Extraction, extract_document
+from .frontmatter import render_document
 from .ipc import EngineError
+from .redaction import apply_redactions
 from .schemas import (
+    Decisions,
     Detection,
     EngineInfo,
     EntityType,
     ModelInfo,
+    OutputEntry,
     ProcessingConfig,
+    ProcessRequest,
+    ProcessResult,
     RegexRule,
+    ReviewRequest,
+    ReviewStatus,
     WordRule,
 )
 
@@ -45,8 +56,16 @@ ENGINE_VERSION = "redactio-sidecar 0.1.0"
 EXTRACTION_VERSION = "1"
 _DETECTION_NAMESPACE = UUID("f31cdf75-cf5f-46cf-95d4-3ae885bcb84a")
 
+
+class _OfflineEmailRecognizer(EmailRecognizer):
+    _extract = tldextract.TLDExtract(cache_dir=None, suffix_list_urls=())
+
+    def validate_result(self, pattern_text: str) -> bool:
+        return self._extract(pattern_text).fqdn != ""
+
+
 _AUTOMATIC_RECOGNIZERS: dict[str, tuple[str, Callable[..., EntityRecognizer]]] = {
-    "EMAIL_ADDRESS": ("EmailRecognizer", EmailRecognizer),
+    "EMAIL_ADDRESS": ("EmailRecognizer", _OfflineEmailRecognizer),
     "PHONE_NUMBER": ("PhoneRecognizer", PhoneRecognizer),
     "IBAN_CODE": ("IbanRecognizer", IbanRecognizer),
     "IP_ADDRESS": ("IpRecognizer", IpRecognizer),
@@ -82,6 +101,7 @@ class _Snapshot:
     entities: tuple[str, ...]
     custom_rule_ids: frozenset[str]
     recognizers: tuple[str, ...]
+    include_positions: bool
     info: EngineInfo
 
 
@@ -186,6 +206,7 @@ class Engine:
             entities=tuple(entities),
             custom_rule_ids=frozenset(custom_ids),
             recognizers=tuple(recognizer_names),
+            include_positions=validated.include_positions,
             info=info,
         )
         return info.model_copy(deep=True)
@@ -221,21 +242,14 @@ class Engine:
                 raise EngineError("internal_error")
             if result.entity_type not in _ENTITY_TYPES:
                 raise EngineError("internal_error")
-            detection_id = str(
-                uuid5(
-                    _DETECTION_NAMESPACE,
-                    ":".join(
-                        (
-                            pair_id,
-                            revision,
-                            str(index),
-                            str(result.start),
-                            str(result.end),
-                            result.entity_type,
-                            recognizer,
-                        )
-                    ),
-                )
+            detection_id = _detection_id(
+                pair_id,
+                revision,
+                index,
+                result.start,
+                result.end,
+                result.entity_type,
+                recognizer,
             )
             detections.append(
                 Detection(
@@ -255,6 +269,121 @@ class Engine:
 
     def info(self, pair_id: str, revision: str) -> EngineInfo:
         return self._active_snapshot(pair_id, revision).info.model_copy(deep=True)
+
+    def process_document(self, request: ProcessRequest) -> ProcessResult:
+        snapshot = self._active_snapshot(request.sync_pair_id, request.processing_revision)
+        extraction = self._extract_bound(request)
+        detections = self.analyze(
+            request.sync_pair_id, request.processing_revision, extraction.text
+        )
+        try:
+            body, entries = apply_redactions(extraction.text, detections, Decisions())
+        except ValueError as error:
+            raise EngineError("internal_error") from error
+        status: ReviewStatus = "needs-rework" if extraction.warnings else "pending"
+        return self._result(request, extraction, detections, body, entries, status, None, snapshot)
+
+    def render_review(self, request: ReviewRequest) -> ProcessResult:
+        snapshot = self._active_snapshot(request.sync_pair_id, request.processing_revision)
+        extraction = self._extract_bound(request)
+        self._validate_review(request, snapshot)
+        if request.review_status == "approved" and (
+            request.reviewed_at is None
+            or not extraction.text.strip()
+            or not set(extraction.warnings) <= set(request.acknowledged_warnings)
+        ):
+            raise EngineError("approval_not_allowed")
+        try:
+            body, entries = apply_redactions(extraction.text, request.detections, request.decisions)
+        except ValueError as error:
+            raise EngineError("invalid_review") from error
+        status = request.review_status
+        if extraction.warnings and status == "pending":
+            status = "needs-rework"
+        return self._result(
+            request,
+            extraction,
+            request.detections,
+            body,
+            entries,
+            status,
+            request.reviewed_at,
+            snapshot,
+        )
+
+    def _extract_bound(self, request: ProcessRequest) -> Extraction:
+        extraction = extract_document(Path(request.source_path))
+        if extraction.source_hash_sha256 != request.source_hash_sha256:
+            raise EngineError("source_changed")
+        return extraction
+
+    def _validate_review(self, request: ReviewRequest, snapshot: _Snapshot) -> None:
+        identifiers = [
+            *(detection.id for detection in request.detections),
+            *(detection.id for detection in request.decisions.manual),
+        ]
+        if (
+            len(identifiers) != len(set(identifiers))
+            or len(request.decisions.dismissed_ids) != len(set(request.decisions.dismissed_ids))
+            or any(
+                detection.origin != "automatic"
+                or detection.entity_type not in snapshot.entities
+                or detection.recognizer not in snapshot.recognizers
+                or detection.id
+                != _detection_id(
+                    request.sync_pair_id,
+                    request.processing_revision,
+                    index,
+                    detection.start,
+                    detection.end,
+                    detection.entity_type,
+                    detection.recognizer,
+                )
+                for index, detection in enumerate(request.detections)
+            )
+        ):
+            raise EngineError("invalid_review")
+
+    def _result(
+        self,
+        request: ProcessRequest,
+        extraction: Extraction,
+        detections: list[Detection],
+        body: str,
+        entries: list[OutputEntry],
+        status: ReviewStatus,
+        reviewed_at: datetime | None,
+        snapshot: _Snapshot,
+    ) -> ProcessResult:
+        try:
+            markdown = render_document(
+                request,
+                snapshot.info,
+                body,
+                entries,
+                extraction.warnings,
+                status,
+                reviewed_at,
+                snapshot.include_positions,
+            )
+        except ValueError as error:
+            raise EngineError("invalid_review") from error
+        return ProcessResult(
+            sync_pair_id=request.sync_pair_id,
+            doc_id=request.doc_id,
+            source_hash_sha256=request.source_hash_sha256,
+            processing_revision=request.processing_revision,
+            redacted_at=request.redacted_at,
+            markdown=markdown,
+            body=body,
+            original_text=extraction.text,
+            detections=detections,
+            redactions=entries,
+            warnings=extraction.warnings,
+            body_was_empty=not extraction.text.strip(),
+            review_status=status,
+            engine=snapshot.info,
+        )
 
     def _active_snapshot(self, pair_id: str, revision: str) -> _Snapshot:
         snapshot = self._snapshot
@@ -371,3 +500,30 @@ def _engine_version() -> str:
 def _canonical_uuid(value: str) -> None:
     if str(UUID(value)) != value:
         raise ValueError
+
+
+def _detection_id(
+    pair_id: str,
+    revision: str,
+    index: int,
+    start: int,
+    end: int,
+    entity_type: str,
+    recognizer: str,
+) -> str:
+    return str(
+        uuid5(
+            _DETECTION_NAMESPACE,
+            ":".join(
+                (
+                    pair_id,
+                    revision,
+                    str(index),
+                    str(start),
+                    str(end),
+                    entity_type,
+                    recognizer,
+                )
+            ),
+        )
+    )

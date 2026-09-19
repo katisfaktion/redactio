@@ -1,12 +1,26 @@
 from __future__ import annotations
 
 import json
+from argparse import ArgumentParser
 from collections.abc import Callable
-from typing import Any, BinaryIO
+from functools import partial
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, BinaryIO
 
 from pydantic import TypeAdapter, ValidationError
 
-from .schemas import PingRequest, Request, Response
+from .schemas import (
+    ConfigureRequest,
+    PingRequest,
+    PreviewRulesRequest,
+    ProcessDocumentRequest,
+    RenderReviewRequest,
+    Request,
+    Response,
+)
+
+if TYPE_CHECKING:
+    from .engine import Engine
 
 MAX_MESSAGE_BYTES = 64 * 1024 * 1024
 REQUEST_ADAPTER: TypeAdapter[Request] = TypeAdapter(Request)
@@ -105,17 +119,57 @@ def run_loop(
             _write_error(stdout, request.id, EngineError("internal_error"))
 
 
-def dispatch_request(request: Request) -> dict[str, Any]:
+def dispatch_request(request: Request, engine: Engine | None = None) -> dict[str, Any]:
     if isinstance(request, PingRequest):
         return {
             "id": request.id,
             "type": "ping_result",
             "payload": {"protocol_version": 1},
         }
-    raise EngineError("unsupported_request")
+    if engine is None:
+        raise EngineError("unsupported_request")
+    payload: dict[str, Any]
+    if isinstance(request, ConfigureRequest):
+        info = engine.configure(
+            request.payload.sync_pair_id,
+            request.payload.processing_revision,
+            request.payload.config,
+        )
+        payload = {
+            "sync_pair_id": request.payload.sync_pair_id,
+            "processing_revision": request.payload.processing_revision,
+            "engine": info.model_dump(mode="json"),
+        }
+    elif isinstance(request, ProcessDocumentRequest):
+        payload = engine.process_document(request.payload).model_dump(mode="json")
+    elif isinstance(request, PreviewRulesRequest):
+        detections = engine.preview_rules(
+            request.payload.sync_pair_id,
+            request.payload.processing_revision,
+            request.payload.text,
+        )
+        payload = {
+            "sync_pair_id": request.payload.sync_pair_id,
+            "processing_revision": request.payload.processing_revision,
+            "detections": [detection.model_dump(mode="json") for detection in detections],
+        }
+    elif isinstance(request, RenderReviewRequest):
+        payload = engine.render_review(request.payload).model_dump(mode="json")
+    else:
+        raise EngineError("unsupported_request")
+    return {"id": request.id, "type": f"{request.type}_result", "payload": payload}
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     import sys
 
-    run_loop(sys.stdin.buffer, sys.stdout.buffer, dispatch_request)
+    parser = ArgumentParser()
+    parser.add_argument("--model-dir", required=True, type=Path)
+    args = parser.parse_args(argv)
+    from .engine import Engine
+
+    run_loop(
+        sys.stdin.buffer,
+        sys.stdout.buffer,
+        partial(dispatch_request, engine=Engine(args.model_dir)),
+    )

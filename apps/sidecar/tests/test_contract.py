@@ -1,5 +1,8 @@
+import hashlib
+import io
 import json
 import math
+import os
 import subprocess
 import sys
 from copy import deepcopy
@@ -8,14 +11,21 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import requests
+import tldextract
+import yaml
+from docx import Document
 from pydantic import TypeAdapter, ValidationError
 
+from redactio_sidecar.engine import Engine
+from redactio_sidecar.ipc import EngineError, dispatch_request, run_loop
 from redactio_sidecar.schemas import (
     Decisions,
     Detection,
     ProcessingConfig,
     Request,
     Response,
+    ReviewRequest,
 )
 
 PAIR_ID = "11111111-1111-4111-8111-111111111111"
@@ -381,6 +391,292 @@ def test_emit_cli_outputs_only_valid_jsonl_contract_objects():
     )
     emitted = [json.loads(line) for line in completed.stdout.splitlines()]
     assert emitted == synthetic_messages()
+
+
+def write_document(path: Path, text: str, *, header: str | None = None) -> str:
+    document = Document()
+    if text:
+        document.add_paragraph(text)
+    if header is not None:
+        document.sections[0].header.paragraphs[0].text = header
+    document.save(path)
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def model_root() -> Path:
+    root = Path(os.environ["REDACTIO_MODEL_DIR"])
+    assert (root / "manifest.json").is_file()
+    return root
+
+
+def processing_config(*, include_positions: bool = False) -> dict[str, Any]:
+    return {
+        "model": "de_core_news_lg",
+        "enabled_entities": [],
+        "custom_rules": [
+            {
+                "id": RULE_ID,
+                "entity_type": "CUSTOM",
+                "enabled": True,
+                "kind": "regex",
+                "pattern": "Synthetic_[0-9]+",
+            }
+        ],
+        "include_positions": include_positions,
+    }
+
+
+def test_real_jsonl_process_and_review_are_private_and_repeatable(tmp_path, capsys):
+    path = tmp_path / "CANARY_PATIENT_FILE.docx"
+    source_hash = write_document(path, "Synthetic_1\n---\nraw: Käthe")
+    meta = {
+        "sync_pair_id": PAIR_ID,
+        "doc_id": "doc-0001",
+        "source_hash_sha256": source_hash,
+        "processing_revision": REVISION,
+        "redacted_at": TIMESTAMP,
+        "source_path": str(path),
+    }
+    manual = {
+        "id": "manual-1",
+        "start": 0,
+        "end": 11,
+        "entity_type": "CUSTOM",
+        "confidence": None,
+        "recognizer": "manual",
+        "origin": "manual",
+    }
+    review = {
+        **meta,
+        "detections": [],
+        "decisions": {"dismissed_ids": [], "manual": [manual]},
+        "review_status": "approved",
+        "reviewed_at": TIMESTAMP,
+        "acknowledged_warnings": [],
+    }
+    messages = [
+        {"id": "ping", "type": "ping", "payload": {}},
+        {
+            "id": "configure",
+            "type": "configure",
+            "payload": {
+                "sync_pair_id": PAIR_ID,
+                "processing_revision": REVISION,
+                "config": processing_config(),
+            },
+        },
+        {"id": "process", "type": "process_document", "payload": meta},
+        {"id": "render-1", "type": "render_review", "payload": review},
+        {"id": "render-2", "type": "render_review", "payload": review},
+        {
+            "id": "changed",
+            "type": "render_review",
+            "payload": {
+                **review,
+                "source_hash_sha256": "0" * 64,
+                "decisions": {"dismissed_ids": ["unknown"], "manual": []},
+            },
+        },
+    ]
+    stdin = io.BytesIO(b"".join(json.dumps(message).encode() + b"\n" for message in messages))
+    stdout = io.BytesIO()
+    engine = Engine(model_root())
+
+    run_loop(stdin, stdout, lambda request: dispatch_request(request, engine))
+
+    replies = [json.loads(line) for line in stdout.getvalue().splitlines()]
+    assert [reply["type"] for reply in replies] == [
+        "ping_result",
+        "configure_result",
+        "process_document_result",
+        "render_review_result",
+        "render_review_result",
+        "error",
+    ]
+    processed = replies[2]["payload"]
+    assert processed["original_text"] == "Synthetic_1\n---\nraw: Käthe"
+    assert processed["body"] == "<CUSTOM_1>\n---\nraw: Käthe"
+    assert processed["redactions"]
+    assert "redactions:" not in processed["markdown"]
+    rendered = replies[3]["payload"]
+    assert rendered["review_status"] == "approved"
+    assert rendered["body"] == "<CUSTOM_1>\n---\nraw: Käthe"
+    assert rendered["markdown"] == replies[4]["payload"]["markdown"]
+    frontmatter = yaml.safe_load(rendered["markdown"].split("---", 2)[1])
+    assert frontmatter["reviewed_at"] == TIMESTAMP
+    assert replies[5]["payload"] == {"code": "source_changed", "retryable": False}
+    assert b"CANARY_PATIENT_FILE" not in stdout.getvalue()
+    assert "CANARY_PATIENT_FILE" not in capsys.readouterr().err
+
+
+def test_review_uses_stored_spans_and_enforces_warning_approval(tmp_path):
+    engine = Engine(model_root())
+    engine.configure(PAIR_ID, REVISION, ProcessingConfig.model_validate(processing_config()))
+    path = tmp_path / "warning.docx"
+    source_hash = write_document(path, "Synthetic_1", header="private header")
+    request = ReviewRequest.model_validate(
+        {
+            **document_meta(),
+            "source_hash_sha256": source_hash,
+            "source_path": str(path),
+            "detections": [],
+            "decisions": {"dismissed_ids": [], "manual": []},
+            "review_status": "approved",
+            "reviewed_at": TIMESTAMP,
+            "acknowledged_warnings": [],
+        }
+    )
+
+    with pytest.raises(EngineError, match="approval_not_allowed"):
+        engine.render_review(request)
+
+    approved = engine.render_review(
+        request.model_copy(update={"acknowledged_warnings": ["headers_footers"]})
+    )
+    assert approved.body == "Synthetic_1"
+    assert approved.redactions == []
+    assert approved.review_status == "approved"
+    assert approved.warnings == ["headers_footers"]
+
+    with pytest.raises(EngineError, match="approval_not_allowed"):
+        engine.render_review(
+            request.model_copy(
+                update={
+                    "acknowledged_warnings": ["headers_footers"],
+                    "reviewed_at": None,
+                }
+            )
+        )
+
+    invalid_detection = Detection(
+        id="stored-manual",
+        start=0,
+        end=11,
+        entity_type="CUSTOM",
+        confidence=None,
+        recognizer="manual",
+        origin="manual",
+    )
+    with pytest.raises(EngineError, match="invalid_review"):
+        engine.render_review(
+            request.model_copy(
+                update={
+                    "detections": [invalid_detection],
+                    "review_status": "rejected",
+                }
+            )
+        )
+
+    generated = engine.analyze(PAIR_ID, REVISION, "Synthetic_1")
+    with pytest.raises(EngineError, match="invalid_review"):
+        engine.render_review(
+            request.model_copy(
+                update={
+                    "detections": [generated[0].model_copy(update={"id": "tampered"})],
+                    "review_status": "rejected",
+                }
+            )
+        )
+
+
+def test_empty_processing_needs_rework_and_cannot_be_approved(tmp_path):
+    engine = Engine(model_root())
+    engine.configure(PAIR_ID, REVISION, ProcessingConfig.model_validate(processing_config()))
+    path = tmp_path / "empty.docx"
+    source_hash = write_document(path, "")
+    payload = {
+        **document_meta(),
+        "source_hash_sha256": source_hash,
+        "source_path": str(path),
+    }
+
+    processed = engine.process_document(
+        REQUEST_ADAPTER.validate_python(
+            {"id": "empty", "type": "process_document", "payload": payload}
+        ).payload
+    )
+    assert processed.body == ""
+    assert processed.body_was_empty is True
+    assert processed.review_status == "needs-rework"
+
+    review = ReviewRequest.model_validate(
+        {
+            **payload,
+            "detections": [],
+            "decisions": {"dismissed_ids": [], "manual": []},
+            "review_status": "approved",
+            "reviewed_at": TIMESTAMP,
+            "acknowledged_warnings": ["empty_document"],
+        }
+    )
+    with pytest.raises(EngineError, match="approval_not_allowed"):
+        engine.render_review(review)
+
+
+def test_cli_takes_explicit_model_root_and_keeps_ping_available_without_models(tmp_path):
+    messages = [
+        {"id": "ping", "type": "ping", "payload": {}},
+        {
+            "id": "configure",
+            "type": "configure",
+            "payload": {
+                "sync_pair_id": PAIR_ID,
+                "processing_revision": REVISION,
+                "config": processing_config(),
+            },
+        },
+    ]
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "redactio_sidecar",
+            "--model-dir",
+            str(tmp_path / "missing-models"),
+        ],
+        input="".join(json.dumps(message) + "\n" for message in messages),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    replies = [json.loads(line) for line in completed.stdout.splitlines()]
+    assert replies[0]["type"] == "ping_result"
+    assert replies[1]["payload"] == {
+        "code": "invalid_model_manifest",
+        "retryable": False,
+    }
+    assert completed.stderr == ""
+
+
+def test_first_email_analysis_uses_bundled_suffix_data_without_network(
+    tmp_path, monkeypatch, capsys, caplog
+):
+    attempts = []
+
+    def reject_network(_session, request, **_kwargs):
+        attempts.append(request.url)
+        raise requests.ConnectionError("network disabled")
+
+    monkeypatch.setattr(
+        tldextract,
+        "extract",
+        tldextract.TLDExtract(cache_dir=str(tmp_path / "cold-cache")),
+    )
+    monkeypatch.setattr(requests.sessions.Session, "send", reject_network)
+    engine = Engine(model_root())
+    engine.configure(
+        PAIR_ID,
+        REVISION,
+        ProcessingConfig(enabled_entities=["EMAIL_ADDRESS"]),
+    )
+
+    detections = engine.analyze(PAIR_ID, REVISION, "Kontakt: kontakt@example.org")
+
+    assert {detection.entity_type for detection in detections} == {"EMAIL_ADDRESS"}
+    assert attempts == []
+    assert capsys.readouterr().err == ""
+    assert not [record for record in caplog.records if record.name.startswith("tldextract")]
 
 
 if __name__ == "__main__" and sys.argv[1:] == ["--emit"]:

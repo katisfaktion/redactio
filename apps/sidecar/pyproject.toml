@@ -12,6 +12,7 @@ dependencies = [
     "pyyaml>=6.0,<7",
     "python-docx>=1.2,<2",
     "spacy>=3.8,<3.9",
+    "tldextract>=5.3,<6",
 ]
 
 [dependency-groups]
