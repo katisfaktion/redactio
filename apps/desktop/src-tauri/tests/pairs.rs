@@ -1,4 +1,7 @@
-use redactio_lib::domain::settings::{load_settings, save_settings, Settings};
+use redactio_lib::domain::settings::{
+    load_settings, save_settings, CustomRule, EntityType, ProcessingConfig, ProcessingFingerprint,
+    Settings,
+};
 use serde_json::{json, Value};
 use std::fs;
 use uuid::Uuid;
@@ -328,4 +331,136 @@ fn unknown_pair_ids_are_rejected() {
         "unknown_pair"
     );
     assert_eq!(settings.remove(unknown).unwrap_err().code, "unknown_pair");
+}
+
+fn fingerprint() -> ProcessingFingerprint {
+    ProcessingFingerprint {
+        engine_version: "test-1".into(),
+        extraction_version: "1".into(),
+        model_name: "de_core_news_lg".into(),
+        model_version: "test-1".into(),
+    }
+}
+
+#[test]
+fn validated_config_is_local_to_one_pair_and_idempotent() {
+    let root = tempfile::tempdir().unwrap();
+    let (a_source, a_target) = folders(&root, "a");
+    let (b_source, b_target) = folders(&root, "b");
+    let mut settings = Settings::default();
+    let a = settings.add("A", &a_source, &a_target).unwrap();
+    settings.add("B", &b_source, &b_target).unwrap();
+    let b_bytes = serde_json::to_vec(&settings.sync_pairs[1]).unwrap();
+    let previous = settings.sync_pairs[0].processing_revision;
+    let mut config = ProcessingConfig::default();
+    config.enabled_entities.clear();
+    assert!(settings
+        .apply_validated_config(a, config.clone(), fingerprint())
+        .unwrap());
+    assert_ne!(settings.sync_pairs[0].processing_revision, previous);
+    assert_eq!(settings.sync_pairs[0].config, config);
+    let bytes = serde_json::to_vec(&settings).unwrap();
+    assert!(!settings
+        .apply_validated_config(a, config, fingerprint())
+        .unwrap());
+    assert_eq!(serde_json::to_vec(&settings).unwrap(), bytes);
+    assert_eq!(
+        serde_json::to_vec(&settings.sync_pairs[1]).unwrap(),
+        b_bytes
+    );
+    assert_eq!(
+        settings
+            .apply_validated_config(Uuid::new_v4(), ProcessingConfig::default(), fingerprint())
+            .unwrap_err()
+            .code,
+        "unknown_pair"
+    );
+    assert_eq!(serde_json::to_vec(&settings).unwrap(), bytes);
+}
+
+#[test]
+fn equivalent_entity_order_and_duplicate_words_preserve_saved_bytes() {
+    let root = tempfile::tempdir().unwrap();
+    let (source, target) = folders(&root, "a");
+    let mut settings = Settings::default();
+    let a = settings.add("A", &source, &target).unwrap();
+    let rule_id = Uuid::new_v4();
+    let mut config = ProcessingConfig::default();
+    config.custom_rules.push(CustomRule::Words {
+        id: rule_id,
+        entity_type: EntityType::Custom,
+        enabled: true,
+        words: vec![" Anna ".into(), "anna".into(), " Anna ".into()],
+    });
+    // Simulate an already saved, non-canonical configuration.
+    settings.sync_pairs[0].config = config.clone();
+    settings.sync_pairs[0].processing_fingerprint = Some(fingerprint());
+    let bytes = serde_json::to_vec(&settings).unwrap();
+    config.enabled_entities.reverse();
+    if let CustomRule::Words { words, .. } = &mut config.custom_rules[0] {
+        words.pop();
+    }
+    assert!(!settings
+        .apply_validated_config(a, config.clone(), fingerprint())
+        .unwrap());
+    assert_eq!(serde_json::to_vec(&settings).unwrap(), bytes);
+    if let CustomRule::Words { words, .. } = &mut config.custom_rules[0] {
+        words[0] = "Anna".into();
+    }
+    assert!(settings
+        .apply_validated_config(a, config, fingerprint())
+        .unwrap());
+}
+
+#[test]
+fn fingerprint_fields_and_rule_identity_rotate_only_the_affected_pair_once() {
+    let root = tempfile::tempdir().unwrap();
+    let (a_source, a_target) = folders(&root, "a");
+    let (b_source, b_target) = folders(&root, "b");
+    let mut settings = Settings::default();
+    let a = settings.add("A", &a_source, &a_target).unwrap();
+    settings.add("B", &b_source, &b_target).unwrap();
+    let b = settings.sync_pairs[1].clone();
+    let mut config = ProcessingConfig::default();
+    config.custom_rules.push(CustomRule::Regex {
+        id: Uuid::new_v4(),
+        entity_type: EntityType::Custom,
+        enabled: true,
+        pattern: "Anna".into(),
+    });
+    settings
+        .apply_validated_config(a, config.clone(), fingerprint())
+        .unwrap();
+    let mut changed = fingerprint();
+    for field in 0..4 {
+        match field {
+            0 => changed.engine_version = "test-2".into(),
+            1 => changed.extraction_version = "2".into(),
+            2 => {
+                changed.model_name = "de_core_news_sm".into();
+                config.model = changed.model_name.clone();
+            }
+            _ => changed.model_version = "test-2".into(),
+        }
+        let previous = settings.sync_pairs[0].processing_revision;
+        assert!(settings
+            .apply_validated_config(a, config.clone(), changed.clone())
+            .unwrap());
+        assert_ne!(settings.sync_pairs[0].processing_revision, previous);
+        let bytes = serde_json::to_vec(&settings).unwrap();
+        assert!(!settings
+            .apply_validated_config(a, config.clone(), changed.clone())
+            .unwrap());
+        assert_eq!(serde_json::to_vec(&settings).unwrap(), bytes);
+        assert_eq!(settings.sync_pairs[1], b);
+    }
+    if let CustomRule::Regex { id, .. } = &mut config.custom_rules[0] {
+        *id = Uuid::new_v4();
+    }
+    assert!(settings
+        .apply_validated_config(a, config.clone(), changed.clone())
+        .unwrap());
+    config.include_positions = false;
+    assert!(settings.apply_validated_config(a, config, changed).unwrap());
+    assert_eq!(settings.sync_pairs[1], b);
 }

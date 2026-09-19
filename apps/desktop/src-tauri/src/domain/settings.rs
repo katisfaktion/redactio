@@ -14,7 +14,7 @@ use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use unicode_normalization::UnicodeNormalization;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum EntityType {
     Person,
@@ -82,6 +82,20 @@ impl Default for ProcessingConfig {
     }
 }
 
+impl ProcessingConfig {
+    fn normalized(mut self) -> Self {
+        self.enabled_entities.sort_unstable();
+        for rule in &mut self.custom_rules {
+            if let CustomRule::Words { words, .. } = rule {
+                let mut seen = HashSet::new();
+                words.retain(|word| seen.insert(word.clone()));
+            }
+        }
+        // Preserve rule identity/order and literal text: they affect engine results.
+        self
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProcessingFingerprint {
@@ -123,6 +137,31 @@ impl Default for Settings {
 }
 
 impl Settings {
+    /// Apply a configuration and fingerprint already validated by the engine.
+    /// The caller owns engine IO, settings locking, and atomic persistence.
+    pub fn apply_validated_config(
+        &mut self,
+        id: Uuid,
+        config: ProcessingConfig,
+        fingerprint: ProcessingFingerprint,
+    ) -> Result<bool, AppError> {
+        let pair = self
+            .sync_pairs
+            .iter_mut()
+            .find(|pair| pair.id == id)
+            .ok_or_else(|| AppError::new("unknown_pair"))?;
+        let config = config.normalized();
+        if config == pair.config.clone().normalized()
+            && pair.processing_fingerprint.as_ref() == Some(&fingerprint)
+        {
+            return Ok(false);
+        }
+        pair.config = config;
+        pair.processing_fingerprint = Some(fingerprint);
+        pair.processing_revision = Uuid::new_v4();
+        Ok(true)
+    }
+
     pub fn add(&mut self, name: &str, source: &Path, target: &Path) -> Result<Uuid, AppError> {
         let name = checked_name(
             name,
