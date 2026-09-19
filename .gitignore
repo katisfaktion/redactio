@@ -1,0 +1,40 @@
+# Local document data and secrets
+.env
+.env.*
+!.env.example
+*.docx
+*.doc
+*.pdf
+_document-mapping.json
+_document-mapping.json.*
+_redactio/
+local-data/
+test-corpus/
+fixtures/
+sample-docs/
+audit-log.jsonl
+*.log
+
+# Build and tool output
+.worktrees/
+node_modules/
+.pnpm-store/
+dist/
+target/
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.tsbuildinfo
+
+# Editor and operating-system files
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*~
