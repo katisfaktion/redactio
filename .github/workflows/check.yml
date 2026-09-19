@@ -1,0 +1,87 @@
+name: Check
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Read pinned build tools
+        id: tools
+        run: |
+          $tools = (Get-Content packaging/build-inputs.json -Raw | ConvertFrom-Json).tools
+          foreach ($name in @('node', 'pnpm', 'python', 'rust', 'uv')) {
+            "$name=$($tools.$name)" >> $env:GITHUB_OUTPUT
+          }
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ steps.tools.outputs.node }}
+          package-manager-cache: false
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: ${{ steps.tools.outputs.uv }}
+          python-version: ${{ steps.tools.outputs.python }}
+          enable-cache: true
+          cache-dependency-glob: apps/sidecar/uv.lock
+      - name: Linux native dependencies
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential libssl-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev
+      - name: Fetch locked dependencies and exact test models (build time)
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          npm install --global pnpm@${{ steps.tools.outputs.pnpm }}
+          pnpm fetch --frozen-lockfile
+          pnpm install --offline --frozen-lockfile
+          rustup toolchain install ${{ steps.tools.outputs.rust }} --profile minimal --component rustfmt --component clippy
+          "RUSTUP_TOOLCHAIN=${{ steps.tools.outputs.rust }}" >> $env:GITHUB_ENV
+          cargo +${{ steps.tools.outputs.rust }} fetch --locked --manifest-path apps/desktop/src-tauri/Cargo.toml
+          uv --directory apps/sidecar sync --locked --python ${{ steps.tools.outputs.python }}
+          $python = if ($IsWindows) { 'apps/sidecar/.venv/Scripts/python.exe' } else { 'apps/sidecar/.venv/bin/python' }
+          "REDACTIO_TEST_PYTHON=$((Resolve-Path $python).Path)" >> $env:GITHUB_ENV
+          $modelRoot = Join-Path $env:RUNNER_TEMP 'redactio-models'
+          New-Item -ItemType Directory -Path $modelRoot | Out-Null
+          uv pip install --python $python --target "$modelRoot/vendor" --no-deps 'https://github.com/explosion/spacy-models/releases/download/de_core_news_lg-3.8.0/de_core_news_lg-3.8.0-py3-none-any.whl#sha256=36fda650e476b54d5e87803635e36dadd1e8e034c4b5962088586d684f4c9fed'
+          uv pip install --python $python --target "$modelRoot/vendor" --no-deps 'https://github.com/explosion/spacy-models/releases/download/de_core_news_sm-3.8.0/de_core_news_sm-3.8.0-py3-none-any.whl#sha256=fec69fec52b1780f2d269d5af7582a5e28028738bd3190532459aeb473bfa3e7'
+          @{ models = @(
+            @{ name = 'de_core_news_lg'; version = '3.8.0'; path = 'vendor/de_core_news_lg/de_core_news_lg-3.8.0' },
+            @{ name = 'de_core_news_sm'; version = '3.8.0'; path = 'vendor/de_core_news_sm/de_core_news_sm-3.8.0' }
+          ) } | ConvertTo-Json -Depth 5 | Set-Content "$modelRoot/manifest.json"
+          "REDACTIO_MODEL_DIR=$modelRoot" >> $env:GITHUB_ENV
+          "UV_OFFLINE=true" >> $env:GITHUB_ENV
+          "CARGO_NET_OFFLINE=true" >> $env:GITHUB_ENV
+      - name: Frontend, engine, corpus and native host checks
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          pnpm typecheck
+          pnpm test
+          pnpm build
+          uv --directory apps/sidecar run --locked --offline ruff check .
+          uv --directory apps/sidecar run --locked --offline ruff format --check .
+          uv --directory apps/sidecar run --locked --offline mypy src
+          uv --directory apps/sidecar run --locked --offline pytest -q
+          & $env:REDACTIO_TEST_PYTHON scripts/test_packaging.py
+          & $env:REDACTIO_TEST_PYTHON -m ruff check --config apps/sidecar/pyproject.toml scripts packaging
+          & $env:REDACTIO_TEST_PYTHON -m ruff format --check --config apps/sidecar/pyproject.toml scripts packaging
+          cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check
+          cargo clippy --locked --offline --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
+          cargo test --locked --offline --manifest-path apps/desktop/src-tauri/Cargo.toml
+          $env:REDACTIO_REAL_SIDECAR_PYTHON = $env:REDACTIO_TEST_PYTHON
+          $env:REDACTIO_REAL_MODEL_DIR = $env:REDACTIO_MODEL_DIR
+          cargo test --locked --offline --manifest-path apps/desktop/src-tauri/Cargo.toml --test sidecar reviewed_cli_roundtrips_through_the_bundled_model -- --ignored
+      - name: Windows package negative checks
+        if: runner.os == 'Windows'
+        run: ./scripts/test-check-package.ps1

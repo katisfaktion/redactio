@@ -288,8 +288,11 @@ fn initial_mapping_header_is_exact_and_corrupt_records_are_never_replaced() {
     let (source, target) = folders(&root, "book");
     let mut settings = Settings::default();
     let id = settings.add("Book", &source, &target).unwrap();
-    let mapping: Value =
+    let mut mapping: Value =
         serde_json::from_slice(&fs::read(source.join("_document-mapping.json")).unwrap()).unwrap();
+    // Volume-GUID and drive-letter Windows paths may identify the same directory.
+    mapping["target_folder"] =
+        json!(fs::canonicalize(mapping["target_folder"].as_str().unwrap()).unwrap());
     assert_eq!(
         mapping,
         json!({

@@ -226,6 +226,31 @@ mod windows {
     }
 
     #[test]
+    fn ordinary_german_paths_and_canonical_junction_roots_support_scan_and_write() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("Quellen für Prüfung");
+        let target = temp.path().join("Ausgabe Größe");
+        fs::create_dir(&source).unwrap();
+        fs::create_dir(&target).unwrap();
+        let document = source.join("Befund ÄÖÜ.docx");
+        fs::write(&document, b"synthetic source").unwrap();
+        let alias = temp.path().join("Quellen Verknüpfung");
+        junction(&alias, &source);
+        let (canonical_source, canonical_target) = validate_roots(&alias, &target, &[]).unwrap();
+        let report = redactio_lib::domain::scan::scan_source(&canonical_source).unwrap();
+        assert_eq!(report.files.len(), 1);
+        assert_eq!(report.files[0].relative_path, "Befund ÄÖÜ.docx");
+        let output = canonical_target.join("doc-0001.md");
+        ValidatedWrite::new(&canonical_target, &output)
+            .unwrap()
+            .write_atomic(b"redacted")
+            .unwrap();
+        assert_eq!(fs::read(target.join("doc-0001.md")).unwrap(), b"redacted");
+        assert_eq!(fs::read(document).unwrap(), b"synthetic source");
+        fs::remove_dir(alias).unwrap();
+    }
+
+    #[test]
     fn case_and_junction_aliases_cannot_bypass_overlap() {
         let temp = tempfile::tempdir().unwrap();
         let folder = temp.path().join("Mixed Case Ä");

@@ -405,9 +405,8 @@ mod tests {
                 "mapping_recovery_required"
             );
             let candidate = recovery_pairs(&path).unwrap().remove(0);
-            assert_eq!(
-                candidate.pending_target.as_deref(),
-                Some(destination.as_path())
+            assert!(
+                same_directory(candidate.pending_target.as_deref().unwrap(), &destination).unwrap()
             );
             let resumed = fresh_start(&path, candidate.id, &destination, true).unwrap();
             assert_eq!(resumed.sync_pairs[0].id, expected_id);
