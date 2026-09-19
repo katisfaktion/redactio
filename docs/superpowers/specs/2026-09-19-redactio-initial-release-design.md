@@ -179,9 +179,18 @@ The review view displays extracted original text and the generated text with
 highlighted detections, entity types, and detector confidence. Confidence is
 detector output, not a guarantee of privacy. Show extraction warnings prominently.
 
-Users can select original-text spans to add redactions, dismiss false positives,
-and change a detection's entity type. Corrections regenerate the output, offsets,
-and counts together. Free-form replacement text and general document editing are
+Users can select text directly in the redacted preview to add redactions while
+keeping the highlighted original beside it. Preview selections map to original
+Unicode code-point spans; selecting any part of a placeholder selects its whole
+source span. Keyboard selection uses the same masked preview. Each detection
+entry shows the affected original text and a jump action that highlights its
+location in both panes. Activating a highlighted passage opens its list entry,
+including the appropriate page for long lists.
+
+Users can dismiss false positives and change a detection's entity type. The
+draft preview updates immediately after corrections and undo; saving regenerates
+the authoritative output, offsets, and counts together. Approval remains blocked
+until corrections have been saved and the updated result explicitly accepted. Free-form replacement text and general document editing are
 outside this release. A manual redaction is labeled manual, with no invented
 confidence score. Provide undo for edits made during the current review session
 and warn before discarding unsaved changes.

@@ -14,7 +14,7 @@ export function codePointOffset(text: string, utf16Offset: number): number {
   return count;
 }
 
-// The container must contain only the original text and marks; keep UI controls outside.
+// The container must contain only selectable text and marks; keep UI controls outside.
 export function selectionOffsets(
   container: HTMLElement,
   selection: Selection,

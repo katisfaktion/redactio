@@ -109,19 +109,26 @@ neue Dokumentidentität. Redactio löscht alte Originale oder Ausgaben nicht aut
 
 Jedes Ergebnis vor einer Weitergabe fachlich prüfen. Bei einem Dokument mit dem
 Zustand **Aktuell** die Schaltfläche **doc-0001 prüfen** (mit der jeweiligen ID)
-wählen. In der Prüfungsansicht **Originaltext** und **Ausgabe** vergleichen.
+wählen. In der Prüfungsansicht **Originaltext** und **Geschwärzte Vorschau** vergleichen.
 Weitere aktuelle Ergebnisse sind unter **Dokument prüfen** auswählbar.
 
-Übersehene Angaben im Originaltext markieren, den **Typ der neuen Schwärzung**
-wählen und **Auswahl schwärzen** betätigen. Für die Tastatur **Per Tastatur
+Übersehene Angaben direkt in der **Geschwärzten Vorschau** markieren, den **Typ
+der neuen Schwärzung** wählen und **Auswahl schwärzen** betätigen. Das Original
+bleibt zum Vergleich daneben sichtbar. Bereits geschwärzte Angaben erscheinen
+als Platzhalter; eine Auswahl über einen Platzhalter umfasst dessen ganze
+Originalstelle. Für die Tastatur **Per Tastatur
 auswählen** öffnen, mit Umschalt- und Pfeiltasten markieren und mit Umschalt+Tab
 zur Schaltfläche **Auswahl schwärzen** zurückkehren. Unter **Schwärzungen
-bearbeiten** falsche Treffer entfernen oder ihren Typ korrigieren.
+bearbeiten** steht der betroffene Originaltext. **Im Text anzeigen** springt zur
+Stelle und hebt sie in beiden Ansichten hervor. Ein Klick auf eine markierte
+Stelle öffnet umgekehrt ihren Listeneintrag. Dort falsche Treffer entfernen oder
+ihren Typ korrigieren.
 **Korrektur zurücknehmen** macht die letzte Schwärzungskorrektur der Sitzung
 rückgängig. Allgemeine Textbearbeitung und frei gewählte Ersatztexte sind nicht
 Teil dieses Arbeitsablaufs.
 
-Die angezeigte Ausgabe bleibt bis zum Speichern auf dem bisherigen Stand.
+Die Vorschau zeigt Schwärzungskorrekturen sofort. Die Ausgabedatei wird erst
+beim Speichern geändert.
 Zuerst **Prüfung speichern**, dann die aktualisierte Ausgabe kontrollieren und
 erst danach ausdrücklich **Freigeben**. Ungespeicherte Schwärzungskorrekturen
 sperren die Freigabe. Beim Dokument- oder Paarwechsel, beim Verlassen der Ansicht

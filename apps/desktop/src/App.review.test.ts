@@ -108,7 +108,7 @@ test("document changes use the same save/discard/stay guard", async () => {
   expect(wrapper.find('[data-testid="selection-text"]').exists()).toBe(false);
   await wrapper.get('[data-testid="keyboard-select"]').trigger("click");
   const source = wrapper.get<HTMLTextAreaElement>('[data-testid="selection-text"]');
-  expect(source.element.value).toBe("🙂 Anna");
+  expect(source.element.value).toBe("🙂 Anna\n");
   source.element.setSelectionRange(0, 2); await source.trigger("select");
   await wrapper.get('[data-testid="add-redaction"]').trigger("click");
   expect(review.decisions.value.manual[0]).toMatchObject({ start: 0, end: 1 });

@@ -4,12 +4,14 @@ import { computed, nextTick, ref, watch } from "vue";
 import type { useReview } from "../composables/useReview";
 import { EntityTypeSchema, type EntityType } from "../lib/contracts";
 import { codePointOffset, selectionOffsets } from "../lib/selection";
+import { projectReview, previewSelection, type ReviewSegment } from "../lib/reviewProjection";
 
 const props = defineProps<{ review: ReturnType<typeof useReview>; pairName: string }>();
 const emit = defineEmits<{ back: [] }>();
 const entity = ref<EntityType>("PERSON"), keyboard = ref(false), page = ref(0);
 const selected = ref<{ start: number; end: number } | null>(null);
-const original = ref<HTMLElement>(), textarea = ref<HTMLTextAreaElement>();
+const original = ref<HTMLElement>(), output = ref<HTMLElement>(), textarea = ref<HTMLTextAreaElement>();
+const details = ref<HTMLDetailsElement>(), focused = ref<string | null>(null);
 const labels: Record<EntityType, string> = {
   PERSON: "Person", LOCATION: "Ort", EMAIL_ADDRESS: "E-Mail-Adresse", PHONE_NUMBER: "Telefonnummer",
   IBAN_CODE: "IBAN", IP_ADDRESS: "IP-Adresse", URL: "Internetadresse", DATE_TIME: "Datum / Uhrzeit", CUSTOM: "Benutzerdefiniert",
@@ -27,37 +29,59 @@ const warnings: Record<string, string> = {
   empty_document: "Keine extrahierbaren Inhalte. Eine Freigabe ist nicht möglich.",
   headers_footers: "Kopf- oder Fußzeilen wurden nicht übernommen.",
 };
-const visibleDetections = computed(() => props.review.active.value.slice(page.value * 20, (page.value + 1) * 20));
-watch(() => props.review.active.value.length, () => { page.value = Math.min(page.value, Math.max(0, Math.ceil(props.review.active.value.length / 20) - 1)); });
+const detections = computed(() => [...props.review.active.value].sort((a, b) => a.start - b.start || a.end - b.end || a.id.localeCompare(b.id)));
+const visibleDetections = computed(() => detections.value.slice(page.value * 20, (page.value + 1) * 20));
+const sourcePoints = computed(() => Array.from(props.review.data.value?.original_text ?? ""));
+const projection = computed(() => projectReview(props.review.data.value?.original_text ?? "", props.review.active.value));
+watch(detections, () => {
+  page.value = Math.min(page.value, Math.max(0, Math.ceil(detections.value.length / 20) - 1));
+  selected.value = null;
+  if (!detections.value.some(item => item.id === focused.value)) focused.value = null;
+});
 watch(() => props.review.data.value, () => { selected.value = null; });
-
-function segments(text: string, spans: { start: number; end: number }[]) {
-  const points = Array.from(text), result: { text: string; marked: boolean }[] = [];
-  const intervals: { start: number; end: number }[] = [];
-  for (const span of [...spans].sort((a, b) => a.start - b.start || a.end - b.end)) {
-    const previous = intervals.at(-1);
-    if (previous && span.start < previous.end) previous.end = Math.max(previous.end, span.end);
-    else intervals.push({ ...span });
-  }
-  let cursor = 0;
-  for (const { start, end } of intervals) {
-    if (start > cursor) result.push({ text: points.slice(cursor, start).join(""), marked: false });
-    result.push({ text: points.slice(start, end).join(""), marked: true }); cursor = end;
-  }
-  if (cursor < points.length) result.push({ text: points.slice(cursor).join(""), marked: false });
-  return result;
+watch(() => props.review.key.value, () => { focused.value = null; page.value = 0; });
+// Updating a textarea value moves its caret; keep the reader at the current passage.
+watch(() => projection.value.text, async () => {
+  const control = textarea.value;
+  if (!control) return;
+  const { scrollTop, scrollLeft, selectionStart } = control;
+  await nextTick();
+  control.setSelectionRange(selectionStart, selectionStart);
+  control.scrollTop = scrollTop; control.scrollLeft = scrollLeft;
+});
+function excerpt(start: number, end: number) {
+  return sourcePoints.value.slice(start, Math.min(end, start + 100)).join("") + (end - start > 100 ? "…" : "");
 }
-const originalSegments = computed(() => keyboard.value ? [] : segments(props.review.data.value?.original_text ?? "", props.review.active.value));
-const outputSegments = computed(() => segments(props.review.data.value?.body ?? "", props.review.data.value?.redactions.map(span => ({ start: span.start_offset, end: span.end_offset })) ?? []));
+function isFocused(part: ReviewSegment) { return focused.value !== null && part.ids.includes(focused.value); }
+async function showDetection(id: string, fromText = false, event?: Event) {
+  if (event?.type === "click" && !window.getSelection()?.isCollapsed) return;
+  const index = detections.value.findIndex(item => item.id === id);
+  if (index < 0) return;
+  focused.value = id; selected.value = null;
+  page.value = Math.floor(index / 20);
+  if (details.value) details.value.open = true;
+  if (!fromText) keyboard.value = false;
+  await nextTick();
+  if (fromText) {
+    const row = details.value?.querySelector<HTMLElement>(`[data-row="${index % 20}"]`);
+    row?.scrollIntoView({ block: "nearest" }); row?.focus({ preventScroll: true });
+  } else {
+    for (const container of [original.value, output.value]) {
+      const mark = container?.querySelector<HTMLElement>(".focused-redaction");
+      mark?.scrollIntoView({ block: "center" });
+    }
+    output.value?.querySelector<HTMLElement>(".focused-redaction")?.focus({ preventScroll: true });
+  }
+}
 // Textareas collapse CRLF to LF. Cache the native boundary after each collapsed pair.
 const collapsedNewlines = computed(() => {
   const boundaries: number[] = [];
-  for (const match of (props.review.data.value?.original_text ?? "").matchAll(/\r\n/g)) {
+  for (const match of projection.value.text.matchAll(/\r\n/g)) {
     boundaries.push(match.index + 1 - boundaries.length);
   }
   return boundaries;
 });
-function sourceOffset(nativeOffset: number) {
+function previewOffset(nativeOffset: number) {
   const boundaries = collapsedNewlines.value;
   let low = 0, high = boundaries.length;
   while (low < high) {
@@ -65,32 +89,34 @@ function sourceOffset(nativeOffset: number) {
     if (boundaries[middle]! <= nativeOffset) low = middle + 1;
     else high = middle;
   }
-  return codePointOffset(props.review.data.value!.original_text, nativeOffset + low);
+  return codePointOffset(projection.value.text, nativeOffset + low);
 }
 async function keyboardSelection() {
   keyboard.value = !keyboard.value; selected.value = null;
   await nextTick();
-  if (keyboard.value) textarea.value?.focus();
-  else original.value?.focus();
+  if (keyboard.value) { textarea.value?.setSelectionRange(0, 0); textarea.value?.focus(); }
+  else output.value?.focus();
 }
-function capture() {
+function capture(view: "original" | "preview") {
   selected.value = null;
-  if (keyboard.value && textarea.value) {
+  if (view === "preview" && keyboard.value && textarea.value) {
     const control = textarea.value;
     if (control.selectionStart === control.selectionEnd) return;
-    try { selected.value = { start: sourceOffset(control.selectionStart), end: sourceOffset(control.selectionEnd) }; }
+    try { selected.value = previewSelection(projection.value.preview, previewOffset(control.selectionStart), previewOffset(control.selectionEnd)); }
     catch { /* A partial surrogate pair is not a selectable redaction. */ }
   } else {
-    const selection = window.getSelection();
-    if (original.value && selection) selected.value = selectionOffsets(original.value, selection);
+    const selection = window.getSelection(), container = view === "original" ? original.value : output.value;
+    const span = container && selection ? selectionOffsets(container, selection) : null;
+    selected.value = span && view === "preview" ? previewSelection(projection.value.preview, span.start, span.end) : span;
   }
 }
 function add() {
   if (!selected.value) return;
   props.review.add(selected.value, entity.value); selected.value = null;
+  window.getSelection()?.removeAllRanges();
 }
-function restoreSource(event: Event) {
-  (event.target as HTMLTextAreaElement).value = props.review.data.value?.original_text ?? "";
+function restorePreview(event: Event) {
+  (event.target as HTMLTextAreaElement).value = projection.value.text;
   selected.value = null;
 }
 </script>
@@ -119,35 +145,37 @@ function restoreSource(event: Event) {
         <OnyxButton data-testid="add-redaction" label="Auswahl schwärzen" type="button" :disabled="review.busy.value || !selected" @click="add" />
         <OnyxButton data-testid="undo-review" label="Korrektur zurücknehmen" type="button" mode="outline" :disabled="review.busy.value || !review.canUndo.value" @click="review.undo" />
       </div>
-      <p v-if="selected" role="status">Auswahl: Position {{ selected.start }}–{{ selected.end }}</p>
-      <p v-if="keyboard" id="selection-help">Wählen Sie Text mit Umschalt- und Pfeiltasten aus. Navigieren Sie anschließend mit Umschalt+Tab rückwärts bis zu „Auswahl schwärzen“. Der Originaltext ist schreibgeschützt.</p>
+      <p v-if="selected" role="status">Auswahl: Position {{ selected.start }}–{{ selected.end }} · „{{ excerpt(selected.start, selected.end) }}“</p>
+      <p v-if="keyboard" id="selection-help">Wählen Sie Text mit Umschalt- und Pfeiltasten aus. Navigieren Sie anschließend mit Umschalt+Tab rückwärts bis zu „Auswahl schwärzen“. Die Vorschau ist schreibgeschützt. Platzhalter werden als ganze Schwärzung ausgewählt.</p>
       <div class="comparison">
         <section aria-label="Originaltext">
           <h3>Originaltext</h3>
-          <!-- WebKit's readonly textarea blocks caret navigation; prevent edits while retaining native selection. -->
-          <textarea v-if="keyboard" ref="textarea" data-testid="selection-text" class="document-text" aria-readonly="true" spellcheck="false" autocomplete="off" aria-label="Originaltext auswählen" aria-describedby="selection-help" :value="review.data.value.original_text" @beforeinput.prevent @paste.prevent @drop.prevent @input="restoreSource" @select="capture" @keyup="capture" @mouseup="capture" />
-          <div v-else ref="original" data-testid="review-original" class="document-text" tabindex="0" aria-label="Originaltext mit Markierungen" @mouseup="capture" @keyup="capture"><template v-for="(part, index) in originalSegments" :key="index"><mark v-if="part.marked">{{ part.text }}</mark><template v-else>{{ part.text }}</template></template></div>
+          <div ref="original" data-testid="review-original" class="document-text" tabindex="0" aria-label="Originaltext mit Markierungen" @mouseup="capture('original')" @keyup="capture('original')"><template v-for="(part, index) in projection.original" :key="index"><mark v-if="part.ids.length" :class="{ 'focused-redaction': isFocused(part) }" tabindex="0" role="button" aria-label="Schwärzung in der Liste anzeigen" @click="showDetection(part.ids[0]!, true, $event)" @keydown.enter.prevent="showDetection(part.ids[0]!, true)" @keydown.space.prevent="showDetection(part.ids[0]!, true)">{{ part.text }}</mark><template v-else>{{ part.text }}</template></template></div>
         </section>
-        <section aria-label="Ausgabe">
-          <h3>Ausgabe</h3>
-          <p v-if="review.decisionsChanged.value">Ausgabe des letzten gespeicherten Stands. Speichern aktualisiert die Schwärzungen.</p>
-          <div data-testid="review-output" class="document-text" tabindex="0"><template v-for="(part, index) in outputSegments" :key="index"><mark v-if="part.marked">{{ part.text }}</mark><template v-else>{{ part.text }}</template></template></div>
+        <section aria-label="Geschwärzte Vorschau">
+          <h3>Geschwärzte Vorschau</h3>
+          <!-- WebKit's readonly textarea blocks caret navigation; prevent edits while retaining native selection. -->
+          <textarea v-if="keyboard" ref="textarea" data-testid="selection-text" class="document-text" aria-readonly="true" spellcheck="false" autocomplete="off" aria-label="Text in der geschwärzten Vorschau auswählen" aria-describedby="selection-help" :value="projection.text" @beforeinput.prevent @paste.prevent @drop.prevent @input="restorePreview" @select="capture('preview')" @keyup="capture('preview')" @mouseup="capture('preview')" />
+          <div v-else ref="output" data-testid="review-output" class="document-text" tabindex="0" aria-label="Geschwärzte Vorschau auswählen" @mouseup="capture('preview')" @keyup="capture('preview')"><template v-for="(part, index) in projection.preview" :key="index"><mark v-if="part.ids.length" :class="{ 'focused-redaction': isFocused(part) }" tabindex="0" role="button" aria-label="Schwärzung in der Liste anzeigen" @click="showDetection(part.ids[0]!, true, $event)" @keydown.enter.prevent="showDetection(part.ids[0]!, true)" @keydown.space.prevent="showDetection(part.ids[0]!, true)">{{ part.text }}</mark><template v-else>{{ part.text }}</template></template></div>
         </section>
       </div>
-      <details>
-        <summary>Schwärzungen bearbeiten ({{ review.active.value.length }})</summary>
+      <p v-if="review.decisionsChanged.value">Ungespeicherte Vorschau – Speichern übernimmt die Änderungen.</p>
+      <p>Fehlenden Text in der Vorschau auswählen und schwärzen. Markierte Stellen anklicken, um den Listeneintrag anzuzeigen.</p>
+      <details ref="details">
+        <summary>Schwärzungen bearbeiten ({{ detections.length }})</summary>
         <p>Konfidenz ist eine Einschätzung des Detektors und keine Datenschutzgarantie.</p>
         <ul class="detections">
-          <li v-for="item in visibleDetections" :key="item.id">
-            <span>Position {{ item.start }}–{{ item.end }} · {{ item.origin === 'manual' ? 'Manuell' : `Konfidenz ${item.confidence === null ? 'unbekannt' : Math.round(item.confidence * 100) + ' %'}` }}</span>
-            <OnyxSelect :model-value="item.entity_type" :label="`Typ an Position ${item.start}–${item.end}`" list-label="Entitätstypen" :options="entities" :hide-clear-icon="true" :disabled="review.busy.value" @update:model-value="value => value && review.changeType(item.id, value as EntityType)" />
-            <OnyxButton :label="`Schwärzung ${item.start}–${item.end} entfernen`" type="button" mode="outline" :disabled="review.busy.value" @click="review.dismiss(item.id)" />
+          <li v-for="(item, index) in visibleDetections" :key="item.id" :data-testid="`detection-${item.id}`" :data-row="index" :class="{ 'focused-redaction': focused === item.id }" tabindex="-1">
+            <div class="detection-text"><q>{{ excerpt(item.start, item.end) }}</q><small>{{ labels[item.entity_type] }} · {{ item.origin === 'manual' ? 'Manuell' : `Konfidenz ${item.confidence === null ? 'unbekannt' : Math.round(item.confidence * 100) + ' %'}` }}</small></div>
+            <OnyxButton :data-testid="`jump-${item.id}`" label="Im Text anzeigen" type="button" mode="outline" @click="showDetection(item.id)" />
+            <OnyxSelect :model-value="item.entity_type" :label="`Typ für ${excerpt(item.start, item.end)}`" list-label="Entitätstypen" :options="entities" :hide-clear-icon="true" :disabled="review.busy.value" @update:model-value="value => value && review.changeType(item.id, value as EntityType)" />
+            <OnyxButton :label="`Schwärzung entfernen: ${excerpt(item.start, item.end)}`" type="button" mode="outline" :disabled="review.busy.value" @click="review.dismiss(item.id)" />
           </li>
         </ul>
-        <div v-if="review.active.value.length > 20" class="actions">
+        <div v-if="detections.length > 20" class="actions">
           <OnyxButton label="Vorherige Schwärzungen" type="button" mode="outline" :disabled="page === 0" @click="page--" />
-          <span>Seite {{ page + 1 }} von {{ Math.ceil(review.active.value.length / 20) }}</span>
-          <OnyxButton label="Weitere Schwärzungen" type="button" mode="outline" :disabled="(page + 1) * 20 >= review.active.value.length" @click="page++" />
+          <span>Seite {{ page + 1 }} von {{ Math.ceil(detections.length / 20) }}</span>
+          <OnyxButton label="Weitere Schwärzungen" type="button" mode="outline" :disabled="(page + 1) * 20 >= detections.length" @click="page++" />
         </div>
       </details>
       <OnyxTextarea v-model="review.notes.value" label="Private Prüfnotizen" :disabled="review.busy.value" />
@@ -173,7 +201,13 @@ function restoreSource(event: Event) {
 .document-text { display: block; white-space: pre-wrap; overflow-wrap: anywhere; width: 100%; height: 22rem; overflow: auto; padding: var(--onyx-spacing-sm); border: 1px solid var(--onyx-color-component-border-neutral); border-radius: var(--onyx-radius-sm); background: var(--onyx-color-base-background-blank); color: inherit; font: inherit; box-sizing: border-box; }
 textarea.document-text { resize: vertical; }
 .document-text:focus-visible, input:focus-visible, summary:focus-visible { outline: 3px solid var(--onyx-color-text-icons-primary-intense); outline-offset: 2px; }
-mark { color: inherit; background: var(--onyx-color-base-warning-200, #ffe59b); text-decoration: underline; }
+mark { cursor: pointer; color: inherit; background: var(--onyx-color-base-warning-200, #ffe59b); text-decoration: underline; }
+mark:focus-visible, .focused-redaction { outline: 3px solid var(--onyx-color-text-icons-primary-intense, #005eb8); outline-offset: 2px; }
+mark.focused-redaction { background: var(--onyx-color-base-warning-300, #ffd05b); }
+.detections { padding: var(--onyx-spacing-xs); list-style: none; }
+.detections li { padding: var(--onyx-spacing-sm); border: 1px solid var(--onyx-color-component-border-neutral); border-radius: var(--onyx-radius-sm); }
+.detection-text { flex: 1 1 12rem; min-width: 0; overflow-wrap: anywhere; }
+.detection-text q, .detection-text small { display: block; }
 .warnings { border-inline-start: 4px solid #a66b00; padding: var(--onyx-spacing-sm); }
 summary { cursor: pointer; }
 h2, h3, p { margin: 0; }
