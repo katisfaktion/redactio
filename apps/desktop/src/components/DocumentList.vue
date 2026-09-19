@@ -9,7 +9,7 @@ const props = defineProps<{
   disabled?: boolean;
   scan?: (pairId: string) => Promise<ScanReport>;
 }>();
-const emit = defineEmits<{ scanned: [report: ScanReport]; reprocess: [files: { relative_path: string; doc_id: string }[]] }>();
+const emit = defineEmits<{ scanned: [report: ScanReport]; reprocess: [files: { relative_path: string; doc_id: string }[]]; review: [docId: string] }>();
 const selected = ref<string[]>([]);
 const selectedFiles = computed(() => report.value?.files.flatMap((file) => file.doc_id && selected.value.includes(file.doc_id)
   ? [{ relative_path: file.relative_path, doc_id: file.doc_id }] : []) ?? []);
@@ -90,6 +90,7 @@ function formatMtime(value: string | null): string {
             <th scope="col">Name</th>
             <th scope="col">Status</th>
             <th scope="col">Geändert</th>
+            <th scope="col">Prüfung</th>
           </tr>
         </template>
         <tr v-for="file in report.files" :key="file.relative_path">
@@ -97,6 +98,7 @@ function formatMtime(value: string | null): string {
           <td>{{ file.relative_path }}</td>
           <td>{{ stateLabels[file.state] }}</td>
           <td>{{ formatMtime(file.mtime) }}</td>
+          <td><OnyxButton v-if="file.doc_id" :data-testid="`review-${file.doc_id}`" :label="`${file.doc_id} prüfen`" type="button" mode="outline" :disabled="busy || disabled || file.state !== 'current'" @click="emit('review', file.doc_id)" /></td>
         </tr>
       </OnyxTable>
       <OnyxButton v-if="report.files.some((file) => file.doc_id)" label="Auswahl erneut verarbeiten" type="button" :disabled="busy || disabled || !selectedFiles.length" @click="emit('reprocess', selectedFiles)" />

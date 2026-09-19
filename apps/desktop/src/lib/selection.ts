@@ -7,7 +7,11 @@ export function codePointOffset(text: string, utf16Offset: number): number {
   if (before >= 0xd800 && before <= 0xdbff && after >= 0xdc00 && after <= 0xdfff) {
     throw new RangeError("Selection splits a code point");
   }
-  return Array.from(text.slice(0, utf16Offset)).length;
+  let count = 0;
+  for (let index = 0; index < utf16Offset; count++) {
+    index += text.codePointAt(index)! > 0xffff ? 2 : 1;
+  }
+  return count;
 }
 
 // The container must contain only the original text and marks; keep UI controls outside.

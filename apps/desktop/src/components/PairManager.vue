@@ -66,7 +66,7 @@ async function remove(pairId: string) {
 
 <template>
   <section class="pair-manager" aria-labelledby="pairs-heading">
-    <h2 id="pairs-heading">Ordnerpaare</h2>
+    <div><h2 id="pairs-heading">Ordnerpaare</h2><slot name="context" /></div>
 
     <OnyxSelect
       v-if="settings.sync_pairs.length"
@@ -142,4 +142,9 @@ async function remove(pairId: string) {
 .pairs li, .pair-actions, .folder-choice { align-items: center; display: flex; flex-wrap: wrap; gap: var(--onyx-spacing-sm); justify-content: space-between; }
 .pairs small { display: block; }
 .hint { color: var(--onyx-color-text-icons-neutral-medium); font-size: var(--onyx-font-size-sm); }
+@media (min-width: 700px) {
+  .pair-manager { grid-template-columns: auto minmax(12rem, 1fr) auto; align-items: center; gap: var(--onyx-spacing-md); }
+  .pair-manager h2 { font-size: var(--onyx-font-size-lg); }
+  .management[open], .management:not(details) { grid-column: 1 / -1; }
+}
 </style>
