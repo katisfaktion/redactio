@@ -312,12 +312,17 @@ pub struct CollectionGuard {
 
 impl CollectionGuard {
     pub fn acquire(source: &Path) -> Result<Self, AppError> {
+        Self::acquire_with(source, || {})
+    }
+
+    fn acquire_with(source: &Path, before_create: impl FnOnce()) -> Result<Self, AppError> {
         let source = canonical_directory(source)?;
         let path = source.join(".redactio-lock");
         match open_validated_read(&source, &path) {
             Ok(_) => (),
             Err(error) if error.code == "path_unavailable" => {
-                ValidatedWrite::new(&source, &path)?.write_atomic(b"")?;
+                before_create();
+                ValidatedWrite::new(&source, &path)?.create_atomic(b"")?;
             }
             Err(error) => return Err(error),
         }
@@ -340,5 +345,40 @@ impl CollectionGuard {
             return Err(AppError::new("mapping_pair_mismatch"));
         }
         self.witness.validate()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::mpsc;
+
+    #[test]
+    fn concurrent_first_creators_preserve_the_held_source_and_config_lock() {
+        for label in ["source", "config"] {
+            let root = tempfile::tempdir().unwrap();
+            let directory = root.path().join(label);
+            std::fs::create_dir(&directory).unwrap();
+            let (observed_tx, observed_rx) = mpsc::channel();
+            let (continue_tx, continue_rx) = mpsc::channel();
+            std::thread::scope(|threads| {
+                let delayed_directory = &directory;
+                let delayed = threads.spawn(move || {
+                    CollectionGuard::acquire_with(delayed_directory, || {
+                        observed_tx.send(()).unwrap();
+                        continue_rx.recv().unwrap();
+                    })
+                });
+                observed_rx.recv().unwrap();
+                let owner = CollectionGuard::acquire(&directory).unwrap();
+                continue_tx.send(()).unwrap();
+                let contender = delayed.join().unwrap();
+                assert!(
+                    contender.is_err(),
+                    "first-use creator replaced the held {label} lock"
+                );
+                owner.validate(&directory).unwrap();
+            });
+        }
     }
 }

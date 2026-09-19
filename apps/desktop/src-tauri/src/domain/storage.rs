@@ -59,6 +59,15 @@ impl ValidatedWrite {
         Ok(())
     }
 
+    /// Publish only to an absent destination, even if the caller's earlier check
+    /// raced another creator. Retains the same ancestry and no-replace protection.
+    pub fn create_atomic(self, bytes: &[u8]) -> Result<(), AppError> {
+        if self.destination.is_some() {
+            return Err(AppError::new("path_exists"));
+        }
+        self.write_atomic(bytes)
+    }
+
     pub fn write_atomic(self, bytes: &[u8]) -> Result<(), AppError> {
         self.validate()?;
         let parent = self

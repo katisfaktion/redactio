@@ -393,3 +393,27 @@ fn unwritable_source_blocks_metadata_before_a_run() {
     assert_eq!(fs::read_dir(source).unwrap().count(), 0);
     assert_eq!(fs::read_dir(target).unwrap().count(), 0);
 }
+
+#[test]
+fn validated_create_never_replaces_an_earlier_or_later_creator() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("lock");
+    let delayed = ValidatedWrite::new(root.path(), &path).unwrap();
+    ValidatedWrite::new(root.path(), &path)
+        .unwrap()
+        .create_atomic(b"owner")
+        .unwrap();
+    assert_eq!(
+        ValidatedWrite::new(root.path(), &path)
+            .unwrap()
+            .create_atomic(b"replacement")
+            .unwrap_err()
+            .code,
+        "path_exists"
+    );
+    assert_eq!(
+        delayed.create_atomic(b"replacement").unwrap_err().code,
+        "path_changed"
+    );
+    assert_eq!(fs::read(&path).unwrap(), b"owner");
+}
