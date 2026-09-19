@@ -127,6 +127,17 @@ Test fixtures ran from a dedicated native TEMP mirror and local cwd using the te
 `REDACTIO_TEST_MANIFEST_DIR` override. Linux debug checks passed 133 default tests plus
 both real-model opt-ins. No final package/GUI/network acceptance follows from these tests.
 
+Stage 1c on reviewed integration `4fcd67f`: focused Windows MSVC release executables
+passed 41 default tests and four explicit real-model checks (45 total). These cover
+pair-specific configuration, lg/sm 3.8.0 model switching, preview timeout/abort cleanup,
+transport configuration replay, stored-review corrections and approval, tampering,
+changed-settings rejection and guarded direct review commands. Strict all-target MSVC
+Clippy and rustfmt passed using the isolated pinned toolchain. The two new command
+fixtures use the same runtime manifest-directory helper; no production code changed.
+CI now explicitly executes the detection and review real-model opt-ins as well.
+This bounded checkpoint does not validate the final UI, export flow or rebuilt artifact;
+the Sandbox and symlink limitations above remain outstanding.
+
 Detailed command outputs and local synthetic evidence locations are maintained in the
 P5.2 task report. Remote CI has not run: no remote or publishing action was authorized.
 CI definitions use frozen/locked dependencies and build-time hash-pinned model downloads,

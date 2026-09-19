@@ -1,3 +1,5 @@
+mod common;
+
 use redactio_lib::{
     domain::{
         detection,
@@ -45,7 +47,7 @@ impl Fixture {
         Sidecar::new(
             std::env::var_os("REDACTIO_TEST_PYTHON").unwrap().into(),
             vec![
-                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                common::manifest_dir()
                     .join("tests/fake_sidecar.py")
                     .into_os_string(),
                 "detection".into(),
