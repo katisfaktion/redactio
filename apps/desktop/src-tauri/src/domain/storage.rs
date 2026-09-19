@@ -106,6 +106,8 @@ impl ValidatedWrite {
         directory
             .sync_all()
             .map_err(|_| AppError::new("storage_durability_uncertain"))?;
+        #[cfg(test)]
+        tests::after_write(&self.path)?;
         Ok(())
     }
 
@@ -130,7 +132,36 @@ impl ValidatedWrite {
                 .ok_or_else(|| AppError::new("invalid_path"))?,
         );
         fs::create_dir(&path)?;
+        #[cfg(unix)]
+        directories[0]
+            .sync_all()
+            .map_err(|_| AppError::new("storage_durability_uncertain"))?;
         reject_links(&self.path)?;
+        Ok(())
+    }
+
+    /// Remove only the validated file while retaining the directory ancestry.
+    pub(crate) fn remove(self) -> Result<(), AppError> {
+        self.validate()?;
+        let directories = self
+            .directories
+            .iter()
+            .map(|(path, _)| open_directory(path))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.validate()?;
+        let parent = self
+            .path
+            .parent()
+            .ok_or_else(|| AppError::new("invalid_path"))?;
+        let path = anchored_parent(parent, &directories[0]).join(self.path.file_name().unwrap());
+        if optional_snapshot(&path)? != self.destination {
+            return Err(AppError::new("path_changed"));
+        }
+        fs::remove_file(path)?;
+        #[cfg(unix)]
+        directories[0]
+            .sync_all()
+            .map_err(|_| AppError::new("storage_durability_uncertain"))?;
         Ok(())
     }
 
@@ -555,5 +586,27 @@ pub(crate) mod windows {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+    use std::cell::RefCell;
+    thread_local! { pub(crate) static FAIL_AFTER_WRITE: RefCell<Option<(PathBuf, &'static str, bool)>> = const { RefCell::new(None) }; }
+    pub(super) fn after_write(path: &Path) -> Result<(), AppError> {
+        FAIL_AFTER_WRITE.with_borrow_mut(|failure| {
+            if failure
+                .as_ref()
+                .is_some_and(|(expected, _, _)| expected == path)
+            {
+                let (_, code, displace) = failure.take().unwrap();
+                if displace {
+                    fs::rename(path, path.with_extension("retained"))?;
+                }
+                return Err(AppError::new(code));
+            }
+            Ok(())
+        })
     }
 }

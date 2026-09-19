@@ -72,14 +72,16 @@ pub fn scan_collection(pair: &SyncPair) -> Result<ScanReport, AppError> {
                 output.as_deref(),
                 &revision,
                 entry.committed.as_ref(),
-                false,
+                entry.pending.is_some(),
             ),
             Err(error) => {
                 report.errors.push(ScanFailure {
                     relative_path: entry.relative_path.clone(),
                     code: error.code.clone(),
                 });
-                if found.is_none() {
+                if entry.pending.is_some() {
+                    DocumentState::RecoveryPending
+                } else if found.is_none() {
                     DocumentState::MissingSource
                 } else {
                     DocumentState::Conflict

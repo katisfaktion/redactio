@@ -13,6 +13,11 @@ use std::{
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use uuid::Uuid;
 
+mod journal;
+pub use journal::{
+    commit_generation, recover_pending, CommitCandidate, PendingCommit, ReviewRecord,
+};
+
 pub const MAPPING_FILE: &str = "_document-mapping.json";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -79,17 +84,19 @@ pub fn classify(
     DocumentState::Current
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MappingEntry {
     pub doc_id: String,
     pub relative_path: String,
     pub reserved_at: String,
     pub committed: Option<Generation>,
+    #[serde(default)]
+    pub pending: Option<PendingCommit>,
 }
 
 /// Shared persisted schema: registry re-add and document operations use one parser.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MappingData {
     pub schema_version: u8,
@@ -129,6 +136,9 @@ impl MappingData {
                 || OffsetDateTime::parse(&entry.reserved_at, &Rfc3339).is_err()
             {
                 return Err(AppError::new("invalid_mapping"));
+            }
+            if let Some(pending) = &entry.pending {
+                pending.validate(self.sync_pair_id, entry)?;
             }
             if let Some(generation) = &entry.committed {
                 generation.validate()?;
@@ -292,6 +302,7 @@ impl Mapping {
                 .format(&Rfc3339)
                 .map_err(|_| AppError::new("invalid_mapping"))?,
             committed: None,
+            pending: None,
         });
         let bytes =
             serde_json::to_vec_pretty(&data).map_err(|_| AppError::new("invalid_mapping"))?;
@@ -382,3 +393,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "mapping/recovery_tests.rs"]
+mod recovery_tests;

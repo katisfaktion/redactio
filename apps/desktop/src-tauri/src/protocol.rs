@@ -3,7 +3,17 @@ use serde::{de::Error as _, Deserialize, Deserializer, Serialize};
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Full identity shared by private review records and document commands.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DocumentKey {
+    #[serde(deserialize_with = "canonical_uuid")]
+    pub sync_pair_id: Uuid,
+    #[serde(deserialize_with = "document_id")]
+    pub doc_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EngineInfo {
     #[serde(deserialize_with = "nonempty")]
@@ -28,7 +38,7 @@ pub struct ModelInfo {
     pub compatible: bool,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DetectionOrigin {
     Automatic,
@@ -43,7 +53,7 @@ pub enum OutputOrigin {
     Merged,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Copy, Serialize, Deserialize)]
 pub enum ReviewStatus {
     #[serde(rename = "pending")]
     Pending,
@@ -55,7 +65,7 @@ pub enum ReviewStatus {
     NeedsRework,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Detection {
     pub id: String,
     pub start: u64,
@@ -104,7 +114,7 @@ impl<'de> Deserialize<'de> for Detection {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Decisions {
     #[serde(default, deserialize_with = "opaque_ids")]
@@ -274,7 +284,7 @@ pub struct ProcessResult {
     pub engine: EngineInfo,
 }
 
-fn canonical_uuid<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Uuid, D::Error> {
+pub(crate) fn canonical_uuid<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Uuid, D::Error> {
     let value = String::deserialize(deserializer)?;
     let parsed = Uuid::parse_str(&value).map_err(D::Error::custom)?;
     if parsed.to_string() != value {
@@ -325,7 +335,7 @@ fn required_confidence<'de, D: Deserializer<'de>>(
     Option::<f64>::deserialize(deserializer)
 }
 
-fn sha256<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+pub(crate) fn sha256<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
     let value = String::deserialize(deserializer)?;
     if value.len() != 64
         || !value
@@ -337,13 +347,13 @@ fn sha256<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error
     Ok(value)
 }
 
-fn timestamp<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+pub(crate) fn timestamp<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
     let value = String::deserialize(deserializer)?;
     validate_timestamp(&value).map_err(D::Error::custom)?;
     Ok(value)
 }
 
-fn optional_timestamp<'de, D: Deserializer<'de>>(
+pub(crate) fn optional_timestamp<'de, D: Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Option<String>, D::Error> {
     let value = Option::<String>::deserialize(deserializer)?;
@@ -378,7 +388,9 @@ fn opaque_ids<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<String>,
     Ok(values)
 }
 
-fn safe_codes<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<String>, D::Error> {
+pub(crate) fn safe_codes<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<String>, D::Error> {
     let values = Vec::<String>::deserialize(deserializer)?;
     if values.iter().any(|value| {
         value.is_empty()
