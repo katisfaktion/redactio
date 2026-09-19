@@ -196,8 +196,11 @@ package checks are separate from a Linux test pass.
 
 ## Windows package
 
-Use PowerShell 7, the pinned build tools and a fresh local build checkout. The
-script refuses an existing `dist/windows/redactio`; preserve prior artifacts
+Use PowerShell 7, Git, the pinned build tools and a fresh, clean local Git checkout
+with native-readable Git metadata. A copied WSL linked worktree is not sufficient;
+use an independent Windows clone. The script rejects tracked/staged changes and
+untracked source files, while ordinary Git-ignored build output is allowed.
+It refuses an existing `dist/windows/redactio`; preserve prior artifacts
 instead of deleting a directory that may contain other data.
 
 The script's native compiler route is:
@@ -230,10 +233,16 @@ pnpm --filter @redactio/desktop tauri build --no-bundle --runner cargo-xwin --ta
 ```
 
 The script writes the versioned ZIP and `.zip.sha256` beside its staged package,
-plus checker and synthetic smoke files. `build-manifest.json` inventories package
-files, lock hashes and pinned inputs. Third-party notices are bundled; Redactio's
-MIT attribution is retained. Final exact-commit manifest/evaluation references
-and full artifact acceptance are still pending; the early ZIP is not the final release.
+plus checker and synthetic smoke files. `build-manifest.json` records the exact
+clean source commit, package files, lock hashes, pinned inputs, observed build tools
+and Python distributions. Hashed test/evaluation procedure references identify
+what to run; acceptance remains explicitly unverified. A supplied desktop binary
+is recorded by hash with unverified caller-supplied provenance; retain its actual
+same-commit cross-build command and tool evidence beside the artifact. Final
+artifact test/benchmark receipts and the ZIP checksum also remain beside the ZIP,
+avoiding a circular hash reference. Third-party notices are bundled; Redactio's MIT
+attribution is retained. The final build and full artifact acceptance remain pending;
+the early ZIP is not the final release.
 
 ## Engine benchmark and private evaluation
 

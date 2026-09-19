@@ -72,12 +72,13 @@ Verarbeitung und Prüfung erfordern. Das bloße Auswählen oder Umbenennen tut d
 
 ## 4. Dokumente verarbeiten und Fehler behandeln
 
-Die Dokumentübersicht zeigt gefundene DOCX-Dateien und ihren Zustand. Vor dem
-Start auch Such- und Lesefehler prüfen. Versteckte Dateien/Ordner, Word-Sperrdateien
+Unter **Dokumente** zuerst **Quellordner einlesen** wählen. Die Übersicht zeigt
+gefundene DOCX-Dateien und ihren Zustand. Vor dem Start auch Such- und Lesefehler
+prüfen. Versteckte Dateien/Ordner, Word-Sperrdateien
 (`~$`), App-Metadaten und verknüpfte Unterordner gehören nicht zur Verarbeitung.
 PDF, gescannte Bilder und OCR werden nicht unterstützt.
 
-Die Verarbeitung für das ausgewählte Paar starten und Fortschritt sowie
+Mit **Verarbeitung starten** das ausgewählte Paar verarbeiten und Fortschritt sowie
 Abschlussübersicht beachten. Es läuft jeweils nur ein Paar; während einer
 Operation sind Paarwechsel und Konfigurationsänderungen gesperrt. Unveränderte,
 erfolgreiche Ergebnisse werden übersprungen. Fehlende Ausgaben können neu erzeugt
@@ -87,7 +88,9 @@ werden; geänderte Quellen oder Einstellungen erfordern neue Ergebnisse.
 Operation beendet oder abgebrochen ist. Bereits gespeicherte Ergebnisse bleiben
 erhalten. Die Übersicht unterscheidet verarbeitet, übersprungen, fehlgeschlagen
 und noch nicht verarbeitet. Nach Behebung der Ursache fehlgeschlagene Dateien
-gezielt erneut versuchen. Eine Zeitüberschreitung ist ein Fehler, kein Erfolg;
+über **Fehlgeschlagene Dokumente erneut versuchen** gezielt erneut versuchen.
+Nach der Verarbeitung **Quellordner einlesen** wählen, um den aktuellen Stand
+und die Schaltflächen zur Prüfung zu sehen. Eine Zeitüberschreitung ist ein Fehler, kein Erfolg;
 die Initialisierung ist auf 180 Sekunden, eine Dokumentanfrage auf 120 Sekunden begrenzt.
 
 Arbeitsausgaben nicht außerhalb von Redactio bearbeiten: geänderte Ausgabedateien
@@ -98,13 +101,27 @@ neue Dokumentidentität. Redactio löscht alte Originale oder Ausgaben nicht aut
 
 ## 5. Inhalt prüfen und korrigieren
 
-Jedes Ergebnis vor einer Weitergabe fachlich prüfen. In der Prüfungsansicht den
-extrahierten Originaltext mit der erzeugten Fassung vergleichen. Übersehene
-Angaben im Originaltext markieren und eine Schwärzung hinzufügen; falsche Treffer
-verwerfen oder ihren Typ korrigieren. Die Ausgabe wird aus diesen Entscheidungen
-neu erzeugt. Allgemeine Textbearbeitung und frei gewählte Ersatztexte sind nicht
-Teil dieses Arbeitsablaufs. Änderungen der laufenden Prüfsitzung lassen sich
-rückgängig machen; vor einem Wechsel speichern oder ausdrücklich verwerfen.
+Jedes Ergebnis vor einer Weitergabe fachlich prüfen. Bei einem Dokument mit dem
+Zustand **Aktuell** die Schaltfläche **doc-0001 prüfen** (mit der jeweiligen ID)
+wählen. In der Prüfungsansicht **Originaltext** und **Ausgabe** vergleichen.
+Weitere aktuelle Ergebnisse sind unter **Dokument prüfen** auswählbar.
+
+Übersehene Angaben im Originaltext markieren, den **Typ der neuen Schwärzung**
+wählen und **Auswahl schwärzen** betätigen. Für die Tastatur **Per Tastatur
+auswählen** öffnen, mit Umschalt- und Pfeiltasten markieren und mit Umschalt+Tab
+zur Schaltfläche **Auswahl schwärzen** zurückkehren. Unter **Schwärzungen
+bearbeiten** falsche Treffer entfernen oder ihren Typ korrigieren.
+**Korrektur zurücknehmen** macht die letzte Schwärzungskorrektur der Sitzung
+rückgängig. Allgemeine Textbearbeitung und frei gewählte Ersatztexte sind nicht
+Teil dieses Arbeitsablaufs.
+
+Die angezeigte Ausgabe bleibt bis zum Speichern auf dem bisherigen Stand.
+Zuerst **Prüfung speichern**, dann die aktualisierte Ausgabe kontrollieren und
+erst danach ausdrücklich **Freigeben**. Ungespeicherte Schwärzungskorrekturen
+sperren die Freigabe. Beim Dokument- oder Paarwechsel, beim Verlassen der Ansicht
+oder beim Schließen fragt **Ungespeicherte Prüfung** nach: **Speichern und
+fortfahren**, **Änderungen verwerfen** oder **Hier bleiben**. Schlägt das Speichern
+fehl, bleiben die Änderungen erhalten und die Ansicht wird nicht verlassen.
 
 Absätze und Tabellen werden in lesbarer Reihenfolge übernommen, nicht das genaue
 Word-Layout. Warnungen können unter anderem Kopf-/Fußzeilen, Fuß-/Endnoten,
@@ -114,8 +131,9 @@ ist dafür keine vollständige Darstellung. Eine leere Extraktion kann nicht
 freigegeben werden. Nicht leere Ergebnisse mit Warnungen erst nach deren
 ausdrücklicher Bestätigung freigeben.
 
-Ein Dokument ist zunächst offen zur Prüfung (`pending`), freigegeben (`approved`),
-zurückgewiesen (`rejected`) oder benötigt Nacharbeit (`needs-rework`). Korrekturen
+Die Prüfzustände heißen **Ausstehend**, **Freigegeben**, **Abgelehnt** und
+**Nacharbeit erforderlich**. Mit **Als ausstehend speichern** lässt sich eine
+Freigabe wieder aufheben. Korrekturen
 und Neuerzeugung heben eine frühere Freigabe auf. Geänderte Originale,
 Einstellungen oder Ausgabebytes machen alte Freigaben ungültig; alte Markierungen
 werden nicht ungeprüft auf neuen Text übertragen. **Prüfnotizen bleiben privat**
