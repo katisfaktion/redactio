@@ -1,3 +1,4 @@
+use crate::sidecar::Sidecar;
 use crate::{
     domain::{
         mapping::CollectionGuard,
@@ -5,6 +6,7 @@ use crate::{
         recovery::{fresh_start, recovery_pairs, RecoveryPair},
         scan::{scan_collection, ScanReport},
         settings::{load_settings, save_settings, ProcessingConfig, Settings},
+        sync::{RunController, RunSummary},
     },
     error::AppError,
 };
@@ -14,13 +16,14 @@ use std::{
     path::{Path, PathBuf},
     sync::Mutex,
 };
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use uuid::Uuid;
 
 pub struct AppState {
     settings_path: PathBuf,
     app_config_root: PathBuf,
-    mutation: Mutex<()>,
+    runs: RunController,
+    sidecar: Mutex<Option<Sidecar>>,
 }
 
 impl AppState {
@@ -32,9 +35,17 @@ impl AppState {
         fs::create_dir_all(&app_config_root)?;
         Ok(Self {
             settings_path: app_config_root.join("settings.json"),
-            app_config_root,
-            mutation: Mutex::new(()),
+            app_config_root: app_config_root.clone(),
+            runs: RunController::new(app_config_root.join("settings.json")),
+            sidecar: Mutex::new(None),
         })
+    }
+
+    pub async fn shutdown_sidecar(&self) {
+        let sidecar = self.sidecar.lock().ok().and_then(|saved| saved.clone());
+        if let Some(sidecar) = sidecar {
+            sidecar.shutdown().await;
+        }
     }
 }
 
@@ -80,19 +91,13 @@ impl From<Settings> for UiSettings {
 
 #[tauri::command]
 pub fn list_pairs(state: State<'_, AppState>) -> Result<UiSettings, AppError> {
-    let _guard = state
-        .mutation
-        .lock()
-        .map_err(|_| AppError::new("state_unavailable"))?;
+    let _guard = state.runs.try_operation()?;
     Ok(load_registry(&state)?.into())
 }
 
 #[tauri::command]
 pub fn list_recovery_pairs(state: State<'_, AppState>) -> Result<Vec<RecoveryPair>, AppError> {
-    let _guard = state
-        .mutation
-        .lock()
-        .map_err(|_| AppError::new("state_unavailable"))?;
+    let _guard = state.runs.try_operation()?;
     let _config_guard = CollectionGuard::acquire(&state.app_config_root)?;
     recovery_pairs(&state.settings_path)
 }
@@ -104,10 +109,7 @@ pub fn fresh_start_pair(
     target_folder: String,
     confirmed: bool,
 ) -> Result<(), AppError> {
-    let _guard = state
-        .mutation
-        .lock()
-        .map_err(|_| AppError::new("state_unavailable"))?;
+    let _guard = state.runs.try_operation()?;
     fresh_start(
         &state.settings_path,
         pair_id,
@@ -166,10 +168,7 @@ pub fn remove_pair(state: State<'_, AppState>, pair_id: Uuid) -> Result<UiSettin
 #[tauri::command]
 pub async fn scan_pair(state: State<'_, AppState>, pair_id: Uuid) -> Result<ScanReport, AppError> {
     let pair = {
-        let _guard = state
-            .mutation
-            .lock()
-            .map_err(|_| AppError::new("state_unavailable"))?;
+        let _guard = state.runs.try_operation()?;
         load_registry(&state)?
             .sync_pairs
             .into_iter()
@@ -188,10 +187,7 @@ fn mutate(
     state: &State<'_, AppState>,
     change: impl FnOnce(&mut Settings) -> Result<(), AppError>,
 ) -> Result<UiSettings, AppError> {
-    let _guard = state
-        .mutation
-        .lock()
-        .map_err(|_| AppError::new("state_unavailable"))?;
+    let _guard = state.runs.try_operation()?;
     let _config_guard = CollectionGuard::acquire(&state.app_config_root)?;
     let mut settings = load_registry(state)?;
     change(&mut settings)?;
@@ -209,4 +205,89 @@ fn load_registry(state: &State<'_, AppState>) -> Result<Settings, AppError> {
     let settings = load_settings(&state.settings_path)?;
     settings.validate_registry(std::slice::from_ref(&state.app_config_root))?;
     Ok(settings)
+}
+
+#[tauri::command]
+pub fn start_sync(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    pair_id: Uuid,
+    relative_paths: Option<Vec<String>>,
+    force_doc_ids: Vec<String>,
+) -> Result<Uuid, AppError> {
+    let run = state.runs.prepare(pair_id, relative_paths, force_doc_ids)?;
+    let run_id = run.run_id;
+    let sidecar = (|| {
+        let mut saved = state
+            .sidecar
+            .lock()
+            .map_err(|_| AppError::new("state_unavailable"))?;
+        if saved.is_none() {
+            let resources = crate::resources::resolve()?;
+            *saved = Some(Sidecar::new(
+                resources.sidecar_executable,
+                resources.sidecar_args,
+                resources.model_root,
+            ));
+        }
+        Ok(saved.as_ref().unwrap().clone())
+    })();
+    let controller = state.runs.clone();
+    tauri::async_runtime::spawn(async move {
+        controller
+            .execute(run, sidecar, |progress| {
+                let _ = app.emit("run-progress", progress);
+            })
+            .await;
+    });
+    Ok(run_id)
+}
+
+#[tauri::command]
+pub async fn cancel_sync(
+    state: State<'_, AppState>,
+    pair_id: Uuid,
+    run_id: Uuid,
+) -> Result<(), AppError> {
+    state.runs.cancel(pair_id, run_id).await
+}
+
+#[tauri::command]
+pub fn get_run_summary(
+    state: State<'_, AppState>,
+    pair_id: Uuid,
+    run_id: Uuid,
+) -> Result<Option<RunSummary>, AppError> {
+    state.runs.summary(pair_id, run_id)
+}
+
+#[tauri::command]
+pub fn audit_location(state: State<'_, AppState>) -> String {
+    state
+        .app_config_root
+        .join(crate::domain::audit::AUDIT_FILE)
+        .to_string_lossy()
+        .into_owned()
+}
+
+#[tauri::command]
+pub fn open_audit_folder(state: State<'_, AppState>) -> Result<(), AppError> {
+    let directory = &state.app_config_root;
+    #[cfg(windows)]
+    let executable = "explorer.exe";
+    #[cfg(target_os = "macos")]
+    let executable = "open";
+    #[cfg(all(not(windows), not(target_os = "macos")))]
+    let executable = "xdg-open";
+    let mut child = std::process::Command::new(executable)
+        .arg(directory)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|_| AppError::new("folder_open_failed"))?;
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
 }

@@ -87,3 +87,11 @@ test("an empty finished collection and a disabled idle action are explicit", asy
   await panel.setProps({ stage: null, disabled: true });
   expect(panel.get("button").attributes("disabled")).toBeDefined();
 });
+
+test("busy and protected-review errors explain the action needed without exposing codes", async () => {
+  const panel = mountPanel();
+  await panel.setProps({ stage: null, error: { code: "operation_busy", retryable: true } });
+  expect(panel.get('[role="alert"]').text()).toContain("anderer Vorgang");
+  await panel.setProps({ stage: "finished", errors: [{ relative_path: "reviewed.docx", code: "confirmation_required", retryable: false }], error: null });
+  expect(panel.get('[role="alert"]').text()).toContain("Prüfungen oder Korrekturen");
+});

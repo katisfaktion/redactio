@@ -78,3 +78,15 @@ test("a late scan response cannot populate a newly selected pair", async () => {
   await wrapper.get("button").trigger("click");
   expect(wrapper.text()).toContain("pair-b.docx");
 });
+
+test("busy work disables discovery and selected reprocessing names exact stable IDs", async () => {
+  const wrapper = mountList(async () => ({ ...report, files: [{ ...report.files[0], doc_id: "doc-0001", state: "current" }] }));
+  await wrapper.get("button").trigger("click");
+  expect(wrapper.emitted("scanned")).toHaveLength(1);
+  await wrapper.get('input[type="checkbox"]').setValue(true);
+  const reprocess = wrapper.findAll("button").find((button) => button.text().includes("erneut verarbeiten"))!;
+  await reprocess.trigger("click");
+  expect(wrapper.emitted("reprocess")?.[0]).toEqual([[{ relative_path: "nested/document.docx", doc_id: "doc-0001" }]]);
+  await wrapper.setProps({ disabled: true });
+  expect(wrapper.findAll("button").every((button) => button.attributes("disabled") !== undefined)).toBe(true);
+});

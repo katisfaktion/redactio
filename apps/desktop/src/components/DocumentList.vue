@@ -1,13 +1,18 @@
 <script setup lang="ts">
 import { OnyxButton, OnyxTable } from "sit-onyx";
-import { ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
 import type { SafeError, ScanReport, ScanState } from "../lib/contracts";
 import { pairApi, safeError } from "../lib/ipc";
 
 const props = defineProps<{
   pairId: string;
+  disabled?: boolean;
   scan?: (pairId: string) => Promise<ScanReport>;
 }>();
+const emit = defineEmits<{ scanned: [report: ScanReport]; reprocess: [files: { relative_path: string; doc_id: string }[]] }>();
+const selected = ref<string[]>([]);
+const selectedFiles = computed(() => report.value?.files.flatMap((file) => file.doc_id && selected.value.includes(file.doc_id)
+  ? [{ relative_path: file.relative_path, doc_id: file.doc_id }] : []) ?? []);
 const report = ref<ScanReport | null>(null);
 const error = ref<SafeError | null>(null);
 const busy = ref(false);
@@ -28,9 +33,11 @@ watch(() => props.pairId, () => {
   report.value = null;
   error.value = null;
   busy.value = false;
+  selected.value = [];
 });
 
 async function scan() {
+  if (props.disabled || busy.value) return;
   const pairId = props.pairId;
   const currentRequest = ++requestId;
   busy.value = true;
@@ -38,7 +45,9 @@ async function scan() {
     const result = await (props.scan ?? pairApi.scanPair)(pairId);
     if (currentRequest === requestId && props.pairId === pairId) {
       report.value = result;
+      selected.value = [];
       error.value = null;
+      emit("scanned", result);
     }
   } catch (caught) {
     if (currentRequest === requestId && props.pairId === pairId) {
@@ -65,7 +74,7 @@ function formatMtime(value: string | null): string {
       label="Quellordner einlesen"
       type="button"
       :loading="busy"
-      :disabled="busy"
+      :disabled="busy || disabled"
       @click="scan"
     />
 
@@ -77,18 +86,22 @@ function formatMtime(value: string | null): string {
       <OnyxTable v-if="report.files.length" striped with-page-scrolling>
         <template #head>
           <tr>
+            <th scope="col">Auswahl</th>
             <th scope="col">Name</th>
             <th scope="col">Status</th>
             <th scope="col">Geändert</th>
           </tr>
         </template>
         <tr v-for="file in report.files" :key="file.relative_path">
+          <td><input v-if="file.doc_id" v-model="selected" type="checkbox" :value="file.doc_id" :aria-label="`${file.relative_path} auswählen`" :disabled="busy || disabled" /></td>
           <td>{{ file.relative_path }}</td>
           <td>{{ stateLabels[file.state] }}</td>
           <td>{{ formatMtime(file.mtime) }}</td>
         </tr>
       </OnyxTable>
-      <p v-else-if="!report.errors.length" class="empty">
+      <OnyxButton v-if="report.files.some((file) => file.doc_id)" label="Auswahl erneut verarbeiten" type="button" :disabled="busy || disabled || !selectedFiles.length" @click="emit('reprocess', selectedFiles)" />
+      <p>{{ report.files.length }} Dokumente gefunden; {{ report.errors.length }} Lesefehler.</p>
+      <p v-if="!report.files.length && !report.errors.length" class="empty">
         Keine geeigneten DOCX-Dokumente gefunden.
       </p>
       <section v-if="report.errors.length" class="scan-errors" aria-labelledby="scan-errors-heading">

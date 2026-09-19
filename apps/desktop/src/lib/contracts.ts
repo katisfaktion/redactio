@@ -97,3 +97,25 @@ export const RecoveryPairSchema = z.object({
 }).strict();
 export const RecoveryPairsSchema = z.array(RecoveryPairSchema);
 export type RecoveryPair = z.infer<typeof RecoveryPairSchema>;
+
+const RunProgressObject = z.object({
+  sync_pair_id: z.uuid(), run_id: z.uuid(),
+  stage: z.enum(["initializing", "scanning", "processing", "finished"]),
+  discovered: z.int().nonnegative(), processed: z.int().nonnegative(),
+  skipped: z.int().nonnegative(), failed: z.int().nonnegative(),
+  unprocessed: z.int().nonnegative(), warned: z.int().nonnegative(),
+}).strict();
+function consistentCounts(counts: z.infer<typeof RunProgressObject>): boolean {
+  const completed = counts.processed + counts.skipped + counts.failed;
+  return Number.isSafeInteger(completed) && Number.isSafeInteger(completed + counts.unprocessed)
+    && completed + counts.unprocessed === counts.discovered && counts.warned <= counts.processed;
+}
+export const RunProgressSchema = RunProgressObject.refine(consistentCounts);
+export const RunSummarySchema = RunProgressObject.extend({
+  stage: z.literal("finished"),
+  outcome: z.enum(["completed", "completed-with-errors", "cancelled", "failed"]),
+  errors: z.array(SafeErrorSchema.extend({ relative_path: z.string() }).strict()),
+  error: SafeErrorSchema.nullable(), audit_warning: z.boolean(),
+}).strict().refine(consistentCounts);
+export type RunProgress = z.infer<typeof RunProgressSchema>;
+export type RunSummary = z.infer<typeof RunSummarySchema>;

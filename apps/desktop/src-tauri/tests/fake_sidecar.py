@@ -178,6 +178,50 @@ def main() -> None:
                     )
                     continue
         payload = request["payload"]
+        if mode.startswith("batch") and request["type"] == "configure":
+            configured = request["payload"]
+            if mode == "batch-slow-init":
+                time.sleep(0.3)
+        if mode.startswith("batch") and request["type"] in {
+            "process_document",
+            "render_review",
+        }:
+            source = Path(payload["source_path"]).read_bytes()
+            if source == b"invalid":
+                print(
+                    json.dumps(
+                        {
+                            "id": request["id"],
+                            "type": "error",
+                            "payload": {"code": "invalid_docx", "retryable": False},
+                        }
+                    ),
+                    flush=True,
+                )
+                continue
+            if source == b"change":
+                Path(payload["source_path"]).write_bytes(b"changed during processing")
+            warnings = ["unsupported_images"] if source == b"warning" else []
+            payload = {
+                key: payload[key]
+                for key in [
+                    "sync_pair_id",
+                    "doc_id",
+                    "source_hash_sha256",
+                    "processing_revision",
+                    "redacted_at",
+                ]
+            } | {
+                "markdown": f"{payload['sync_pair_id']} {payload['doc_id']} {payload['redacted_at']}\nSynthetic output",
+                "body": "Synthetic output",
+                "original_text": "CANARY_PRIVATE_ORIGINAL",
+                "detections": [],
+                "redactions": [],
+                "warnings": warnings,
+                "body_was_empty": False,
+                "review_status": "needs-rework" if warnings else "pending",
+                "engine": configure_result({"payload": configured})["engine"],
+            }
         if request["type"] == "configure":
             payload = configure_result(request)
             if mode == "invalid-configure-then-exit":

@@ -24,7 +24,19 @@ pub fn run() {
             commands::select_pair,
             commands::remove_pair,
             commands::scan_pair,
+            commands::start_sync,
+            commands::cancel_sync,
+            commands::get_run_summary,
+            commands::audit_location,
+            commands::open_audit_folder,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                tauri::async_runtime::block_on(
+                    app.state::<commands::AppState>().shutdown_sidecar(),
+                );
+            }
+        });
 }

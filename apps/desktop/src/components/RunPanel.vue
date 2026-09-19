@@ -36,6 +36,15 @@ const status = computed(() => {
   if (props.stage === "finished" && props.outcome) return outcomeLabels[props.outcome];
   return props.stage ? stageLabels[props.stage] : "Bereit zur Verarbeitung";
 });
+const errorLabels: Record<string, string> = {
+  operation_busy: "Ein anderer Vorgang läuft bereits. Bitte warten Sie, bis er beendet ist.",
+  file_busy: "Ein anderer Vorgang verwendet dieses Ordnerpaar. Bitte versuchen Sie es danach erneut.",
+  confirmation_required: "Gespeicherte Prüfungen oder Korrekturen sind geschützt. Wählen Sie das Dokument aus und bestätigen Sie „Auswahl erneut verarbeiten“.",
+  output_conflict: "Die Ausgabe wurde außerhalb der App verändert. Sie wurde nicht überschrieben.",
+  review_conflict: "Die gespeicherte Prüfung ist nicht verfügbar oder wurde verändert.",
+  recovery_pending: "Eine unterbrochene Verarbeitung muss mit den ursprünglichen Daten wiederhergestellt werden.",
+  processing_version_changed: "Die Verarbeitungskomponenten haben sich geändert. Bitte speichern Sie die Erkennungseinstellungen erneut.",
+};
 </script>
 
 <template>
@@ -65,12 +74,12 @@ const status = computed(() => {
       Keine geeigneten DOCX-Dokumente gefunden.
     </p>
     <p v-if="error" class="error" role="alert">
-      Die Verarbeitung konnte nicht durchgeführt werden. Bitte prüfen Sie die Ordner und die lokalen Verarbeitungskomponenten.
+      {{ errorLabels[error.code] ?? "Die Verarbeitung konnte nicht durchgeführt werden. Bitte prüfen Sie die Ordner und die lokalen Verarbeitungskomponenten." }}
     </p>
     <div v-if="errors?.length" class="error" role="alert">
       <p>Diese Dokumente konnten nicht verarbeitet werden:</p>
       <ul>
-        <li v-for="failure in errors" :key="failure.relative_path">{{ failure.relative_path }}</li>
+        <li v-for="failure in errors" :key="failure.relative_path">{{ failure.relative_path }} — {{ errorLabels[failure.code] ?? "Das Dokument konnte nicht verarbeitet werden." }}</li>
       </ul>
     </div>
     <p v-if="auditWarning" class="error" role="alert">

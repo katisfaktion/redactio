@@ -42,6 +42,16 @@ impl ValidatedWrite {
     }
 
     pub fn validate(&self) -> Result<(), AppError> {
+        self.validate_directories()?;
+        if optional_snapshot(&self.path).map_err(|_| AppError::new("path_changed"))?
+            != self.destination
+        {
+            return Err(AppError::new("path_changed"));
+        }
+        Ok(())
+    }
+
+    fn validate_directories(&self) -> Result<(), AppError> {
         for (path, expected) in &self.directories {
             let metadata = fs::symlink_metadata(path).map_err(|_| AppError::new("path_changed"))?;
             if !metadata.is_dir()
@@ -50,11 +60,6 @@ impl ValidatedWrite {
             {
                 return Err(AppError::new("path_changed"));
             }
-        }
-        if optional_snapshot(&self.path).map_err(|_| AppError::new("path_changed"))?
-            != self.destination
-        {
-            return Err(AppError::new("path_changed"));
         }
         Ok(())
     }
@@ -166,13 +171,31 @@ impl ValidatedWrite {
     }
 
     fn open_read(self) -> Result<File, AppError> {
-        self.validate()?;
+        self.open(false)
+    }
+
+    /// For the locked append-only audit log; concurrent appends may change size,
+    /// but a different file identity is never accepted.
+    pub(crate) fn open_update(self) -> Result<File, AppError> {
+        self.open(true)
+    }
+
+    fn open(self, update: bool) -> Result<File, AppError> {
+        if update {
+            self.validate_directories()?;
+        } else {
+            self.validate()?;
+        }
         let directories = self
             .directories
             .iter()
             .map(|(path, _)| open_directory(path))
             .collect::<Result<Vec<_>, _>>()?;
-        self.validate()?;
+        if update {
+            self.validate_directories()?;
+        } else {
+            self.validate()?;
+        }
         let parent = self
             .path
             .parent()
@@ -182,8 +205,15 @@ impl ValidatedWrite {
                 .file_name()
                 .ok_or_else(|| AppError::new("invalid_path"))?,
         );
-        let file = open_regular_file(&path)?;
-        if Some(snapshot_file(&file)?) != self.destination {
+        let file = open_regular_file_with(&path, update)?;
+        let observed = snapshot_file(&file)?;
+        if if update {
+            self.destination
+                .as_ref()
+                .is_none_or(|saved| saved.identity != observed.identity)
+        } else {
+            Some(observed) != self.destination
+        } {
             return Err(AppError::new("path_changed"));
         }
         Ok(file)
@@ -274,8 +304,12 @@ pub(crate) fn file_snapshot(path: &Path) -> Result<FileSnapshot, AppError> {
 }
 
 fn open_regular_file(path: &Path) -> Result<File, AppError> {
+    open_regular_file_with(path, false)
+}
+
+fn open_regular_file_with(path: &Path, update: bool) -> Result<File, AppError> {
     let mut options = fs::OpenOptions::new();
-    options.read(true);
+    options.read(true).write(update);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
@@ -593,6 +627,27 @@ pub(crate) mod windows {
 pub(crate) mod tests {
     use super::*;
     use std::cell::RefCell;
+
+    #[test]
+    fn audit_update_accepts_an_intervening_append_but_refuses_a_replaced_file() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("audit-log.jsonl");
+        fs::write(&path, b"first\n").unwrap();
+        let append_witness = ValidatedWrite::new(root.path(), &path).unwrap();
+        let mut writer = ValidatedWrite::new(root.path(), &path)
+            .unwrap()
+            .open_update()
+            .unwrap();
+        std::io::Seek::seek(&mut writer, std::io::SeekFrom::End(0)).unwrap();
+        writer.write_all(b"second\n").unwrap();
+        writer.sync_all().unwrap();
+        drop(writer);
+        assert!(append_witness.open_update().is_ok());
+        let replaced_witness = ValidatedWrite::new(root.path(), &path).unwrap();
+        fs::rename(&path, root.path().join("old-log")).unwrap();
+        fs::write(&path, b"replacement\n").unwrap();
+        assert!(replaced_witness.open_update().is_err());
+    }
     thread_local! { pub(crate) static FAIL_AFTER_WRITE: RefCell<Option<(PathBuf, &'static str, bool)>> = const { RefCell::new(None) }; }
     pub(super) fn after_write(path: &Path) -> Result<(), AppError> {
         FAIL_AFTER_WRITE.with_borrow_mut(|failure| {

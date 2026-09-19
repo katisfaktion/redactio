@@ -1,10 +1,14 @@
 <script setup lang="ts">
-import { OnyxAppLayout, OnyxPageLayout } from "sit-onyx";
-import { ref } from "vue";
+import { OnyxAppLayout, OnyxButton, OnyxPageLayout } from "sit-onyx";
+import { computed, ref, watch } from "vue";
+import { confirm } from "@tauri-apps/plugin-dialog";
 import MappingRecovery from "./components/MappingRecovery.vue";
 import DocumentList from "./components/DocumentList.vue";
 import PairManager from "./components/PairManager.vue";
+import RunPanel from "./components/RunPanel.vue";
 import { usePairs } from "./composables/usePairs";
+import { useRun } from "./composables/useRun";
+import { runApi, safeError } from "./lib/ipc";
 import type { SafeError, Settings } from "./lib/contracts";
 
 const props = withDefaults(defineProps<{
@@ -17,6 +21,32 @@ function recovered(settings: Settings) { pairs.settings.value = settings; startu
 
 const empty: Settings = { schema_version: 1, sync_pairs: [], selected_sync_pair_id: null };
 const pairs = usePairs(props.initialSettings ?? empty);
+const selectedId = computed(() => pairs.selectedPair.value?.id ?? null);
+const run = useRun(selectedId);
+const scanned = ref(false), confirming = ref(false);
+const busy = computed(() => pairs.busy.value || run.busy.value || confirming.value);
+const emptyCounts = { discovered: 0, processed: 0, skipped: 0, failed: 0, unprocessed: 0, warned: 0 };
+watch(selectedId, () => { scanned.value = false; });
+const auditPath = ref("");
+const auditError = ref(false);
+async function loadAuditLocation() {
+  try { auditPath.value = await runApi.auditLocation(); auditError.value = false; }
+  catch { auditError.value = true; }
+}
+async function openAuditFolder() {
+  try { await runApi.openAuditFolder(); auditError.value = false; }
+  catch { auditError.value = true; }
+}
+async function reprocess(files: { relative_path: string; doc_id: string }[]) {
+  if (busy.value || !files.length) return;
+  const pairId = selectedId.value;
+  confirming.value = true;
+  try {
+    const accepted = await confirm(`Diese Dokumente erneut verarbeiten? Gespeicherte Prüfungen und manuelle Korrekturen werden verworfen:\n\n${files.map((file) => file.relative_path).join("\n")}`, { title: "Erneut verarbeiten", kind: "warning" });
+    if (accepted && selectedId.value === pairId) await run.start(files.map((file) => file.relative_path), files.map((file) => file.doc_id));
+  } catch (caught) { run.error.value = safeError(caught); }
+  finally { confirming.value = false; }
+}
 const errorText: Record<string, string> = {
   invalid_settings: "Einstellungen konnten nicht geladen werden. Die vorhandene Datei wurde nicht verändert.",
   mapping_recovery_required: "Eine unterbrochene Wiederherstellung muss fortgesetzt werden.",
@@ -52,7 +82,7 @@ const errorText: Record<string, string> = {
           </p>
           <PairManager
             :settings="pairs.settings.value"
-            :busy="pairs.busy.value"
+            :busy="busy"
             @add="pairs.addPair"
             @rename="pairs.renamePair"
             @select="pairs.selectPair"
@@ -60,8 +90,28 @@ const errorText: Record<string, string> = {
           />
           <section v-if="pairs.selectedPair.value" data-testid="document-view" aria-labelledby="documents-heading">
             <h2 id="documents-heading">Dokumente: {{ pairs.selectedPair.value.name }}</h2>
-            <DocumentList :pair-id="pairs.selectedPair.value.id" />
+            <p>Der Arbeitsordner enthält auch ungeprüfte Ergebnisse. Prüfen Sie Dokumente vor der Weitergabe.</p>
+            <DocumentList :pair-id="pairs.selectedPair.value.id" :disabled="busy" @scanned="scanned = true" @reprocess="reprocess" />
+            <RunPanel
+              :pair-name="pairs.selectedPair.value.name"
+              :counts="run.progress.value ?? emptyCounts"
+              :stage="run.progress.value?.stage ?? (run.busy.value ? 'initializing' : null)"
+              :outcome="run.summary.value?.outcome"
+              :cancelling="run.cancelling.value"
+              :disabled="busy || !scanned"
+              :error="run.error.value"
+              :errors="run.summary.value?.errors"
+              :audit-warning="run.summary.value?.audit_warning"
+              @start="run.start()" @cancel="run.cancel()"
+            />
+            <OnyxButton v-if="run.summary.value?.errors.length" label="Fehlgeschlagene Dokumente erneut versuchen" type="button" :disabled="busy" @click="run.start(run.summary.value.errors.map((failure) => failure.relative_path))" />
           </section>
+          <details class="settings">
+            <summary @click="loadAuditLocation">Einstellungen: Protokoll</summary>
+            <p>{{ auditPath }}</p>
+            <OnyxButton label="Protokollordner öffnen" type="button" @click="openAuditFolder" />
+            <p v-if="auditError" role="alert">Der Protokollordner ist derzeit nicht verfügbar.</p>
+          </details>
         </template>
       </main>
     </OnyxPageLayout>
