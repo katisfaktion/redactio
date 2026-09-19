@@ -49,9 +49,10 @@ Run P5.1's package smoke as soon as P3.2 works, before finishing the review UI.
 Repeat P5.1 on the final branch in P5.3. This catches runtime/model packaging
 problems early without delaying the standalone engine work.
 
-These are dependency-ordered subsystem plans, not permission to implement in
-parallel. P1/P2 can be developed independently only if their shared contracts stay
-aligned. Execution begins after plan review and an execution-method choice.
+Execution was approved on 19 September 2026 using Subagent-driven development
+and parallel work where independent. P1/P2 use separate worktrees and shared
+contracts; dependent tasks start after their prerequisite reviews. Shared-file
+changes and integration are serialized.
 
 ## File and ownership map
 
@@ -240,9 +241,9 @@ is implemented, avoiding unused scaffolding.
 
 ## Verification and handoff
 
-- [ ] Review all five plans and the shared contracts together before execution.
-- [ ] Select Native or Subagent-driven execution; no method has been chosen yet.
-- [ ] At execution start, use the worktree skill to establish isolation and read
+- [x] Review all five plans and the shared contracts together before execution.
+- [x] Select Subagent-driven execution with parallel independent tasks.
+- [x] At execution start, use the worktree skill to establish isolation and read
   the chosen execution skill. Never restart from the prototype checkout.
 - [ ] Execute red/green checks per task, keep commits small, and record actual
   command results. Examples below are planned tests, not reported passing tests.
