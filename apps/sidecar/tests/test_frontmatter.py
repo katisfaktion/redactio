@@ -120,6 +120,23 @@ def test_yaml_delimiter_like_body_is_preserved_verbatim() -> None:
     assert markdown.partition("\n---\n")[2] == body + "\n"
 
 
+def test_biomedbert_recognizer_identity_is_safe_to_render() -> None:
+    info = engine_info().model_copy(update={"recognizers": ["BiomedBertRecognizer"]})
+    rendered = render_document(
+        metadata(),
+        info,
+        "<PERSON_1>",
+        [
+            entry("PERSON", 0.9, "BiomedBertRecognizer", "automatic"),
+        ],
+        [],
+        "pending",
+        None,
+        True,
+    )
+    assert parse_frontmatter(rendered)["recognizers_used"] == ["BiomedBertRecognizer"]
+
+
 def test_private_recognizer_metadata_is_rejected() -> None:
     unsafe = entry("PERSON", 0.8, "Patient Käthe", "automatic")
 

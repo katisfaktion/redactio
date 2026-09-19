@@ -92,6 +92,51 @@ models are errors; neither the engine nor its tests fetch replacements.
 
 ## Desktop development window
 
+### Optional BiomedBERT detector for local evaluation
+
+BiomedBERT can be selected independently for each pair after this explicit setup:
+
+```sh
+uv --directory apps/sidecar sync --locked --extra biomedbert
+uv --directory apps/sidecar run --locked --extra biomedbert python ../../scripts/prepare-biomedbert.py
+```
+
+These commands also work in PowerShell from the repository root. Setup downloads
+the CPU runtime and approximately 1.34 GB of model weights. The model repository,
+exact revision and every downloaded file checksum are pinned in
+`packaging/biomedbert-inputs.json`. Existing spaCy model entries are preserved.
+Preparation is separate from document processing; the detector loads only local
+files and never downloads a missing model. When using `uv` afterward, retain
+`--extra biomedbert` so the optional runtime stays installed.
+
+Start the desktop using the commands below, select a pair, open **Erkennung**, and
+choose **BiomedBERT – Deutsch, Namen und Adressen (340M)**. Leave **Personen** and
+**Orte und Adressen** enabled and save. The existing processing revision mechanism
+marks that pair's previous results stale. Reprocess the documents and explicitly
+confirm reprocessing for previously reviewed documents when prompted.
+
+This integration uses the model's name and address component labels with
+overlapping 512-token windows. Other enabled categories keep their existing
+recognizers. It does not enable all of OpenMed's categories or silently change an
+existing pair's selected model. First configuration loads the weights; later
+operations reuse them. Assess names and complete street/house-number/postcode/city
+coverage on your own documents locally; synthetic checks do not establish recall.
+
+Known limitation of this pinned model: in the synthetic sentence
+“Der Patient Jörg Müller wohnt in der Hauptstraße 12, 10115 Berlin.” it detects
+the name, postcode and city, but misses the street and house number. Raw model
+predictions have the same omission. Do not assume an address-recall improvement
+over spaCy without evaluating your documents.
+
+For an opt-in synthetic model check after preparation (PowerShell):
+
+```powershell
+$env:REDACTIO_BIOMEDBERT_MODEL_DIR = (Resolve-Path 'apps/sidecar/models').Path
+uv --directory apps/sidecar run --locked --offline --extra biomedbert pytest -q tests/test_biomedbert.py
+```
+
+### Launch commands
+
 Debug resource resolution requires an absolute interpreter and model directory.
 The locked uv environment installs the sidecar package; the host clears
 `PYTHONPATH`/`PYTHONHOME` before spawning it. Do not rely on those variables to

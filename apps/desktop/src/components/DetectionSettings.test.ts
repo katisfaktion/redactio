@@ -69,6 +69,19 @@ test("model and rule controls retain their selected values in the emitted config
   });
 });
 
+test("selects BiomedBERT by its exact local model identity", async () => {
+  const name = "OpenMed-PII-German-BiomedBERT-Large-340M-v1";
+  const wrapper = setup();
+  await wrapper.setProps({ models: [...models, {
+    name, version: "ce797d58600cc20bba9a2500dafc0b7f5c3270c1", compatible: true,
+  }] });
+  await wrapper.get('[role="option"][aria-label="BiomedBERT – Deutsch, Namen und Adressen (340M, ce797d5)"]').trigger("click");
+  await wrapper.get("form").trigger("submit");
+  expect(wrapper.emitted("save")![0]![1]).toMatchObject({ model: name });
+  expect(wrapper.text()).toContain("lokal auf der CPU");
+  expect(wrapper.text()).toContain("Orte und Adressen");
+});
+
 test("rejects empty entries and unavailable models and blocks actions while busy", async () => {
   const wrapper = setup({ ...pair, config: { ...pair.config, model: "missing_model" } });
   expect(wrapper.text()).toContain("nicht verfügbar oder nicht kompatibel");

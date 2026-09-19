@@ -21,6 +21,7 @@ from .schemas import (
 PUBLIC_RECOGNIZERS = frozenset(
     {
         "SpacyRecognizer",
+        "BiomedBertRecognizer",
         "EmailRecognizer",
         "PhoneRecognizer",
         "IbanRecognizer",

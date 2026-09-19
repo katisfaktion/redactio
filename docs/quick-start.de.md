@@ -57,6 +57,12 @@ Personen, Orte, E-Mail-Adressen, Telefonnummern, IBANs, IP-Adressen, URLs und
 Datums-/Zeitangaben mit dem mitgelieferten deutschen Modell `de_core_news_lg`
 gesucht. Nur lokal vorhandene kompatible Modelle stehen zur Auswahl.
 
+Nach der optionalen [BiomedBERT-Einrichtung](development.md#optional-biomedbert-detector-for-local-evaluation)
+steht **BiomedBERT – Deutsch, Namen und Adressen (340M)** zur Auswahl. Dafür
+**Personen** und **Orte und Adressen** aktivieren, speichern und die Dokumente
+erneut verarbeiten. Auch dieses Modell kann Namen und Adressbestandteile übersehen;
+die Ergebnisse müssen weiterhin geprüft werden.
+
 Benötigte Kategorien aktivieren und bei Bedarf eigene Wortlisten oder reguläre
 Ausdrücke ergänzen. Wortlisten suchen wörtlich und unterscheiden Groß-/Kleinschreibung;
 reguläre Ausdrücke verwenden Python-Syntax. Regeln zuerst mit erfundenem

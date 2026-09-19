@@ -28,7 +28,14 @@ for subsequent use. Exports are snapshots and are not revoked by later edits.
 The app uses Tauri 2/Rust, Vue 3/TypeScript/Vite/sit-onyx and a Python
 Presidio/spaCy sidecar. See [development setup](docs/development.md) for pinned
 tools, offline model preparation, PowerShell/POSIX commands and explicit sidecar
-configuration. From the repository root, after dependency setup:
+configuration.
+
+For manual evaluation of names and addresses, the optional
+[BiomedBERT setup](docs/development.md#optional-biomedbert-detector-for-local-evaluation)
+adds the pinned German OpenMed 340M model to the per-pair selector. Its runtime and
+weights are installed explicitly during setup and run locally afterward.
+
+From the repository root, after dependency setup:
 
 ```sh
 pnpm test

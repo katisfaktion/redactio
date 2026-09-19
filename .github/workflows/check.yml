@@ -81,6 +81,7 @@ jobs:
           uv --directory apps/sidecar run --locked --offline mypy src
           uv --directory apps/sidecar run --locked --offline pytest -q
           & $env:REDACTIO_TEST_PYTHON scripts/test_packaging.py
+          & $env:REDACTIO_TEST_PYTHON scripts/test_prepare_biomedbert.py
           & $env:REDACTIO_TEST_PYTHON -m ruff check --config apps/sidecar/pyproject.toml scripts packaging
           & $env:REDACTIO_TEST_PYTHON -m ruff format --check --config apps/sidecar/pyproject.toml scripts packaging
           cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check

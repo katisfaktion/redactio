@@ -82,7 +82,7 @@ as a request to add every possible feature.
 
 Not included in this release: PDF/TXT ingestion, OCR, automatic folder watching,
 parallel processing of pairs, cross-pair batch execution, automatic rename
-matching, cross-document identity resolution, medical-specific entity models, local generative-model
+matching, cross-document identity resolution, disease/drug entity detection, local generative-model
 inference, rich Word-format preservation, application authentication, multi-user
 collaboration, signed installers, auto-update, or supported macOS/Linux builds.
 Cloud processing, uploads, telemetry, and runtime network downloads are excluded.
@@ -284,6 +284,14 @@ is PERSON, LOCATION, EMAIL_ADDRESS, PHONE_NUMBER, IBAN_CODE, IP_ADDRESS, URL, an
 DATE_TIME. Verify each enabled category has an effective German or language-neutral
 recognizer in the packaged configuration. Do not confuse entity types with the
 actual recognizer implementations.
+
+The approved optional detector extension is OpenMed's German BiomedBERT 340M PII
+model, selected per pair after explicit setup. Pin its revision and verify downloaded
+files during setup; inference uses only local CPU weights. Map name components to
+PERSON and address components to LOCATION, preserving the existing categories and
+structured recognizers. Process long text in overlapping windows with original
+Unicode offsets. Keep spaCy as the default and evaluate detection quality locally;
+model availability and successful processing do not establish name/address recall.
 
 Apply enabled custom rules and manual decisions to the extracted text. Validate
 all spans before replacement. Resolve overlapping detections deterministically

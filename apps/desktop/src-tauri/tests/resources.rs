@@ -1,6 +1,38 @@
 use redactio_lib::resources;
 use std::{fs, path::Path};
 
+const BIOMEDBERT: &str = "OpenMed-PII-German-BiomedBERT-Large-340M-v1";
+const BIOMEDBERT_VERSION: &str = "ce797d58600cc20bba9a2500dafc0b7f5c3270c1";
+
+fn biomedbert(root: &Path) {
+    let model = root.join("biomedbert-de");
+    fs::create_dir(&model).unwrap();
+    for name in [
+        "model.safetensors",
+        "tokenizer.json",
+        "tokenizer_config.json",
+        "special_tokens_map.json",
+        "vocab.txt",
+    ] {
+        fs::write(model.join(name), b"fixture").unwrap();
+    }
+    fs::write(
+        model.join("config.json"),
+        r#"{"architectures":["BertForTokenClassification"],"model_type":"bert","max_position_embeddings":512}"#,
+    )
+    .unwrap();
+    fs::write(
+        model.join("redactio-model.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "name": BIOMEDBERT,
+            "version": BIOMEDBERT_VERSION,
+            "repository": format!("OpenMed/{BIOMEDBERT}"),
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+}
+
 fn package(root: &Path) {
     fs::create_dir_all(root.join("sidecar/_internal")).unwrap();
     fs::create_dir_all(root.join("models/de_core_news_lg")).unwrap();
@@ -62,6 +94,47 @@ fn model_listing_uses_only_local_manifest_packages_and_rejects_unsafe_entries() 
             "invalid_model_manifest"
         );
     }
+}
+
+#[test]
+fn model_listing_accepts_only_the_complete_pinned_biomedbert_package() {
+    let root = tempfile::tempdir().unwrap();
+    biomedbert(root.path());
+    fs::write(
+        root.path().join("manifest.json"),
+        serde_json::to_vec(&serde_json::json!({"models":[{
+            "name": BIOMEDBERT,
+            "version": BIOMEDBERT_VERSION,
+            "path": "biomedbert-de",
+        }]}))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let listed = || resources::list_models(root.path()).unwrap()[0].compatible;
+    assert!(listed());
+
+    fs::remove_file(root.path().join("biomedbert-de/model.safetensors")).unwrap();
+    assert!(!listed());
+    fs::write(
+        root.path().join("biomedbert-de/model.safetensors"),
+        b"fixture",
+    )
+    .unwrap();
+
+    fs::remove_file(root.path().join("biomedbert-de/redactio-model.json")).unwrap();
+    assert!(!listed());
+    fs::write(
+        root.path().join("biomedbert-de/redactio-model.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "name": BIOMEDBERT,
+            "version": "different-revision",
+            "repository": format!("OpenMed/{BIOMEDBERT}"),
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(!listed());
 }
 
 #[test]

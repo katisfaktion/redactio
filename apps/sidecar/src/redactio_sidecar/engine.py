@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Callable
+from copy import copy
 from dataclasses import dataclass
 from datetime import datetime
 from importlib.metadata import PackageNotFoundError, version
@@ -19,7 +20,7 @@ from presidio_analyzer import (
     PatternRecognizer,
     RecognizerRegistry,
 )
-from presidio_analyzer.nlp_engine import NlpEngine, NlpEngineProvider
+from presidio_analyzer.nlp_engine import NlpEngine, NlpEngineProvider, SpacyNlpEngine
 from presidio_analyzer.predefined_recognizers import (
     DateRecognizer,
     EmailRecognizer,
@@ -31,6 +32,7 @@ from presidio_analyzer.predefined_recognizers import (
 )
 from pydantic import ValidationError
 
+from .biomedbert import MODEL_NAME, BiomedBertRecognizer, compatible_model
 from .extract import Extraction, extract_document
 from .frontmatter import normalize_body, render_document
 from .ipc import EngineError
@@ -109,6 +111,7 @@ class Engine:
     def __init__(self, model_root: Path) -> None:
         self._model_root = model_root.resolve()
         self._loaded_models: dict[tuple[str, str], NlpEngine] = {}
+        self._bert_recognizers: dict[tuple[str, str], BiomedBertRecognizer] = {}
         self._snapshot: _Snapshot | None = None
 
     def available_models(self) -> list[ModelInfo]:
@@ -144,14 +147,20 @@ class Engine:
             entity for entity in ("PERSON", "LOCATION") if entity in validated.enabled_entities
         ]
         if nlp_entities:
-            registry.add_recognizer(
-                SpacyRecognizer(
+            recognizer = (
+                copy(self._bert_recognizers[(model.name, model.version)])
+                if model.name == MODEL_NAME
+                else SpacyRecognizer(
                     supported_language=LANGUAGE,
                     supported_entities=nlp_entities,
                     name="SpacyRecognizer",
                 )
             )
-            recognizer_names.append("SpacyRecognizer")
+            recognizer.supported_entities = nlp_entities
+            registry.add_recognizer(recognizer)
+            recognizer_names.append(
+                "BiomedBertRecognizer" if model.name == MODEL_NAME else "SpacyRecognizer"
+            )
 
         for entity_type, (recognizer_name, recognizer_type) in _AUTOMATIC_RECOGNIZERS.items():
             if entity_type not in validated.enabled_entities:
@@ -193,7 +202,7 @@ class Engine:
             else None
         )
         info = EngineInfo(
-            engine_version=_engine_version(),
+            engine_version=_engine_version(model.name == MODEL_NAME),
             model_name=model.name,
             model_version=model.version,
             recognizers=recognizer_names,
@@ -397,6 +406,13 @@ class Engine:
         cached = self._loaded_models.get(identity)
         if cached is not None:
             return cached
+        if model.name == MODEL_NAME:
+            recognizer = BiomedBertRecognizer(model.path)
+            blank_engine = SpacyNlpEngine()
+            cast(Any, blank_engine).nlp = {LANGUAGE: spacy.blank(LANGUAGE)}
+            self._bert_recognizers[identity] = recognizer
+            self._loaded_models[identity] = blank_engine
+            return blank_engine
         provider = NlpEngineProvider(
             nlp_configuration={
                 "nlp_engine_name": "spacy",
@@ -445,6 +461,8 @@ class Engine:
 
 
 def _compatible_model(path: Path, name: str, model_version: str) -> bool:
+    if name == MODEL_NAME:
+        return compatible_model(path, name, model_version)
     try:
         metadata: dict[str, Any] = json.loads((path / "meta.json").read_text(encoding="utf-8"))
         actual_name = f"{metadata['lang']}_{metadata['name']}"
@@ -491,11 +509,15 @@ def _recognizer_name(metadata: object) -> str:
     return "automatic"
 
 
-def _engine_version() -> str:
+def _engine_version(biomedbert: bool = False) -> str:
     identities = [ENGINE_VERSION]
-    for dependency in ("presidio-analyzer", "spacy"):
+    dependencies: tuple[str, ...] = ("presidio-analyzer", "spacy")
+    if biomedbert:
+        dependencies += ("transformers", "torch")
+    for dependency in dependencies:
         try:
-            identities.append(f"{dependency} {version(dependency)}")
+            dependency_version = re.sub(r"[^A-Za-z0-9_.+-]", "_", version(dependency))
+            identities.append(f"{dependency} {dependency_version}")
         except PackageNotFoundError:
             identities.append(f"{dependency} unknown")
     return " + ".join(identities)

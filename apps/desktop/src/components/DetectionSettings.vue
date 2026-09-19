@@ -37,14 +37,16 @@ watch(() => [props.pair.id, props.pair.config], () => {
 });
 
 const labels: Record<EntityType, string> = {
-  PERSON: "Personen", LOCATION: "Orte", EMAIL_ADDRESS: "E-Mail-Adressen",
+  PERSON: "Personen", LOCATION: "Orte und Adressen", EMAIL_ADDRESS: "E-Mail-Adressen",
   PHONE_NUMBER: "Telefonnummern", IBAN_CODE: "IBAN", IP_ADDRESS: "IP-Adressen",
   URL: "Webadressen", DATE_TIME: "Datum und Uhrzeit", CUSTOM: "Eigener Typ",
 };
 const entityOptions = EntityTypeSchema.options.map(value => ({ value, label: labels[value] }));
 const builtins = entityOptions.filter(option => option.value !== "CUSTOM");
+const biomedbert = "OpenMed-PII-German-BiomedBERT-Large-340M-v1";
 const modelOptions = computed(() => props.models.map(model => ({
-  value: model.name, label: `${model.name} (${model.version})${model.compatible ? "" : " – nicht verfügbar"}`,
+  value: model.name,
+  label: `${model.name === biomedbert ? `BiomedBERT – Deutsch, Namen und Adressen (340M, ${model.version.slice(0, 7)})` : `${model.name} (${model.version})`}${model.compatible ? "" : " – nicht verfügbar"}`,
   disabled: !model.compatible,
 })));
 const validation = computed(() => {
@@ -83,6 +85,7 @@ function submit(preview = false) {
       <OnyxSelect v-model="draft.model" label="Lokales Sprachmodell" list-label="Installierte Sprachmodelle"
         :options="modelOptions" :disabled="busy" :hide-clear-icon="true" />
       <p>Modelle werden ausschließlich lokal verwendet. Fehlende Modelle werden nicht heruntergeladen.</p>
+      <p v-if="draft.model === biomedbert">BiomedBERT läuft lokal auf der CPU; das erste Laden kann einen Moment dauern.</p>
       <fieldset :disabled="busy">
         <legend>Automatische Erkennung</legend>
         <OnyxCheckbox v-for="option in builtins" :key="option.value" :data-testid="`entity-${option.value}`"

@@ -1,0 +1,15 @@
+{
+  "name": "OpenMed-PII-German-BiomedBERT-Large-340M-v1",
+  "repository": "OpenMed/OpenMed-PII-German-BiomedBERT-Large-340M-v1",
+  "revision": "ce797d58600cc20bba9a2500dafc0b7f5c3270c1",
+  "license": "Apache-2.0",
+  "files": {
+    "model.safetensors": "62113e3ab2af4d7d0d4678e1483780a262b7b2b5829257afa17effe804dc739b",
+    "config.json": "5a0c1d75e17b2e35c99468455f5ad1293b401c4166608f4beca46737106982d2",
+    "tokenizer.json": "fd172cee21573f3e9625a3f55302246f39a83aa14e6ac7f02308060761a4d098",
+    "tokenizer_config.json": "0088a6f8bcdd4014184fb068b83ebb12896a9db2bb269a71f73de83fef24bceb",
+    "special_tokens_map.json": "b6d346be366a7d1d48332dbc9fdf3bf8960b5d879522b7799ddba59e76237ee3",
+    "vocab.txt": "7b36651908a88bc38bda41b728b2a598191e0d3b553cbacf7b1e5f026d5b5b9f",
+    "README.md": "efc52afe487bf96aad3fb5f0285f680409f74850373c7f7ca05ee87b4494985e"
+  }
+}

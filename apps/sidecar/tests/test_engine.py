@@ -321,10 +321,12 @@ def test_available_models_validates_missing_incompatible_and_escaped_directories
 
 
 def test_packaged_model_is_reported_compatible(model_root: Path) -> None:
-    assert [model.model_dump() for model in Engine(model_root).available_models()] == [
+    models = Engine(model_root).available_models()
+    assert [model.model_dump() for model in models if model.name.startswith("de_core_news_")] == [
         {"name": "de_core_news_lg", "version": "3.8.0", "compatible": True},
         {"name": "de_core_news_sm", "version": "3.8.0", "compatible": True},
     ]
+    assert all(model.compatible for model in models)
 
 
 def test_model_manifest_must_not_repeat_names(tmp_path: Path) -> None:
