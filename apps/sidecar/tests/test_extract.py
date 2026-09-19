@@ -422,3 +422,55 @@ def test_local_encryption_flag_cannot_be_hidden_by_central_directory(tmp_path):
     struct.pack_into("<H", data, data.index(b"PK\x03\x04") + 6, 1)
     path.write_bytes(data)
     error_code(path, "unsupported_document")
+
+
+def test_smart_tag_visible_runs_fail_explicitly(tmp_path):
+    document = Document()
+    paragraph = document.add_paragraph("Before ")
+    wrapper = OxmlElement("w:smartTag")
+    run = OxmlElement("w:r")
+    text = OxmlElement("w:t")
+    text.text = "Visible wrapped label"
+    run.append(text)
+    wrapper.append(run)
+    paragraph._p.append(wrapper)
+    paragraph.add_run(" After")
+    path = tmp_path / "smart-tag.docx"
+    document.save(path)
+    error_code(path, "unsupported_document")
+
+
+def test_alternate_main_part_cannot_bypass_visible_container_validation(tmp_path):
+    document = Document()
+    document.add_paragraph("Known")
+    control = OxmlElement("w:sdt")
+    content = OxmlElement("w:sdtContent")
+    paragraph = OxmlElement("w:p")
+    run = OxmlElement("w:r")
+    text = OxmlElement("w:t")
+    text.text = "Visible controlled label"
+    run.append(text)
+    paragraph.append(run)
+    content.append(paragraph)
+    control.append(content)
+    document.element.body.insert(1, control)
+    buffer = BytesIO()
+    document.save(buffer)
+    with ZipFile(buffer) as archive:
+        main = archive.read("word/document.xml")
+        relationships = archive.read("_rels/.rels").replace(
+            b'Target="word/document.xml"', b'Target="word/alternate.xml"'
+        )
+        types = archive.read("[Content_Types].xml").replace(
+            b'PartName="/word/document.xml"', b'PartName="/word/alternate.xml"'
+        )
+    # Keep a normal canonical part so the old filename-only guard accepts the ZIP.
+    path = package(
+        tmp_path,
+        {
+            "word/alternate.xml": main,
+            "_rels/.rels": relationships,
+            "[Content_Types].xml": types,
+        },
+    )
+    error_code(path, "unsupported_document")

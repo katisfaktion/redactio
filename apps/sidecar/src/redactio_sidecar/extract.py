@@ -59,7 +59,7 @@ def _inspect_xml(data: bytes, warnings: set[str], main: bool = False) -> dict[st
             elif local == "Default":
                 content_types["*." + attrs["Extension"]] = attrs["ContentType"]
         if namespace == WORD_NS:
-            if main and local in {"sdt", "customXml", "fldSimple"}:
+            if main and local in {"sdt", "customXml", "fldSimple", "smartTag"}:
                 raise EngineError("unsupported_document")
             if local in {"hdr", "ftr", "headerReference", "footerReference"}:
                 warnings.add("headers_footers")
@@ -256,6 +256,8 @@ def extract_document(path: Path) -> Extraction:
     try:
         warnings = _validate_package(snapshot)
         document = Document(BytesIO(snapshot))
+        if document.part.partname != "/word/document.xml":
+            raise EngineError("unsupported_document")
         text = _blocks(document, _TextBudget())
     except EngineError:
         raise
