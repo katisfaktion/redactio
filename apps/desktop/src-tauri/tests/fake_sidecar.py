@@ -1,0 +1,139 @@
+from __future__ import annotations
+
+import json
+import os
+import sys
+import time
+from pathlib import Path
+from uuid import UUID
+
+
+def main() -> None:
+    mode = sys.argv[1]
+    marker = Path(sys.argv[2]) if len(sys.argv) > 2 else None
+    configured = None
+    for line in sys.stdin:
+        request = json.loads(line)
+        if mode == "hang":
+            time.sleep(60)
+            continue
+        if mode == "hang-count" and marker is not None:
+            count = int(marker.read_text(encoding="utf-8")) if marker.exists() else 0
+            marker.write_text(str(count + 1), encoding="utf-8")
+            time.sleep(60)
+            continue
+        if mode == "exit-once" and marker is not None and not marker.exists():
+            marker.write_text(request["id"], encoding="utf-8")
+            os._exit(7)
+        if mode == "exit-always":
+            if marker is not None:
+                count = int(marker.read_text(encoding="utf-8")) if marker.exists() else 0
+                marker.write_text(str(count + 1), encoding="utf-8")
+            os._exit(7)
+        if mode == "slow-exit-once" and marker is not None:
+            time.sleep(0.08)
+            if not marker.exists():
+                marker.write_text("exited", encoding="utf-8")
+                os._exit(7)
+        if mode == "check-model-arg" and "--model-dir" not in sys.argv:
+            print(
+                json.dumps(
+                    {
+                        "id": request["id"],
+                        "type": "error",
+                        "payload": {"code": "missing_model_arg", "retryable": False},
+                    }
+                ),
+                flush=True,
+            )
+            continue
+        if mode == "clean-python-env" and (
+            "PYTHONPATH" in os.environ or "PYTHONHOME" in os.environ
+        ):
+            print(
+                json.dumps(
+                    {
+                        "id": request["id"],
+                        "type": "error",
+                        "payload": {"code": "unsafe_python_env", "retryable": False},
+                    }
+                ),
+                flush=True,
+            )
+            continue
+        if mode == "exit-once-configured" and marker is not None:
+            if request["type"] == "configure":
+                configured = request["payload"]
+                with marker.with_suffix(".configs").open("a", encoding="utf-8") as log:
+                    log.write(json.dumps(configured, sort_keys=True) + "\n")
+            elif configured is None:
+                print(
+                    json.dumps(
+                        {
+                            "id": request["id"],
+                            "type": "error",
+                            "payload": {
+                                "code": "configuration_mismatch",
+                                "retryable": False,
+                            },
+                        }
+                    ),
+                    flush=True,
+                )
+                continue
+            elif not marker.exists():
+                marker.write_text(request["id"], encoding="utf-8")
+                os._exit(7)
+        payload = request["payload"]
+        if mode == "exit-once" and marker is not None:
+            payload = {"retry_id": request["id"]}
+        if mode == "wrong-pair":
+            payload = dict(payload)
+            payload["sync_pair_id"] = str(UUID(int=2))
+        response = {
+            "id": request["id"],
+            "type": f"{request['type']}_result",
+            "payload": payload,
+        }
+        if mode == "safe-error":
+            response["type"] = "error"
+            response["payload"] = {"code": "invalid_configuration", "retryable": False}
+        if mode == "unsafe-error":
+            response["type"] = "error"
+            response["payload"] = {"code": "CANARY PRIVATE", "retryable": False}
+        if mode == "oversized":
+            response["payload"] = {"padding": "x" * (64 * 1024 * 1024)}
+        if mode == "extra-envelope":
+            response["extra"] = True
+        if mode == "wrong-type":
+            response["type"] = "configure_result"
+        if mode == "deeply-nested":
+            sys.stdout.write(
+                '{"id":'
+                + json.dumps(request["id"])
+                + ',"type":"ping_result","payload":'
+                + "[" * 200
+                + "null"
+                + "]" * 200
+                + "}\n"
+            )
+            sys.stdout.flush()
+            continue
+        if mode == "stderr-canary":
+            sys.stderr.write("CANARY_PRIVATE_STDERR" * 65536)
+            sys.stderr.flush()
+        if mode == "wrong-id":
+            print(json.dumps({**response, "id": str(UUID(int=4))}), flush=True)
+        if mode == "exit-once-configured" and request["type"] != "configure":
+            response["payload"] = {
+                "sync_pair_id": request["payload"]["sync_pair_id"],
+                "processing_revision": request["payload"]["processing_revision"],
+                "configured_model": configured["config"]["model"],
+            }
+        print(json.dumps(response), flush=True)
+    if mode == "eof-marker" and marker is not None:
+        marker.write_text("eof", encoding="utf-8")
+
+
+if __name__ == "__main__":
+    main()

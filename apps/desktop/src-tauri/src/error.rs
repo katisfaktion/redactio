@@ -1,9 +1,11 @@
-use serde::Serialize;
+use serde::{de::Error as _, Deserialize, Deserializer, Serialize};
 use std::{fmt, io};
 
 /// The complete public error payload. Never retain OS messages or input paths.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AppError {
+    #[serde(deserialize_with = "safe_code")]
     pub code: String,
     pub retryable: bool,
 }
@@ -42,3 +44,16 @@ impl fmt::Display for AppError {
     }
 }
 impl std::error::Error for AppError {}
+
+fn safe_code<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    let value = String::deserialize(deserializer)?;
+    if value.is_empty()
+        || value.len() > 128
+        || !value.bytes().enumerate().all(|(index, byte)| {
+            byte.is_ascii_lowercase() || (index > 0 && (byte.is_ascii_digit() || byte == b'_'))
+        })
+    {
+        return Err(D::Error::custom("invalid safe error code"));
+    }
+    Ok(value)
+}

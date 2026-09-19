@@ -71,3 +71,17 @@ uv --directory apps/sidecar run pytest -q
 uv --directory apps/sidecar run ruff check .
 uv --directory apps/sidecar run mypy src
 ```
+
+Rust transport tests spawn an explicit interpreter rather than searching `PATH`. On POSIX:
+
+```sh
+export REDACTIO_TEST_PYTHON="$PWD/apps/sidecar/.venv/bin/python"
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test sidecar
+```
+
+On Windows PowerShell:
+
+```powershell
+$env:REDACTIO_TEST_PYTHON = (Resolve-Path 'apps/sidecar/.venv/Scripts/python.exe')
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test sidecar
+```

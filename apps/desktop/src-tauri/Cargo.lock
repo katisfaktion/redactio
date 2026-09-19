@@ -2430,6 +2430,7 @@ dependencies = [
  "tauri-plugin-dialog",
  "tempfile",
  "time",
+ "tokio",
  "unicode-normalization",
  "uuid",
  "walkdir",
