@@ -4,7 +4,7 @@ use super::{
         commit_generation, recover_pending, CollectionGuard, CommitCandidate, DocumentState,
         Mapping, ReviewRecord,
     },
-    scan::{hash_output, scan_collection, ScannedFile},
+    scan::{hash_output, scan_collection, ScanFailureOrigin, ScanReport, ScannedFile},
     settings::{load_settings, ProcessingFingerprint, SyncPair},
     storage::ValidatedWrite,
 };
@@ -154,12 +154,14 @@ impl RunController {
             })
     }
 
-    pub fn prepare(
-        &self,
-        pair_id: Uuid,
-        paths: Option<Vec<String>>,
-        force: Vec<String>,
-    ) -> Result<BatchRun, AppError> {
+    pub fn scan(&self, pair_id: Uuid) -> Result<ScanReport, AppError> {
+        let (pair, _guard) = self.lock_pair(pair_id)?;
+        #[cfg(test)]
+        tests::pause_scan();
+        scan_collection(&pair)
+    }
+
+    fn lock_pair(&self, pair_id: Uuid) -> Result<(SyncPair, OperationGuard), AppError> {
         let operation = self.try_operation()?;
         let root = self
             .inner
@@ -174,8 +176,26 @@ impl RunController {
             .find(|pair| pair.id == pair_id)
             .cloned()
             .ok_or_else(|| AppError::new("unknown_pair"))?;
-        settings.validate_registry(&[root.to_path_buf()])?;
+        settings.validate_roots_with(&[root.to_path_buf()])?;
         let source = CollectionGuard::acquire(&pair.source_folder)?;
+        settings.validate_registry(&[root.to_path_buf()])?;
+        Ok((
+            pair,
+            OperationGuard {
+                _operation: operation,
+                config,
+                source,
+            },
+        ))
+    }
+
+    pub fn prepare(
+        &self,
+        pair_id: Uuid,
+        paths: Option<Vec<String>>,
+        force: Vec<String>,
+    ) -> Result<BatchRun, AppError> {
+        let (pair, guard) = self.lock_pair(pair_id)?;
         let run_id = Uuid::new_v4();
         let cancelled = Arc::new(AtomicBool::new(false));
         *self
@@ -194,11 +214,7 @@ impl RunController {
             force: force.into_iter().collect(),
             cancelled,
             controller: self.clone(),
-            guard: OperationGuard {
-                _operation: operation,
-                config,
-                source,
-            },
+            guard,
             started_at: now(),
             engine: None,
         })
@@ -391,7 +407,7 @@ impl RunController {
         let mut scan_errors: HashMap<_, _> = report
             .errors
             .into_iter()
-            .map(|error| (error.relative_path, error.code))
+            .map(|error| (error.relative_path.clone(), error))
             .collect();
         let extra_errors = scan_errors
             .keys()
@@ -413,10 +429,10 @@ impl RunController {
         for file in &report.files {
             cancelled(run)?;
             let scan_error = scan_errors.remove(&file.relative_path);
-            let from_scan = scan_error.is_some();
-            let result = if let Some(code) = scan_error {
+            let scan_origin = scan_error.as_ref().map(|error| error.origin);
+            let result = if let Some(failure) = scan_error {
                 Err(AppError {
-                    code,
+                    code: failure.code,
                     retryable: true,
                 })
             } else {
@@ -439,7 +455,9 @@ impl RunController {
                         error: error.clone(),
                     });
                     publish(&summary.progress, emit)?;
-                    if !from_scan && !individual_error(&error.code) {
+                    if scan_origin == Some(ScanFailureOrigin::Output)
+                        || (scan_origin.is_none() && !individual_error(&error.code))
+                    {
                         return Err(error);
                     }
                     continue;
@@ -447,17 +465,22 @@ impl RunController {
             }
             publish(&summary.progress, emit)?;
         }
-        for (relative_path, code) in scan_errors {
+        for (relative_path, failure) in scan_errors {
             cancelled(run)?;
             summary.progress.counts.unprocessed -= 1;
             summary.progress.counts.failed += 1;
+            let error = AppError {
+                code: failure.code,
+                retryable: true,
+            };
             summary.errors.push(RunFailure {
                 relative_path,
-                error: AppError {
-                    code,
-                    retryable: true,
-                },
+                error: error.clone(),
             });
+            if failure.origin == ScanFailureOrigin::Output {
+                publish(&summary.progress, emit)?;
+                return Err(error);
+            }
         }
         publish(&summary.progress, emit)?;
         Ok(())
@@ -798,6 +821,68 @@ fn same_timestamp(left: &str, right: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{cell::RefCell, fs, sync::mpsc};
+
+    thread_local! {
+        static SCAN_PAUSE: RefCell<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>> = const { RefCell::new(None) };
+    }
+
+    pub(super) fn pause_scan() {
+        SCAN_PAUSE.with_borrow_mut(|pause| {
+            if let Some((ready, resume)) = pause.take() {
+                ready.send(()).unwrap();
+                resume.recv().unwrap();
+            }
+        });
+    }
+
+    #[test]
+    fn standalone_scan_holds_app_config_and_source_guards_until_completion() {
+        let root = tempfile::tempdir().unwrap();
+        let config = root.path().join("config");
+        fs::create_dir(&config).unwrap();
+        let mut settings = super::super::settings::Settings::default();
+        for name in ["first", "second"] {
+            let source = root.path().join(format!("{name}-source"));
+            let target = root.path().join(format!("{name}-target"));
+            fs::create_dir(&source).unwrap();
+            fs::create_dir(&target).unwrap();
+            fs::write(source.join("document.docx"), b"synthetic").unwrap();
+            settings.add(name, &source, &target).unwrap();
+        }
+        let path = config.join("settings.json");
+        super::super::settings::save_settings(&path, &settings).unwrap();
+        let controller = RunController::new(path);
+        let worker = controller.clone();
+        let pair_id = settings.sync_pairs[0].id;
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let (resume_tx, resume_rx) = mpsc::channel();
+        let scan = std::thread::spawn(move || {
+            SCAN_PAUSE.with_borrow_mut(|pause| *pause = Some((ready_tx, resume_rx)));
+            worker.scan(pair_id)
+        });
+        ready_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        // Pair mutations use this same nonblocking app operation acquisition.
+        let mutation_error = controller.try_operation().err().map(|error| error.code);
+        let other_error = controller
+            .prepare(settings.sync_pairs[1].id, None, vec![])
+            .err()
+            .map(|error| error.code);
+        let config_busy = CollectionGuard::acquire(&config).is_err();
+        let source_busy = CollectionGuard::acquire(&settings.sync_pairs[0].source_folder).is_err();
+        resume_tx.send(()).unwrap();
+        assert_eq!(scan.join().unwrap().unwrap().files.len(), 1);
+        assert_eq!(mutation_error.as_deref(), Some("operation_busy"));
+        assert_eq!(other_error.as_deref(), Some("operation_busy"));
+        assert!(config_busy);
+        assert!(source_busy);
+        assert!(controller.try_operation().is_ok());
+        assert!(controller
+            .prepare(settings.sync_pairs[1].id, None, vec![])
+            .is_ok());
+    }
 
     #[test]
     fn request_timestamps_preserve_python_microseconds_and_compare_exact_instants() {

@@ -61,6 +61,101 @@ fn runtime() -> tokio::runtime::Runtime {
 
 #[cfg(unix)]
 #[test]
+fn unreadable_existing_outputs_stop_after_first_storage_failure() {
+    use std::os::unix::fs::PermissionsExt;
+    runtime().block_on(async {
+        let f = Fixture::new();
+        let pair = &f.settings.sync_pairs[0];
+        for name in ["a.docx", "b.docx"] {
+            fs::write(pair.source_folder.join(name), b"synthetic").unwrap();
+        }
+        let run = f.controller.prepare(pair.id, None, vec![]).unwrap();
+        let initial = f
+            .controller
+            .execute(run, Ok(f.sidecar("batch")), |_| {})
+            .await;
+        assert_eq!(initial.outcome, RunOutcome::Completed);
+        let mapping_before =
+            Mapping::load(&pair.source_folder, pair.id, &pair.target_folder).unwrap();
+        let outputs: Vec<_> = ["doc-0001.md", "doc-0002.md"]
+            .into_iter()
+            .map(|name| {
+                let path = pair.target_folder.join(name);
+                let bytes = fs::read(&path).unwrap();
+                fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+                (path, bytes)
+            })
+            .collect();
+
+        let run = f.controller.prepare(pair.id, None, vec![]).unwrap();
+        let summary = f
+            .controller
+            .execute(run, Ok(f.sidecar("batch")), |progress| {
+                assert!(progress.counts.is_consistent());
+            })
+            .await;
+        for (path, bytes) in outputs {
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+            assert_eq!(fs::read(path).unwrap(), bytes);
+        }
+        assert_eq!(summary.outcome, RunOutcome::Failed);
+        assert_eq!(
+            summary.progress.counts,
+            RunCounts {
+                discovered: 2,
+                failed: 1,
+                unprocessed: 1,
+                ..RunCounts::default()
+            }
+        );
+        assert_eq!(summary.errors.len(), 1);
+        assert_eq!(summary.errors[0].relative_path, "a.docx");
+        assert_eq!(summary.errors[0].error.code, "permission_denied");
+        assert_eq!(
+            Mapping::load(&pair.source_folder, pair.id, &pair.target_folder)
+                .unwrap()
+                .entries(),
+            mapping_before.entries()
+        );
+        assert!(f.controller.prepare(pair.id, None, vec![]).is_ok());
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn unreadable_source_does_not_prevent_processing_readable_peer() {
+    use std::os::unix::fs::PermissionsExt;
+    runtime().block_on(async {
+        let f = Fixture::new();
+        let pair = &f.settings.sync_pairs[0];
+        let unreadable = pair.source_folder.join("a.docx");
+        fs::write(&unreadable, b"synthetic").unwrap();
+        fs::write(pair.source_folder.join("b.docx"), b"synthetic peer").unwrap();
+        fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o000)).unwrap();
+        let run = f.controller.prepare(pair.id, None, vec![]).unwrap();
+        let summary = f
+            .controller
+            .execute(run, Ok(f.sidecar("batch")), |_| {})
+            .await;
+        fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(summary.outcome, RunOutcome::CompletedWithErrors);
+        assert_eq!(
+            summary.progress.counts,
+            RunCounts {
+                discovered: 2,
+                processed: 1,
+                failed: 1,
+                ..RunCounts::default()
+            }
+        );
+        assert_eq!(summary.errors[0].relative_path, "a.docx");
+        assert_eq!(summary.errors[0].error.code, "permission_denied");
+        assert!(pair.target_folder.join("doc-0001.md").is_file());
+    });
+}
+
+#[cfg(unix)]
+#[test]
 fn output_io_failure_does_not_publish_a_success_and_releases_the_operation() {
     use std::os::unix::fs::PermissionsExt;
     runtime().block_on(async {

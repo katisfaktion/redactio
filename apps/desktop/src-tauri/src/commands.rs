@@ -4,7 +4,7 @@ use crate::{
         mapping::CollectionGuard,
         paths::{create_target as create_target_directory, validate_roots},
         recovery::{fresh_start, recovery_pairs, RecoveryPair},
-        scan::{scan_collection, ScanReport},
+        scan::ScanReport,
         settings::{load_settings, save_settings, ProcessingConfig, Settings},
         sync::{RunController, RunSummary},
     },
@@ -167,20 +167,10 @@ pub fn remove_pair(state: State<'_, AppState>, pair_id: Uuid) -> Result<UiSettin
 
 #[tauri::command]
 pub async fn scan_pair(state: State<'_, AppState>, pair_id: Uuid) -> Result<ScanReport, AppError> {
-    let pair = {
-        let _guard = state.runs.try_operation()?;
-        load_registry(&state)?
-            .sync_pairs
-            .into_iter()
-            .find(|pair| pair.id == pair_id)
-            .ok_or_else(|| AppError::new("unknown_pair"))?
-    };
-    tauri::async_runtime::spawn_blocking(move || {
-        let _guard = CollectionGuard::acquire(&pair.source_folder)?;
-        scan_collection(&pair)
-    })
-    .await
-    .map_err(|_| AppError::new("scan_unavailable"))?
+    let controller = state.runs.clone();
+    tauri::async_runtime::spawn_blocking(move || controller.scan(pair_id))
+        .await
+        .map_err(|_| AppError::new("scan_unavailable"))?
 }
 
 fn mutate(

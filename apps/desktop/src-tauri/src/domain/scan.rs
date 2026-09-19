@@ -35,6 +35,14 @@ pub struct ScannedFile {
 pub struct ScanFailure {
     pub relative_path: String,
     pub code: String,
+    #[serde(skip)]
+    pub(crate) origin: ScanFailureOrigin,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ScanFailureOrigin {
+    Source,
+    Output,
 }
 
 pub fn scan_source(source: &Path) -> Result<ScanReport, AppError> {
@@ -78,6 +86,7 @@ pub fn scan_collection(pair: &SyncPair) -> Result<ScanReport, AppError> {
                 report.errors.push(ScanFailure {
                     relative_path: entry.relative_path.clone(),
                     code: error.code.clone(),
+                    origin: ScanFailureOrigin::Output,
                 });
                 if entry.pending.is_some() {
                     DocumentState::RecoveryPending
@@ -159,6 +168,7 @@ fn scan_source_with(
                     report.errors.push(ScanFailure {
                         relative_path: path,
                         code: safe_io_code(error.io_error().map(io::Error::kind)).into(),
+                        origin: ScanFailureOrigin::Source,
                     });
                     continue;
                 }
@@ -185,6 +195,7 @@ fn scan_source_with(
             report.errors.push(ScanFailure {
                 relative_path: display_path,
                 code: "invalid_path".into(),
+                origin: ScanFailureOrigin::Source,
             });
             continue;
         };
@@ -194,6 +205,7 @@ fn scan_source_with(
             Err(code) => report.errors.push(ScanFailure {
                 relative_path,
                 code,
+                origin: ScanFailureOrigin::Source,
             }),
         }
     }
