@@ -934,3 +934,213 @@ fn preparation_keeps_eager_source_exclusion_and_busy_unknown_attempts_unadmitted
     drop(held);
     assert!(f.controller.prepare(pair.id, None, vec![]).is_ok());
 }
+
+fn review_input(
+    view: &redactio_lib::domain::review::ReviewViewData,
+    status: &str,
+) -> redactio_lib::domain::review::SaveReview {
+    redactio_lib::domain::review::SaveReview {
+        expected_output_hash: view.expected_output_hash.clone(),
+        expected_review_hash: view.expected_review_hash.clone(),
+        decisions: view.decisions.clone(),
+        status: serde_json::from_value(status.into()).unwrap(),
+        notes: String::new(),
+        acknowledged_warnings: vec![],
+    }
+}
+
+#[test]
+fn explicit_empty_rework_save_is_protected_but_automatic_warning_is_not() {
+    use redactio_lib::domain::review::{open_configured, save_configured};
+    use redactio_lib::protocol::DocumentKey;
+    runtime().block_on(async {
+        for explicit in [false, true] {
+            let f = Fixture::new();
+            let pair = &f.settings.sync_pairs[0];
+            fs::write(
+                pair.source_folder.join("a.docx"),
+                if explicit {
+                    b"synthetic".as_slice()
+                } else {
+                    b"warning".as_slice()
+                },
+            )
+            .unwrap();
+            let sidecar = f.sidecar("batch");
+            let run = f.controller.prepare(pair.id, None, vec![]).unwrap();
+            assert_eq!(
+                f.controller
+                    .execute(run, Ok(sidecar.clone()), |_| {})
+                    .await
+                    .progress
+                    .counts
+                    .processed,
+                1
+            );
+            let key = DocumentKey {
+                sync_pair_id: pair.id,
+                doc_id: "doc-0001".into(),
+            };
+            if explicit {
+                let view = open_configured(&f.controller, &sidecar, &key)
+                    .await
+                    .unwrap();
+                save_configured(
+                    &f.controller,
+                    &sidecar,
+                    &key,
+                    review_input(&view, "needs-rework"),
+                )
+                .await
+                .unwrap();
+            }
+            let private_path = pair.source_folder.join("_redactio/reviews/doc-0001.json");
+            let before = fs::read(&private_path).unwrap();
+            fs::write(pair.source_folder.join("a.docx"), b"new source").unwrap();
+            let run = f.controller.prepare(pair.id, None, vec![]).unwrap();
+            let result = f.controller.execute(run, Ok(sidecar.clone()), |_| {}).await;
+            if explicit {
+                assert_eq!(
+                    result.errors.first().map(|e| e.error.code.as_str()),
+                    Some("confirmation_required")
+                );
+                assert_eq!(fs::read(&private_path).unwrap(), before);
+                let run = f
+                    .controller
+                    .prepare(pair.id, None, vec![key.doc_id])
+                    .unwrap();
+                assert_eq!(
+                    f.controller
+                        .execute(run, Ok(sidecar.clone()), |_| {})
+                        .await
+                        .progress
+                        .counts
+                        .processed,
+                    1
+                );
+            } else {
+                assert_eq!(result.progress.counts.processed, 1);
+            }
+            sidecar.shutdown().await;
+        }
+    });
+}
+
+#[test]
+fn private_generation_rejects_stale_notes_and_warning_acknowledgement() {
+    use redactio_lib::domain::review::{open_configured, save_configured};
+    use redactio_lib::protocol::DocumentKey;
+    runtime().block_on(async {
+        for warning in [false, true] {
+            let f = Fixture::new();
+            let pair = &f.settings.sync_pairs[0];
+            fs::write(
+                pair.source_folder.join("a.docx"),
+                if warning {
+                    b"warning".as_slice()
+                } else {
+                    b"synthetic".as_slice()
+                },
+            )
+            .unwrap();
+            let sidecar = f.sidecar("batch");
+            let run = f.controller.prepare(pair.id, None, vec![]).unwrap();
+            f.controller.execute(run, Ok(sidecar.clone()), |_| {}).await;
+            let key = DocumentKey {
+                sync_pair_id: pair.id,
+                doc_id: "doc-0001".into(),
+            };
+            let a = open_configured(&f.controller, &sidecar, &key)
+                .await
+                .unwrap();
+            let b = open_configured(&f.controller, &sidecar, &key)
+                .await
+                .unwrap();
+            let status = if warning { "needs-rework" } else { "pending" };
+            let mut input = review_input(&b, status);
+            if warning {
+                input.acknowledged_warnings = b.warnings.clone();
+            } else {
+                input.notes = "PRIVATE_B".into();
+            }
+            let saved = save_configured(&f.controller, &sidecar, &key, input)
+                .await
+                .unwrap();
+            assert_eq!(
+                saved.expected_output_hash, a.expected_output_hash,
+                "fixture isolates private generation"
+            );
+            assert!(!saved.markdown.contains("PRIVATE_B"));
+            let path = pair.source_folder.join("_redactio/reviews/doc-0001.json");
+            let before = fs::read(&path).unwrap();
+            let result =
+                save_configured(&f.controller, &sidecar, &key, review_input(&a, status)).await;
+            assert_eq!(result.unwrap_err().code, "review_conflict");
+            assert_eq!(fs::read(path).unwrap(), before);
+            sidecar.shutdown().await;
+        }
+    });
+}
+
+#[test]
+fn scan_projects_only_valid_current_private_review_states() {
+    use redactio_lib::{
+        domain::{
+            review::{open_configured, save_configured},
+            scan::scan_collection,
+        },
+        protocol::DocumentKey,
+    };
+    runtime().block_on(async {
+        let f = Fixture::new();
+        let pair = &f.settings.sync_pairs[0];
+        let statuses = [
+            "pending",
+            "approved",
+            "rejected",
+            "needs-rework",
+            "approved",
+            "approved",
+        ];
+        for index in 0..statuses.len() {
+            fs::write(
+                pair.source_folder.join(format!("{index}.docx")),
+                b"synthetic",
+            )
+            .unwrap();
+        }
+        let sidecar = f.sidecar("batch");
+        let run = f.controller.prepare(pair.id, None, vec![]).unwrap();
+        f.controller.execute(run, Ok(sidecar.clone()), |_| {}).await;
+        for (index, status) in statuses.iter().enumerate() {
+            let key = DocumentKey {
+                sync_pair_id: pair.id,
+                doc_id: format!("doc-{:04}", index + 1),
+            };
+            let view = open_configured(&f.controller, &sidecar, &key)
+                .await
+                .unwrap();
+            save_configured(&f.controller, &sidecar, &key, review_input(&view, status))
+                .await
+                .unwrap();
+        }
+        fs::write(pair.source_folder.join("4.docx"), b"changed").unwrap();
+        fs::write(
+            pair.source_folder.join("_redactio/reviews/doc-0006.json"),
+            b"{}",
+        )
+        .unwrap();
+        let settings = redactio_lib::domain::settings::load_settings(&f.path).unwrap();
+        let report =
+            serde_json::to_value(scan_collection(&settings.sync_pairs[0]).unwrap()).unwrap();
+        for (index, status) in statuses[..4].iter().enumerate() {
+            assert_eq!(report["files"][index]["review_status"], *status);
+        }
+        assert_eq!(report["files"][4]["state"], "stale");
+        assert!(report["files"][4]["review_status"].is_null());
+        assert_eq!(report["files"][5]["state"], "conflict");
+        assert!(report["files"][5]["review_status"].is_null());
+        assert_eq!(report["errors"][0]["code"], "review_mismatch");
+        sidecar.shutdown().await;
+    });
+}

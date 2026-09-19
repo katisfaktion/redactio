@@ -76,7 +76,7 @@ export const reviewApi = {
     const requested = DocumentKeySchema.parse(key);
     const saved = SaveReviewSchema.parse(input);
     return reviewResult(await invoke<unknown>("save_review", {
-      key: requested, expectedOutputHash: saved.expected_output_hash, decisions: saved.decisions,
+      key: requested, expectedOutputHash: saved.expected_output_hash, expectedReviewHash: saved.expected_review_hash, decisions: saved.decisions,
       status: saved.status, notes: saved.notes, acknowledgedWarnings: saved.acknowledged_warnings,
     }), requested);
   },

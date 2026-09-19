@@ -119,6 +119,12 @@ impl Fixture {
         .unwrap();
         SaveReview {
             expected_output_hash: output_hash,
+            expected_review_hash: mapping.entries()[0]
+                .committed
+                .as_ref()
+                .unwrap()
+                .review_hash
+                .clone(),
             decisions: Decisions::default(),
             status: ReviewStatus::Approved,
             notes: String::new(),

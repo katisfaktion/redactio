@@ -21,7 +21,7 @@ const settings: Settings = { schema_version: 1, selected_sync_pair_id: pairA, sy
 })) };
 const view: ReviewViewData = {
   key: { sync_pair_id: pairA, doc_id: "doc-0001" }, source_hash: "a".repeat(64), revision: settings.sync_pairs[0]!.processing_revision,
-  expected_output_hash: "b".repeat(64), original_text: "🙂 Anna", markdown: "synthetic markdown", body: "🙂 Anna", detections: [], redactions: [],
+  expected_output_hash: "b".repeat(64), expected_review_hash: "d".repeat(64), original_text: "🙂 Anna", markdown: "synthetic markdown", body: "🙂 Anna", detections: [], redactions: [],
   decisions: { dismissed_ids: [], manual: [] }, warnings: [], acknowledged_warnings: [], notes: "", status: "pending",
 };
 async function setup() {
@@ -29,7 +29,7 @@ async function setup() {
   vi.spyOn(detectionApi, "refresh").mockImplementation(async id => ({ ...settings, selected_sync_pair_id: id }));
   vi.spyOn(runApi, "listen").mockResolvedValue(() => {});
   vi.spyOn(runApi, "auditLocation").mockResolvedValue("/audit");
-  vi.spyOn(pairApi, "scanPair").mockResolvedValue({ files: ["doc-0001", "doc-0002"].map(doc_id => ({ doc_id, relative_path: `${doc_id}.docx`, size_bytes: 5, mtime: null, source_hash_sha256: "a".repeat(64), state: "current" as const })), errors: [] });
+  vi.spyOn(pairApi, "scanPair").mockResolvedValue({ files: ["doc-0001", "doc-0002"].map(doc_id => ({ doc_id, relative_path: `${doc_id}.docx`, size_bytes: 5, mtime: null, source_hash_sha256: "a".repeat(64), review_status: "pending" as const, state: "current" as const })), errors: [] });
   vi.spyOn(reviewApi, "open").mockImplementation(async key => ({ ...view, key }));
   const save = vi.spyOn(reviewApi, "save").mockImplementation(async (key, input) => ({ ...view, ...input, key }));
   native.destroy.mockReset().mockResolvedValue(undefined);
@@ -182,5 +182,17 @@ test("export uses the dirty-review guard and captures keys before deferred navig
   expect(save).toHaveBeenCalledOnce();
   expect(wrapper.getComponent(ExportDialog).props("keys")).toEqual([{ sync_pair_id: pairA, doc_id: "doc-0001" }]);
   expect(wrapper.findComponent(ReviewView).exists()).toBe(false);
+  wrapper.unmount();
+});
+
+
+test("a saved review invalidates the matching list projection", async () => {
+  const { wrapper, review } = await setup();
+  expect(wrapper.getComponent(DocumentList).text()).toContain("Ausstehend");
+  review.notes.value = "private change";
+  expect(await review.save()).toBe(true);
+  await flushPromises();
+  expect(wrapper.getComponent(DocumentList).text()).not.toContain("Ausstehend");
+  expect(wrapper.getComponent(DocumentList).emitted("invalidated")).toHaveLength(1);
   wrapper.unmount();
 });

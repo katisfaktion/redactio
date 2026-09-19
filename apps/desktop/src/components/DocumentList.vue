@@ -6,10 +6,11 @@ import { pairApi, safeError } from "../lib/ipc";
 
 const props = defineProps<{
   pairId: string;
+  invalidation?: { sync_pair_id: string; doc_id?: string } | null;
   disabled?: boolean;
   scan?: (pairId: string) => Promise<ScanReport>;
 }>();
-const emit = defineEmits<{ scanned: [report: ScanReport]; reprocess: [files: { relative_path: string; doc_id: string }[]]; review: [docId: string]; export: [keys: DocumentKey[]] }>();
+const emit = defineEmits<{ invalidated: []; scanned: [report: ScanReport]; reprocess: [files: { relative_path: string; doc_id: string }[]]; review: [docId: string]; export: [keys: DocumentKey[]] }>();
 const selected = ref<string[]>([]);
 const selectedFiles = computed(() => report.value?.files.flatMap((file) => file.doc_id && selected.value.includes(file.doc_id)
   ? [{ relative_path: file.relative_path, doc_id: file.doc_id }] : []) ?? []);
@@ -27,6 +28,15 @@ const stateLabels: Record<ScanState, string> = {
   "missing-source": "Quelle fehlt",
   "recovery-pending": "Wiederherstellung ausstehend",
 };
+
+const reviewLabels = { pending: "Ausstehend", approved: "Freigegeben", rejected: "Abgelehnt", "needs-rework": "Nacharbeit erforderlich" };
+watch(() => props.invalidation, (change) => {
+  if (!change || change.sync_pair_id !== props.pairId
+    || (change.doc_id && !report.value?.files.some(file => file.doc_id === change.doc_id))) return;
+  requestId += 1;
+  report.value = null; selected.value = []; error.value = null; busy.value = false;
+  emit("invalidated");
+});
 
 watch(() => props.pairId, () => {
   requestId += 1;
@@ -98,7 +108,7 @@ function formatMtime(value: string | null): string {
           <td>{{ file.relative_path }}</td>
           <td>{{ stateLabels[file.state] }}</td>
           <td>{{ formatMtime(file.mtime) }}</td>
-          <td><OnyxButton v-if="file.doc_id" :data-testid="`review-${file.doc_id}`" :label="`${file.doc_id} prüfen`" type="button" mode="outline" :disabled="busy || disabled || file.state !== 'current'" @click="emit('review', file.doc_id)" /></td>
+          <td><span>{{ file.review_status ? reviewLabels[file.review_status] : "—" }}</span> <OnyxButton v-if="file.doc_id" :data-testid="`review-${file.doc_id}`" :label="`${file.doc_id} prüfen`" type="button" mode="outline" :disabled="busy || disabled || file.state !== 'current'" @click="emit('review', file.doc_id)" /></td>
         </tr>
       </OnyxTable>
       <OnyxButton v-if="report.files.some((file) => file.doc_id)" label="Auswahl erneut verarbeiten" type="button" :disabled="busy || disabled || !selectedFiles.length" @click="emit('reprocess', selectedFiles)" />

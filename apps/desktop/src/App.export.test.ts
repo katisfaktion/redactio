@@ -24,7 +24,7 @@ async function setup() {
   vi.spyOn(detectionApi, "refresh").mockImplementation(async id => ({ ...settings, selected_sync_pair_id: id }));
   vi.spyOn(runApi, "listen").mockResolvedValue(() => {});
   const select = vi.spyOn(pairApi, "selectPair").mockImplementation(async id => ({ ...settings, selected_sync_pair_id: id }));
-  vi.spyOn(pairApi, "scanPair").mockResolvedValue({ files: [{ doc_id: "doc-0001", relative_path: "example.docx", size_bytes: 5, mtime: null, source_hash_sha256: "a".repeat(64), state: "current" }], errors: [] });
+  vi.spyOn(pairApi, "scanPair").mockResolvedValue({ files: [{ doc_id: "doc-0001", relative_path: "example.docx", size_bytes: 5, mtime: null, source_hash_sha256: "a".repeat(64), review_status: "pending", state: "current" }], errors: [] });
   const approved = vi.spyOn(exportApi, "approved").mockImplementation(async id => ({ sync_pair_id: id, exported: ["doc-0001"], failed: [], error: null, cancelled: false, audit_warning: false }));
   let close!: (event: { preventDefault(): void }) => void;
   native.listen.mockImplementation(async callback => { close = callback; return () => {}; });

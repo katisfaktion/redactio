@@ -7,7 +7,7 @@ import type { ReviewViewData } from "../lib/contracts";
 
 const view: ReviewViewData = {
   key: { sync_pair_id: "11111111-1111-4111-8111-111111111111", doc_id: "doc-0001" },
-  source_hash: "a".repeat(64), revision: "22222222-2222-4222-8222-222222222222", expected_output_hash: "b".repeat(64),
+  source_hash: "a".repeat(64), revision: "22222222-2222-4222-8222-222222222222", expected_output_hash: "b".repeat(64), expected_review_hash: "d".repeat(64),
   original_text: '<img src="https://example.invalid/pixel"> <PERSON_1>', body: '<img src="https://example.invalid/pixel"> <PERSON_1>', markdown: "synthetic markdown",
   detections: [], redactions: [], decisions: { dismissed_ids: [], manual: [] }, warnings: [], acknowledged_warnings: [], notes: "", status: "pending",
 };

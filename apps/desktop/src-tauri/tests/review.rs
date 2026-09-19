@@ -258,6 +258,7 @@ main()
 fn input(view: &redactio_lib::domain::review::ReviewViewData, status: ReviewStatus) -> SaveReview {
     SaveReview {
         expected_output_hash: view.expected_output_hash.clone(),
+        expected_review_hash: view.expected_review_hash.clone(),
         decisions: view.decisions.clone(),
         status,
         notes: "PRIVATE_NOTE_CANARY".into(),
@@ -330,7 +331,7 @@ fn real_review_corrections_approval_and_tampering() {
             assert!(edited.body.contains("<PERSON_1>"));
             assert!(edited.body.contains("<LOCATION_1>"));
             assert!(!edited.body.contains("anna@example.org"));
-            assert!(f.record(&key).reviewed_at.is_none());
+            assert!(f.record(&key).reviewed_at.is_some());
             assert_ne!(f.record(&key).redacted_at, "2026-01-01T00:00:00Z");
             let reopened = f.open(&key).await.unwrap();
             assert_eq!(reopened.decisions, edited.decisions);

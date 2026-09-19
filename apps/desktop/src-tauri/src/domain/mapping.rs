@@ -322,6 +322,14 @@ pub struct CollectionGuard {
     witness: ValidatedWrite,
 }
 
+impl Drop for CollectionGuard {
+    fn drop(&mut self) {
+        // Closing alone can leave Unix fork-inherited descriptions locked until exec.
+        // File close remains the fallback if explicit unlock fails.
+        let _ = self._file.unlock();
+    }
+}
+
 impl CollectionGuard {
     pub fn acquire(source: &Path) -> Result<Self, AppError> {
         Self::acquire_with(source, || {})
@@ -334,7 +342,19 @@ impl CollectionGuard {
             Ok(_) => (),
             Err(error) if error.code == "path_unavailable" => {
                 before_create();
-                ValidatedWrite::new(&source, &path)?.create_atomic(b"")?;
+                ValidatedWrite::new(&source, &path)?
+                    .create_atomic(b"")
+                    .map_err(|error| {
+                        if matches!(error.code.as_str(), "path_exists" | "path_changed") {
+                            // Retry from a fresh capability; never adopt the contending object.
+                            AppError {
+                                code: "file_busy".into(),
+                                retryable: true,
+                            }
+                        } else {
+                            error
+                        }
+                    })?;
             }
             Err(error) => return Err(error),
         }
@@ -365,6 +385,45 @@ mod tests {
     use super::*;
     use std::sync::mpsc;
 
+    #[cfg(unix)]
+    #[test]
+    fn guard_drop_releases_lock_while_child_is_before_exec() {
+        use std::{
+            io::{Read, Write},
+            os::unix::{net::UnixStream, process::CommandExt},
+            process::Command,
+        };
+        let root = tempfile::tempdir().unwrap();
+        let owner = CollectionGuard::acquire(root.path()).unwrap();
+        let (mut ready_parent, mut ready_child) = UnixStream::pair().unwrap();
+        let (mut resume_parent, mut resume_child) = UnixStream::pair().unwrap();
+        let child = std::thread::spawn(move || {
+            let mut command = Command::new("/bin/true");
+            // Only async-signal-safe socket reads/writes run between fork and exec.
+            unsafe {
+                command.pre_exec(move || {
+                    ready_child.write_all(&[1])?;
+                    resume_child.read_exact(&mut [0])?;
+                    Ok(())
+                });
+            }
+            assert!(command.spawn().unwrap().wait().unwrap().success());
+        });
+        ready_parent.read_exact(&mut [0]).unwrap();
+        let active = CollectionGuard::acquire(root.path()).unwrap_err();
+        drop(owner);
+        let released = CollectionGuard::acquire(root.path());
+        // Resume and reap even on a failed assertion so RED never strands a child.
+        resume_parent.write_all(&[1]).unwrap();
+        child.join().unwrap();
+        assert_eq!(active.code, "file_busy");
+        assert!(active.retryable);
+        assert!(
+            released.is_ok(),
+            "parent drop retained inherited lock: {released:?}"
+        );
+    }
+
     #[test]
     fn concurrent_first_creators_preserve_the_held_source_and_config_lock() {
         for label in ["source", "config"] {
@@ -389,6 +448,9 @@ mod tests {
                     contender.is_err(),
                     "first-use creator replaced the held {label} lock"
                 );
+                let error = contender.unwrap_err();
+                assert_eq!(error.code, "file_busy");
+                assert!(error.retryable);
                 owner.validate(&directory).unwrap();
             });
         }

@@ -1,10 +1,13 @@
 pub use super::mapping::DocumentState as ScanState;
 use super::{
-    mapping::{classify, DocumentState, Mapping},
+    mapping::{classify, DocumentState, Mapping, ReviewRecord},
     settings::SyncPair,
     storage::open_validated_read,
 };
-use crate::error::AppError;
+use crate::{
+    error::AppError,
+    protocol::{DocumentKey, ReviewStatus},
+};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::{
@@ -29,6 +32,7 @@ pub struct ScannedFile {
     pub mtime: Option<String>,
     pub source_hash_sha256: Option<String>,
     pub state: ScanState,
+    pub review_status: Option<ReviewStatus>,
 }
 
 #[derive(Debug, PartialEq, Eq, Serialize)]
@@ -74,7 +78,7 @@ pub fn scan_collection(pair: &SyncPair) -> Result<ScanReport, AppError> {
             &pair.target_folder,
             &pair.target_folder.join(format!("{}.md", entry.doc_id)),
         );
-        let state = match &output {
+        let mut state = match &output {
             Ok(output) => classify(
                 found.and_then(|index| report.files[index].source_hash_sha256.as_deref()),
                 output.as_deref(),
@@ -97,8 +101,29 @@ pub fn scan_collection(pair: &SyncPair) -> Result<ScanReport, AppError> {
                 }
             }
         };
+        let review_status = if state == DocumentState::Current {
+            let key = DocumentKey {
+                sync_pair_id: pair.id,
+                doc_id: entry.doc_id.clone(),
+            };
+            match ReviewRecord::read(&pair.source_folder, &key, entry.committed.as_ref().unwrap()) {
+                Ok(record) => Some(record.status),
+                Err(error) => {
+                    state = DocumentState::Conflict;
+                    report.errors.push(ScanFailure {
+                        relative_path: entry.relative_path.clone(),
+                        code: error.code,
+                        origin: ScanFailureOrigin::Output,
+                    });
+                    None
+                }
+            }
+        } else {
+            None
+        };
         if let Some(index) = found {
             report.files[index].state = state;
+            report.files[index].review_status = review_status;
             report.files[index].doc_id = Some(entry.doc_id.clone());
         } else {
             report.files.push(ScannedFile {
@@ -108,6 +133,7 @@ pub fn scan_collection(pair: &SyncPair) -> Result<ScanReport, AppError> {
                 mtime: None,
                 source_hash_sha256: None,
                 state,
+                review_status,
             });
         }
     }
@@ -247,6 +273,7 @@ fn scan_file(root: &Path, path: &Path, relative_path: String) -> Result<ScannedF
         mtime: Some(mtime),
         source_hash_sha256: Some(format!("{:x}", hasher.finalize())),
         state: ScanState::New,
+        review_status: None,
     })
 }
 

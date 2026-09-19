@@ -33,6 +33,10 @@ const review = useReview();
 const reviewDocuments = ref<{ value: string; label: string }[]>([]);
 const selectedId = computed(() => pairs.selectedPair.value?.id ?? null);
 const run = useRun(selectedId);
+const documentInvalidation = shallowRef<{ sync_pair_id: string; doc_id?: string } | null>(null);
+watch(review.saved, key => { if (key) documentInvalidation.value = { ...key }; });
+watch(run.summary, summary => { if (summary) documentInvalidation.value = { sync_pair_id: summary.sync_pair_id }; });
+function invalidateDocuments() { scanned.value = false; reviewDocuments.value = []; }
 const scanned = ref(false), confirming = ref(false);
 const exportSelection = shallowRef<{ pairId: string; pairName: string; keys: DocumentKey[] } | null>(null);
 const busy = computed(() => !!exportSelection.value || pairs.busy.value || run.busy.value || detection.busy.value || review.busy.value || confirming.value);
@@ -167,7 +171,7 @@ const errorText: Record<string, string> = {
           <section v-if="pairs.selectedPair.value" v-show="view === 'documents'" data-testid="document-view" aria-labelledby="documents-heading">
             <h2 id="documents-heading">Dokumente: {{ pairs.selectedPair.value.name }}</h2>
             <p>Der Arbeitsordner enthält auch ungeprüfte Ergebnisse. Prüfen Sie Dokumente vor der Weitergabe.</p>
-            <DocumentList :key="`${pairs.selectedPair.value.id}:${pairs.selectedPair.value.processing_revision}`" :pair-id="pairs.selectedPair.value.id" :disabled="busy" @scanned="onScanned" @reprocess="reprocess" @review="openReview" @export="openExport" />
+            <DocumentList :key="`${pairs.selectedPair.value.id}:${pairs.selectedPair.value.processing_revision}`" :pair-id="pairs.selectedPair.value.id" :invalidation="documentInvalidation" :disabled="busy" @invalidated="invalidateDocuments" @scanned="onScanned" @reprocess="reprocess" @review="openReview" @export="openExport" />
             <RunPanel
               :pair-name="pairs.selectedPair.value.name"
               :counts="run.progress.value ?? emptyCounts"

@@ -1,5 +1,5 @@
 import { beforeEach, expect, test, vi } from "vitest";
-import { ReviewViewDataSchema, SaveReviewSchema } from "./contracts";
+import { ReviewViewDataSchema, SaveReviewSchema, ScannedFileSchema } from "./contracts";
 import { reviewApi } from "./ipc";
 
 const invoke = vi.hoisted(() => vi.fn());
@@ -7,7 +7,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 const key = { sync_pair_id: "11111111-1111-4111-8111-111111111111", doc_id: "doc-0001" };
 const view = {
   key, source_hash: "a".repeat(64), revision: "22222222-2222-4222-8222-222222222222",
-  expected_output_hash: "b".repeat(64), original_text: "😀 Anna", markdown: "synthetic markdown", body: "😀 <PERSON_1>\n",
+  expected_output_hash: "b".repeat(64), expected_review_hash: "d".repeat(64), original_text: "😀 Anna", markdown: "synthetic markdown", body: "😀 <PERSON_1>\n",
   detections: [{ id: "automatic", start: 2, end: 6, entity_type: "PERSON", confidence: 0.9, recognizer: "recognizer", origin: "automatic" }],
   redactions: [{ start_offset: 2, end_offset: 12, entity_type: "PERSON", placeholder: "<PERSON_1>", confidence: 0.9, recognizer: "recognizer", origin: "automatic" }],
   decisions: { dismissed_ids: [], manual: [] }, warnings: [], acknowledged_warnings: [], notes: "PRIVATE_NOTE", status: "pending",
@@ -18,10 +18,10 @@ test("review IPC routes the complete key and validates private responses", async
   invoke.mockResolvedValue(view);
   expect(await reviewApi.open(key)).toEqual(view);
   expect(invoke).toHaveBeenLastCalledWith("open_review", { key });
-  const input = SaveReviewSchema.parse({ expected_output_hash: view.expected_output_hash, decisions: view.decisions,
+  const input = SaveReviewSchema.parse({ expected_output_hash: view.expected_output_hash, expected_review_hash: view.expected_review_hash, decisions: view.decisions,
     status: "approved", notes: "PRIVATE_NOTE", acknowledged_warnings: [] });
   expect(await reviewApi.save(key, input)).toEqual(view);
-  expect(invoke).toHaveBeenLastCalledWith("save_review", { key, expectedOutputHash: input.expected_output_hash,
+  expect(invoke).toHaveBeenLastCalledWith("save_review", { key, expectedOutputHash: input.expected_output_hash, expectedReviewHash: input.expected_review_hash,
     decisions: input.decisions, status: "approved", notes: "PRIVATE_NOTE", acknowledgedWarnings: [] });
   invoke.mockResolvedValue({ ...view, key: { ...key, sync_pair_id: "33333333-3333-4333-8333-333333333333" } });
   await expect(reviewApi.open(key)).rejects.toThrow();
@@ -34,6 +34,8 @@ test("strict review projection rejects corrupt spans, decisions and approval pol
     { ...view, extra: true },
     { ...view, key: { ...key, doc_id: "doc-0000" } },
     { ...view, source_hash: "unsafe" },
+    { ...view, expected_review_hash: undefined },
+    { ...view, expected_review_hash: "unsafe" },
     { ...view, detections: [{ ...view.detections[0], end: 7 }] },
     { ...view, detections: [{ ...view.detections[0], entity_type: "UNKNOWN" }] },
     { ...view, detections: [view.detections[0], view.detections[0]] },
@@ -48,7 +50,7 @@ test("strict review projection rejects corrupt spans, decisions and approval pol
 });
 
 test("outgoing review edits reject invalid identity or unknown fields before invoke", async () => {
-  const input = { expected_output_hash: view.expected_output_hash, decisions: { dismissed_ids: [], manual: [] },
+  const input = { expected_output_hash: view.expected_output_hash, expected_review_hash: view.expected_review_hash, decisions: { dismissed_ids: [], manual: [] },
     status: "pending" as const, notes: "", acknowledged_warnings: [] };
   await expect(reviewApi.open({ ...key, doc_id: "../private" })).rejects.toThrow();
   await expect(reviewApi.save(key, { ...input, expected_output_hash: "bad" })).rejects.toThrow();
@@ -59,4 +61,16 @@ test("outgoing review edits reject invalid identity or unknown fields before inv
 test("review projection accepts host safe-code bounds and preserves a BOM text character", () => {
   expect(ReviewViewDataSchema.safeParse({ ...view, warnings: ["w".repeat(128)] }).success).toBe(true);
   expect(ReviewViewDataSchema.safeParse({ ...view, original_text: "\uFEFF", body: "\uFEFF\n", detections: [], redactions: [] }).success).toBe(true);
+});
+
+
+test("scan review states require a current document and strict known status", () => {
+  const file = { relative_path: "example.docx", doc_id: "doc-0001", size_bytes: 1,
+    mtime: null, source_hash_sha256: "a".repeat(64), state: "current", review_status: "approved" };
+  expect(ScannedFileSchema.safeParse(file).success).toBe(true);
+  for (const invalid of [{ ...file, state: "stale" }, { ...file, state: "conflict" },
+    { ...file, doc_id: null }, { ...file, review_status: "unknown" }, { ...file, review_status: undefined }]) {
+    expect(ScannedFileSchema.safeParse(invalid).success).toBe(false);
+  }
+  expect(ScannedFileSchema.safeParse({ ...file, state: "stale", review_status: null }).success).toBe(true);
 });

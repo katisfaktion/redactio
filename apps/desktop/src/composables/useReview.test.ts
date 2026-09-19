@@ -6,7 +6,7 @@ import type { ReviewApi } from "../lib/ipc";
 
 const view: ReviewViewData = {
   key: { sync_pair_id: "11111111-1111-4111-8111-111111111111", doc_id: "doc-0001" },
-  source_hash: "a".repeat(64), revision: "22222222-2222-4222-8222-222222222222", expected_output_hash: "b".repeat(64),
+  source_hash: "a".repeat(64), revision: "22222222-2222-4222-8222-222222222222", expected_output_hash: "b".repeat(64), expected_review_hash: "d".repeat(64),
   original_text: "🙂 Anna", body: "🙂 <PERSON_1>", markdown: "synthetic markdown",
   detections: [{ id: "auto", start: 2, end: 6, entity_type: "PERSON", confidence: .9, origin: "automatic", recognizer: "test" }],
   redactions: [{ start_offset: 2, end_offset: 12, entity_type: "PERSON", confidence: .9, origin: "automatic", recognizer: "test", placeholder: "<PERSON_1>" }],
@@ -29,7 +29,7 @@ test("edits, type replacement and undo keep decisions local until a bound save",
   review.add({ start: 2, end: 6 }, "PERSON");
   review.notes.value = "private note";
   await review.save();
-  expect(save).toHaveBeenCalledWith(view.key, expect.objectContaining({ expected_output_hash: view.expected_output_hash, notes: "private note", status: "pending" }));
+  expect(save).toHaveBeenCalledWith(view.key, expect.objectContaining({ expected_output_hash: view.expected_output_hash, expected_review_hash: view.expected_review_hash, notes: "private note", status: "pending" }));
   expect(review.data.value?.expected_output_hash).toBe("c".repeat(64));
   expect(review.dirty.value).toBe(false);
   review.dismiss(review.decisions.value.manual[0]!.id);
@@ -71,8 +71,14 @@ test("conflicts preserve unsaved notes and decisions", async () => {
   const review = scope.run(() => useReview({ ...api, save: async () => { throw { code: "review_conflict", retryable: false }; } }))!;
   await review.open(view.key);
   review.notes.value = "keep me";
+  review.add({ start: 0, end: 1 }, "CUSTOM");
+  review.acknowledged.value = ["headers_footers"];
+  const unsaved = structuredClone(JSON.parse(JSON.stringify(review.decisions.value)));
   expect(await review.save()).toBe(false);
   expect(review.notes.value).toBe("keep me");
+  expect(review.decisions.value).toEqual(unsaved);
+  expect(review.acknowledged.value).toEqual(["headers_footers"]);
+  expect(review.saved.value).toBeNull();
   expect(review.dirty.value).toBe(true);
   expect(review.error.value?.code).toBe("review_conflict");
   scope.stop();

@@ -362,3 +362,26 @@ def test_detection_ids_are_stable_without_exposing_custom_terms(model_root: Path
     assert info.recognizers == [rule_id]
     assert first[0].recognizer == rule_id
     assert private_term not in caplog.text
+
+
+def test_processing_identity_includes_own_version_and_dependencies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import redactio_sidecar.engine as module
+
+    versions = {"presidio-analyzer": "2.2.362", "spacy": "3.8.7"}
+    monkeypatch.setattr(module, "version", versions.__getitem__)
+    monkeypatch.setattr(module, "ENGINE_VERSION", "redactio-sidecar 0.1.0")
+    before = module._engine_version()
+    monkeypatch.setattr(module, "ENGINE_VERSION", "redactio-sidecar 0.2.0")
+    after = module._engine_version()
+    assert before != after
+    assert after == module._engine_version()
+    assert "redactio-sidecar 0.2.0" in after
+    assert "presidio-analyzer 2.2.362" in after
+    assert "spacy 3.8.7" in after
+    import re
+
+    assert re.fullmatch(r"[A-Za-z0-9_.+ -]{1,128}", after)
+    versions["spacy"] = "3.8.8"
+    assert after != module._engine_version()

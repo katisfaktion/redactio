@@ -59,13 +59,15 @@ test("a scanned selected pair can run and its controls stay locked until the aut
   receive(final); await flushPromises();
   expect(wrapper.getComponent(PairManager).props("busy")).toBe(false);
   expect(wrapper.text()).toContain("Protokoll konnte nicht vollständig");
+  expect(button("Verarbeitung starten").attributes("disabled")).toBeDefined();
+  expect(wrapper.text()).not.toContain("0 Dokumente gefunden");
   wrapper.unmount();
 });
 
 test.each([false, true])("reprocessing sends exact force IDs only after confirmation=%s", async (accepted) => {
   const pairId = "11111111-1111-4111-8111-111111111111", runId = "22222222-2222-4222-8222-222222222222";
   vi.mocked(dialog.confirm).mockResolvedValue(accepted);
-  vi.spyOn(pairApi, "scanPair").mockResolvedValue({ files: [{ doc_id: "doc-0001", relative_path: "reviewed.docx", size_bytes: 5, mtime: null, source_hash_sha256: "a".repeat(64), state: "stale" }], errors: [] });
+  vi.spyOn(pairApi, "scanPair").mockResolvedValue({ files: [{ doc_id: "doc-0001", relative_path: "reviewed.docx", size_bytes: 5, mtime: null, source_hash_sha256: "a".repeat(64), review_status: null, state: "stale" }], errors: [] });
   vi.spyOn(runApi, "listen").mockResolvedValue(() => {});
   const start = vi.spyOn(runApi, "start").mockResolvedValue(runId);
   vi.spyOn(runApi, "summary").mockResolvedValue(null);

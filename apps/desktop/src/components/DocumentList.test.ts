@@ -14,7 +14,7 @@ const report: ScanReport = {
     size_bytes: 9,
     mtime: "2026-09-19T10:00:00Z",
     source_hash_sha256: "b3cc0475bb78a5026098858e9889acf666d31062d513d303314eca31d36e72f2",
-    state: "new",
+    state: "new", review_status: null,
   }],
   errors: [],
 };
@@ -80,7 +80,7 @@ test("a late scan response cannot populate a newly selected pair", async () => {
 });
 
 test("busy work disables discovery and selected reprocessing names exact stable IDs", async () => {
-  const wrapper = mountList(async () => ({ ...report, files: [{ ...report.files[0], doc_id: "doc-0001", state: "current" }] }));
+  const wrapper = mountList(async () => ({ ...report, files: [{ ...report.files[0], doc_id: "doc-0001", review_status: "pending", state: "current" }] }));
   await wrapper.get("button").trigger("click");
   expect(wrapper.emitted("scanned")).toHaveLength(1);
   await wrapper.get('input[type="checkbox"]').setValue(true);
@@ -93,7 +93,7 @@ test("busy work disables discovery and selected reprocessing names exact stable 
 
 
 test("export emits a copied full-key selection and clears it on pair changes", async () => {
-  const wrapper = mountList(async () => ({ ...report, files: [{ ...report.files[0], doc_id: "doc-0001", state: "current" }] }));
+  const wrapper = mountList(async () => ({ ...report, files: [{ ...report.files[0], doc_id: "doc-0001", review_status: "pending", state: "current" }] }));
   await wrapper.get("button").trigger("click");
   const start = () => wrapper.get('[data-testid="export-selection"]');
   expect(start().attributes("disabled")).toBeDefined();
@@ -109,4 +109,19 @@ test("export emits a copied full-key selection and clears it on pair changes", a
   expect(wrapper.emitted("export")![1]![0]).toEqual([{ sync_pair_id: pairB, doc_id: "doc-0001" }]);
   expect(emitted).toEqual([{ sync_pair_id: pairA, doc_id: "doc-0001" }]);
   wrapper.unmount();
+});
+
+
+test("review labels distinguish validated states and invalidate after a pair-owned change", async () => {
+  const statuses = ["pending", "approved", "rejected", "needs-rework"] as const;
+  const wrapper = mountList(async () => ({ files: statuses.map((review_status, index) => ({
+    ...report.files[0]!, relative_path: `${index}.docx`, doc_id: `doc-000${index + 1}`, state: "current", review_status,
+  })), errors: [] }));
+  await wrapper.get("button").trigger("click");
+  for (const label of ["Ausstehend", "Freigegeben", "Abgelehnt", "Nacharbeit erforderlich"]) expect(wrapper.text()).toContain(label);
+  await wrapper.setProps({ invalidation: { sync_pair_id: pairB, doc_id: "doc-0001" } });
+  expect(wrapper.text()).toContain("Freigegeben");
+  await wrapper.setProps({ invalidation: { sync_pair_id: pairA, doc_id: "doc-0001" } });
+  expect(wrapper.text()).not.toContain("Freigegeben");
+  expect(wrapper.emitted("invalidated")).toHaveLength(1);
 });

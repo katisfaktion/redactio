@@ -284,7 +284,7 @@ def main() -> None:
                 "redactions": [],
                 "warnings": warnings,
                 "body_was_empty": False,
-                "review_status": "needs-rework" if warnings else "pending",
+                "review_status": request["payload"].get("review_status", "needs-rework" if warnings else "pending"),
                 "engine": configure_result({"payload": configured})["engine"],
             }
         if request["type"] == "configure":

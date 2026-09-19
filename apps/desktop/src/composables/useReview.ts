@@ -9,6 +9,7 @@ export function useReview(api: ReviewApi = reviewApi) {
   const notes = ref(""), status = ref<ReviewStatus>("pending"), acknowledged = ref<string[]>([]);
   const busy = ref(false), error = ref<SafeError | null>(null), message = ref("");
   const history = ref<Decisions[]>([]);
+  const saved = shallowRef<DocumentKey | null>(null);
   let request = 0;
   const decisionsChanged = computed(() => !!data.value && JSON.stringify(decisions.value) !== JSON.stringify(data.value.decisions));
   const dirty = computed(() => !!data.value && (decisionsChanged.value || notes.value !== data.value.notes
@@ -79,16 +80,16 @@ export function useReview(api: ReviewApi = reviewApi) {
     busy.value = true; error.value = null; message.value = "";
     try {
       const value = await api.save(current.key, {
-        expected_output_hash: current.expected_output_hash, decisions: JSON.parse(JSON.stringify(decisions.value)),
+        expected_output_hash: current.expected_output_hash, expected_review_hash: current.expected_review_hash, decisions: JSON.parse(JSON.stringify(decisions.value)),
         status: nextStatus, notes: notes.value, acknowledged_warnings: [...acknowledged.value],
       });
       if (token !== request) return false;
-      accept(value); message.value = "Prüfung gespeichert."; return true;
+      accept(value); saved.value = { ...value.key }; message.value = "Prüfung gespeichert."; return true;
     } catch (caught) {
       if (token === request) error.value = safeError(caught);
       return false;
     } finally { if (token === request) busy.value = false; }
   }
-  return { data, key, decisions, notes, status, acknowledged, busy, error, message, dirty, decisionsChanged, canApprove,
+  return { data, key, saved, decisions, notes, status, acknowledged, busy, error, message, dirty, decisionsChanged, canApprove,
     active, canUndo: computed(() => history.value.length > 0), open, clear, add, dismiss, changeType, undo, save };
 }

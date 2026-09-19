@@ -39,6 +39,7 @@ pub struct ReviewViewData {
     pub source_hash: String,
     pub revision: uuid::Uuid,
     pub expected_output_hash: String,
+    pub expected_review_hash: String,
     pub original_text: String,
     pub markdown: String,
     pub body: String,
@@ -55,6 +56,8 @@ pub struct ReviewViewData {
 #[serde(deny_unknown_fields)]
 pub struct SaveReview {
     pub expected_output_hash: String,
+    #[serde(deserialize_with = "crate::protocol::sha256")]
+    pub expected_review_hash: String,
     pub decisions: Decisions,
     pub status: ReviewStatus,
     pub notes: String,
@@ -64,6 +67,7 @@ pub struct SaveReview {
 pub(crate) struct CurrentReview {
     mapping: Mapping,
     pub(crate) record: ReviewRecord,
+    review_hash: String,
     source: ValidatedWrite,
     output: ValidatedWrite,
     source_path: String,
@@ -151,7 +155,7 @@ pub async fn open_review(
         config_guard,
         source_guard,
     )?;
-    Ok(view(current.record, result))
+    Ok(view(current.record, result, current.review_hash))
 }
 
 /// The journal requires these same retained guards and actual settings path.
@@ -169,6 +173,9 @@ pub async fn save_review(
     let mut current = load_current(pair, key, settings_path, config_guard, source_guard)?;
     if input.expected_output_hash != current.record.output_hash {
         return Err(AppError::new("output_conflict"));
+    }
+    if input.expected_review_hash != current.review_hash {
+        return Err(AppError::new("review_conflict"));
     }
     let existing = render(&current, &current.record, sidecar, engine).await?;
     if digest(existing.markdown.as_bytes()) != current.record.output_hash {
@@ -206,11 +213,7 @@ pub async fn save_review(
     if changed {
         record.redacted_at = timestamp.clone();
     }
-    record.reviewed_at = matches!(
-        record.status,
-        ReviewStatus::Approved | ReviewStatus::Rejected
-    )
-    .then_some(timestamp);
+    record.reviewed_at = Some(timestamp);
     validate_spans(&record, existing.original_text.chars().count() as u64)?;
     let result = render(&current, &record, sidecar, engine).await?;
     record.output_hash = digest(result.markdown.as_bytes());
@@ -248,8 +251,8 @@ pub async fn save_review(
             config_guard,
         );
     }
-    committed?;
-    Ok(view(record, result))
+    let generation = committed?;
+    Ok(view(record, result, generation.review_hash))
 }
 
 pub(crate) fn load_current(
@@ -306,13 +309,16 @@ pub(crate) fn load_current(
         DocumentState::RecoveryPending => return Err(AppError::new("recovery_pending")),
         _ => return Err(AppError::new("reprocess_required")),
     }
-    let record = ReviewRecord::read(&pair.source_folder, key, entry.committed.as_ref().unwrap())?;
+    let generation = entry.committed.as_ref().unwrap();
+    let record = ReviewRecord::read(&pair.source_folder, key, generation)?;
+    let review_hash = generation.review_hash.clone();
     validate_spans(&record, 1_000_000)?;
     source.validate()?;
     output.validate()?;
     Ok(CurrentReview {
         mapping,
         record,
+        review_hash,
         source,
         output,
         source_path: source_path
@@ -401,12 +407,13 @@ async fn render(
     Ok(result)
 }
 
-fn view(record: ReviewRecord, result: ProcessResult) -> ReviewViewData {
+fn view(record: ReviewRecord, result: ProcessResult, review_hash: String) -> ReviewViewData {
     ReviewViewData {
         key: record.key,
         source_hash: record.source_hash,
         revision: record.revision,
         expected_output_hash: record.output_hash,
+        expected_review_hash: review_hash,
         original_text: result.original_text,
         markdown: result.markdown,
         body: result.body,

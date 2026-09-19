@@ -206,6 +206,39 @@ fn pair_scan_classifies_reserved_owned_changed_and_deleted_documents() {
     g.source_hash = format!("{:x}", Sha256::digest(b"source"));
     g.output_hash = format!("{:x}", Sha256::digest(b"output"));
     g.revision = pair.processing_revision.to_string();
+    let review = redactio_lib::domain::mapping::ReviewRecord {
+        schema_version: 1,
+        key: redactio_lib::protocol::DocumentKey {
+            sync_pair_id: id,
+            doc_id: "doc-0001".into(),
+        },
+        source_hash: g.source_hash.clone(),
+        revision: pair.processing_revision,
+        output_hash: g.output_hash.clone(),
+        detections: vec![],
+        decisions: Default::default(),
+        status: redactio_lib::protocol::ReviewStatus::Pending,
+        notes: String::new(),
+        acknowledged_warnings: vec![],
+        warnings: vec![],
+        redacted_at: "2026-01-01T00:00:00Z".into(),
+        reviewed_at: None,
+        engine: redactio_lib::protocol::EngineInfo {
+            engine_version: "test".into(),
+            model_name: "test".into(),
+            model_version: "1".into(),
+            extraction_version: "1".into(),
+            recognizers: vec![],
+        },
+    };
+    let bytes = serde_json::to_vec_pretty(&review).unwrap();
+    fs::create_dir_all(source.path().join("_redactio/reviews")).unwrap();
+    fs::write(
+        source.path().join("_redactio/reviews/doc-0001.json"),
+        &bytes,
+    )
+    .unwrap();
+    g.review_hash = format!("{:x}", Sha256::digest(&bytes));
     data["entries"][0]["committed"] = serde_json::to_value(&g).unwrap();
     fs::write(&path, serde_json::to_vec(&data).unwrap()).unwrap();
     assert_eq!(

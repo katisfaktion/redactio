@@ -236,11 +236,14 @@ pub async fn open_review(
     review::open_configured(&state.runs, &state.sidecar()?, &key).await
 }
 
+// Tauri exposes these named fields as the strict frontend save contract.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn save_review(
     state: State<'_, AppState>,
     key: crate::protocol::DocumentKey,
     expected_output_hash: String,
+    expected_review_hash: String,
     decisions: crate::protocol::Decisions,
     status: crate::protocol::ReviewStatus,
     notes: String,
@@ -248,6 +251,7 @@ pub async fn save_review(
 ) -> Result<ReviewViewData, AppError> {
     let input = SaveReview {
         expected_output_hash,
+        expected_review_hash,
         decisions,
         status,
         notes,

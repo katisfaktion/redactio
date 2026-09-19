@@ -492,10 +492,13 @@ def _recognizer_name(metadata: object) -> str:
 
 
 def _engine_version() -> str:
-    try:
-        return f"presidio-analyzer {version('presidio-analyzer')}"
-    except PackageNotFoundError:
-        return ENGINE_VERSION
+    identities = [ENGINE_VERSION]
+    for dependency in ("presidio-analyzer", "spacy"):
+        try:
+            identities.append(f"{dependency} {version(dependency)}")
+        except PackageNotFoundError:
+            identities.append(f"{dependency} unknown")
+    return " + ".join(identities)
 
 
 def _canonical_uuid(value: str) -> None:

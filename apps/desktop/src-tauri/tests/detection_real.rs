@@ -89,3 +89,45 @@ fn real_two_pair_configuration_model_switch_and_catastrophic_preview_timeout() {
         sidecar.shutdown().await;
     });
 }
+
+#[test]
+#[ignore = "requires reviewed Python and bundled models"]
+fn real_producer_own_version_rotates_only_used_pair_once() {
+    tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
+        let root = tempfile::tempdir().unwrap();
+        let config = root.path().join("config"); fs::create_dir(&config).unwrap();
+        let mut settings = Settings::default();
+        for name in ["A", "B"] {
+            let source = root.path().join(format!("{name}-in"));
+            let target = root.path().join(format!("{name}-out"));
+            fs::create_dir(&source).unwrap(); fs::create_dir(&target).unwrap();
+            settings.add(name, &source, &target).unwrap();
+            settings.sync_pairs.last_mut().unwrap().config.model = "de_core_news_sm".into();
+        }
+        let path = config.join("settings.json"); save_settings(&path, &settings).unwrap();
+        let controller = RunController::new(path.clone());
+        let a = settings.sync_pairs[0].id;
+        let sidecar = |version: &str| Sidecar::new(
+            std::env::var_os("REDACTIO_TEST_PYTHON").unwrap().into(),
+            vec!["-c".into(), format!("import redactio_sidecar.engine as engine; engine.ENGINE_VERSION = {version:?}; from redactio_sidecar.ipc import main; main()").into()],
+            std::env::var_os("REDACTIO_MODEL_DIR").unwrap().into(),
+        );
+        let old = sidecar("redactio-sidecar 0.1.0");
+        let before = detection::refresh_processing_config(&controller, &old, a).await.unwrap();
+        old.shutdown().await;
+        let new = sidecar("redactio-sidecar 0.2.0");
+        let after = detection::refresh_processing_config(&controller, &new, a).await.unwrap();
+        assert_ne!(before.sync_pairs[0].processing_revision, after.sync_pairs[0].processing_revision);
+        assert_eq!(before.sync_pairs[1], after.sync_pairs[1]);
+        let fingerprint = after.sync_pairs[0].processing_fingerprint.as_ref().unwrap();
+        assert!(fingerprint.engine_version.contains("redactio-sidecar 0.2.0"));
+        assert!(fingerprint.engine_version.contains("presidio-analyzer"));
+        assert!(fingerprint.engine_version.contains("spacy"));
+        assert!(!fingerprint.engine_version.contains(root.path().to_str().unwrap()));
+        assert_eq!(before.sync_pairs[0].processing_fingerprint.as_ref().unwrap().model_version, fingerprint.model_version);
+        let bytes = fs::read(&path).unwrap();
+        assert_eq!(detection::refresh_processing_config(&controller, &new, a).await.unwrap(), after);
+        assert_eq!(fs::read(path).unwrap(), bytes);
+        new.shutdown().await;
+    });
+}

@@ -53,7 +53,7 @@ pub enum OutputOrigin {
     Merged,
 }
 
-#[derive(Debug, Clone, PartialEq, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Copy, Serialize, Deserialize)]
 pub enum ReviewStatus {
     #[serde(rename = "pending")]
     Pending,

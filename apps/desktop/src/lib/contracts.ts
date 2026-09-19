@@ -61,6 +61,8 @@ export const ScanStateSchema = z.enum([
   "recovery-pending",
 ]);
 
+export const ReviewStatusSchema = z.enum(["pending", "approved", "rejected", "needs-rework"]);
+
 export const ScannedFileSchema = z.object({
   relative_path: z.string(),
   doc_id: z.string().regex(/^doc-[0-9]{4,}$/).nullable(),
@@ -68,7 +70,8 @@ export const ScannedFileSchema = z.object({
   mtime: z.iso.datetime({ offset: true }).nullable(),
   source_hash_sha256: z.string().regex(/^[0-9a-f]{64}$/).nullable(),
   state: ScanStateSchema,
-}).strict();
+  review_status: ReviewStatusSchema.nullable(),
+}).strict().refine(file => file.review_status === null || (file.state === "current" && file.doc_id !== null));
 
 export const ScanFailureSchema = z.object({
   relative_path: z.string(),
@@ -105,7 +108,6 @@ export const DocumentKeySchema = z.object({
   sync_pair_id: z.uuid(),
   doc_id: z.string().regex(/^doc-(?!0000$)(?:[0-9]{4}|[1-9][0-9]{4,19})$/),
 }).strict();
-export const ReviewStatusSchema = z.enum(["pending", "approved", "rejected", "needs-rework"]);
 const HashSchema = z.string().regex(/^[0-9a-f]{64}$/);
 const WarningCodesSchema = z.array(z.string().regex(/^[a-z][a-z0-9_]{0,127}$/))
   .refine(codes => new Set(codes).size === codes.length);
@@ -119,11 +121,11 @@ export const OutputEntrySchema = z.object({
   recognizer: z.string().min(1), origin: z.enum(["automatic", "manual", "merged"]),
 }).strict().refine(span => span.end_offset > span.start_offset);
 export const SaveReviewSchema = z.object({
-  expected_output_hash: HashSchema, decisions: DecisionsSchema, status: ReviewStatusSchema,
+  expected_output_hash: HashSchema, expected_review_hash: HashSchema, decisions: DecisionsSchema, status: ReviewStatusSchema,
   notes: z.string(), acknowledged_warnings: WarningCodesSchema,
 }).strict();
 export const ReviewViewDataSchema = z.object({
-  key: DocumentKeySchema, source_hash: HashSchema, revision: z.uuid(), expected_output_hash: HashSchema,
+  key: DocumentKeySchema, source_hash: HashSchema, revision: z.uuid(), expected_output_hash: HashSchema, expected_review_hash: HashSchema,
   original_text: z.string(), markdown: z.string(), body: z.string(), detections: z.array(DetectionSchema),
   redactions: z.array(OutputEntrySchema), decisions: DecisionsSchema, warnings: WarningCodesSchema,
   acknowledged_warnings: WarningCodesSchema, notes: z.string(), status: ReviewStatusSchema,
