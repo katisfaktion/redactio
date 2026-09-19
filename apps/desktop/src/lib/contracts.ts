@@ -63,9 +63,10 @@ export const ScanStateSchema = z.enum([
 
 export const ScannedFileSchema = z.object({
   relative_path: z.string(),
-  size_bytes: z.number().int().nonnegative(),
-  mtime: z.iso.datetime({ offset: true }),
-  source_hash_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  doc_id: z.string().regex(/^doc-[0-9]{4,}$/).nullable(),
+  size_bytes: z.number().int().nonnegative().nullable(),
+  mtime: z.iso.datetime({ offset: true }).nullable(),
+  source_hash_sha256: z.string().regex(/^[0-9a-f]{64}$/).nullable(),
   state: ScanStateSchema,
 }).strict();
 
@@ -89,3 +90,10 @@ export type ScanState = z.infer<typeof ScanStateSchema>;
 export type ScannedFile = z.infer<typeof ScannedFileSchema>;
 export type ScanFailure = z.infer<typeof ScanFailureSchema>;
 export type ScanReport = z.infer<typeof ScanReportSchema>;
+
+export const RecoveryPairSchema = z.object({
+  id: z.uuid(), name: z.string(), source_folder: z.string(), target_folder: z.string(),
+  pending_target: z.string().nullable(),
+}).strict();
+export const RecoveryPairsSchema = z.array(RecoveryPairSchema);
+export type RecoveryPair = z.infer<typeof RecoveryPairSchema>;

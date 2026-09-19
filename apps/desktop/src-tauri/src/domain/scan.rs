@@ -1,4 +1,9 @@
-use super::storage::open_validated_read;
+pub use super::mapping::DocumentState as ScanState;
+use super::{
+    mapping::{classify, DocumentState, Mapping},
+    settings::SyncPair,
+    storage::open_validated_read,
+};
 use crate::error::AppError;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -19,16 +24,11 @@ pub struct ScanReport {
 #[derive(Debug, PartialEq, Eq, Serialize)]
 pub struct ScannedFile {
     pub relative_path: String,
-    pub size_bytes: u64,
-    pub mtime: String,
-    pub source_hash_sha256: String,
+    pub doc_id: Option<String>,
+    pub size_bytes: Option<u64>,
+    pub mtime: Option<String>,
+    pub source_hash_sha256: Option<String>,
     pub state: ScanState,
-}
-
-#[derive(Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum ScanState {
-    New,
 }
 
 #[derive(Debug, PartialEq, Eq, Serialize)]
@@ -39,6 +39,92 @@ pub struct ScanFailure {
 
 pub fn scan_source(source: &Path) -> Result<ScanReport, AppError> {
     scan_source_with(source, |_| {})
+}
+
+/// The caller validates all configured roots and holds the collection operation guard.
+pub fn scan_collection(pair: &SyncPair) -> Result<ScanReport, AppError> {
+    let mapping = Mapping::load(&pair.source_folder, pair.id, &pair.target_folder)?;
+    let mut report = scan_source(&pair.source_folder)?;
+    let revision = pair.processing_revision.to_string();
+    for entry in mapping.entries() {
+        let found = report
+            .files
+            .iter()
+            .position(|file| file.relative_path == entry.relative_path);
+        // An unreadable source is an error, not evidence of deletion.
+        if found.is_none()
+            && report.errors.iter().any(|error| {
+                error.relative_path == entry.relative_path
+                    || entry
+                        .relative_path
+                        .starts_with(&format!("{}/", error.relative_path))
+            })
+        {
+            continue;
+        }
+        let output = hash_output(
+            &pair.target_folder,
+            &pair.target_folder.join(format!("{}.md", entry.doc_id)),
+        );
+        let state = match &output {
+            Ok(output) => classify(
+                found.and_then(|index| report.files[index].source_hash_sha256.as_deref()),
+                output.as_deref(),
+                &revision,
+                entry.committed.as_ref(),
+                false,
+            ),
+            Err(error) => {
+                report.errors.push(ScanFailure {
+                    relative_path: entry.relative_path.clone(),
+                    code: error.code.clone(),
+                });
+                if found.is_none() {
+                    DocumentState::MissingSource
+                } else {
+                    DocumentState::Conflict
+                }
+            }
+        };
+        if let Some(index) = found {
+            report.files[index].state = state;
+            report.files[index].doc_id = Some(entry.doc_id.clone());
+        } else {
+            report.files.push(ScannedFile {
+                relative_path: entry.relative_path.clone(),
+                doc_id: Some(entry.doc_id.clone()),
+                size_bytes: None,
+                mtime: None,
+                source_hash_sha256: None,
+                state,
+            });
+        }
+    }
+    report
+        .files
+        .sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
+    report
+        .errors
+        .sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
+    Ok(report)
+}
+
+pub(crate) fn hash_output(root: &Path, path: &Path) -> Result<Option<String>, AppError> {
+    let mut file = match open_validated_read(root, path) {
+        Ok(file) => file,
+        Err(error) if error.code == "path_unavailable" => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let mut hasher = Sha256::new();
+    let mut buffer = [0; 64 * 1024];
+    loop {
+        let count = file.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        hasher.update(&buffer[..count]);
+    }
+    Ok(Some(format!("{:x}", hasher.finalize())))
 }
 
 fn scan_source_with(
@@ -142,9 +228,10 @@ fn scan_file(root: &Path, path: &Path, relative_path: String) -> Result<ScannedF
     }
     Ok(ScannedFile {
         relative_path,
-        size_bytes: metadata.len(),
-        mtime,
-        source_hash_sha256: format!("{:x}", hasher.finalize()),
+        doc_id: None,
+        size_bytes: Some(metadata.len()),
+        mtime: Some(mtime),
+        source_hash_sha256: Some(format!("{:x}", hasher.finalize())),
         state: ScanState::New,
     })
 }
@@ -178,6 +265,7 @@ fn is_ignored(entry: &DirEntry) -> bool {
     name.starts_with('.')
         || name.starts_with("~$")
         || name == "_document-mapping.json"
+        || name == "_redactio"
         || entry.file_type().is_symlink()
         || has_ignored_windows_attributes(entry.path())
 }

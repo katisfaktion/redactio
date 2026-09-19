@@ -231,3 +231,10 @@ fn equal(a: &OsStr, b: &OsStr) -> bool {
         a == b
     }
 }
+
+/// Canonical aliases and Windows ordinal case refer to the same directory.
+pub(crate) fn same_directory(a: &Path, b: &Path) -> Result<bool, AppError> {
+    let a = canonical_directory(a)?;
+    let b = canonical_directory(b)?;
+    Ok(contains(&a, &b) && contains(&b, &a))
+}

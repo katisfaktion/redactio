@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { OnyxAppLayout, OnyxPageLayout } from "sit-onyx";
+import { ref } from "vue";
+import MappingRecovery from "./components/MappingRecovery.vue";
 import DocumentList from "./components/DocumentList.vue";
 import PairManager from "./components/PairManager.vue";
 import { usePairs } from "./composables/usePairs";
@@ -10,10 +12,14 @@ const props = withDefaults(defineProps<{
   initialError?: SafeError | null;
 }>(), { initialError: null });
 
+const startupError = ref(props.initialError);
+function recovered(settings: Settings) { pairs.settings.value = settings; startupError.value = null; }
+
 const empty: Settings = { schema_version: 1, sync_pairs: [], selected_sync_pair_id: null };
 const pairs = usePairs(props.initialSettings ?? empty);
 const errorText: Record<string, string> = {
   invalid_settings: "Einstellungen konnten nicht geladen werden. Die vorhandene Datei wurde nicht verändert.",
+  mapping_recovery_required: "Eine unterbrochene Wiederherstellung muss fortgesetzt werden.",
   invalid_mapping: "Die Zuordnungsdatei ist ungültig und wurde nicht verändert.",
   mapping_missing: "Die Zuordnungsdatei fehlt. Das Ordnerpaar muss repariert werden, bevor es verwendet werden kann.",
   mapping_pair_mismatch: "Die Identität des Ordnerpaars stimmt nicht mit der Zuordnungsdatei überein. Das Ordnerpaar muss repariert werden.",
@@ -34,9 +40,10 @@ const errorText: Record<string, string> = {
           <h1>Dokumente sicher schwärzen</h1>
         </header>
 
-        <section v-if="initialError" class="error" role="alert">
+        <section v-if="startupError" class="error" role="alert">
           <h2>Einstellungen konnten nicht geladen werden</h2>
-          <p>{{ errorText[initialError.code] ?? "Die lokalen Einstellungen sind derzeit nicht verfügbar." }}</p>
+          <p>{{ errorText[startupError.code] ?? "Die lokalen Einstellungen sind derzeit nicht verfügbar." }}</p>
+          <MappingRecovery v-if="startupError.code !== 'invalid_settings'" @recovered="recovered" />
         </section>
 
         <template v-else>

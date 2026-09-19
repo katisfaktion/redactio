@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import {
   SafeErrorSchema,
+  RecoveryPairsSchema,
   ScanReportSchema,
   SettingsSchema,
   type SafeError,
@@ -13,6 +14,10 @@ async function settingsCommand(command: string, args?: Record<string, unknown>):
 
 export const pairApi = {
   listPairs: () => settingsCommand("list_pairs"),
+  recoveryPairs: async () => RecoveryPairsSchema.parse(await invoke<unknown>("list_recovery_pairs")),
+  freshStart: async (pairId: string, targetFolder: string, confirmed: boolean): Promise<void> => {
+    await invoke("fresh_start_pair", { pairId, targetFolder, confirmed });
+  },
   addPair: (name: string, sourceFolder: string, targetFolder: string, createTarget: boolean) =>
     settingsCommand("add_pair", { name, sourceFolder, targetFolder, createTarget }),
   renamePair: (pairId: string, name: string) => settingsCommand("rename_pair", { pairId, name }),

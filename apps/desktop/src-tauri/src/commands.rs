@@ -1,7 +1,9 @@
 use crate::{
     domain::{
+        mapping::CollectionGuard,
         paths::{create_target as create_target_directory, validate_roots},
-        scan::{scan_source, ScanReport},
+        recovery::{fresh_start, recovery_pairs, RecoveryPair},
+        scan::{scan_collection, ScanReport},
         settings::{load_settings, save_settings, ProcessingConfig, Settings},
     },
     error::AppError,
@@ -86,6 +88,36 @@ pub fn list_pairs(state: State<'_, AppState>) -> Result<UiSettings, AppError> {
 }
 
 #[tauri::command]
+pub fn list_recovery_pairs(state: State<'_, AppState>) -> Result<Vec<RecoveryPair>, AppError> {
+    let _guard = state
+        .mutation
+        .lock()
+        .map_err(|_| AppError::new("state_unavailable"))?;
+    let _config_guard = CollectionGuard::acquire(&state.app_config_root)?;
+    recovery_pairs(&state.settings_path)
+}
+
+#[tauri::command]
+pub fn fresh_start_pair(
+    state: State<'_, AppState>,
+    pair_id: Uuid,
+    target_folder: String,
+    confirmed: bool,
+) -> Result<(), AppError> {
+    let _guard = state
+        .mutation
+        .lock()
+        .map_err(|_| AppError::new("state_unavailable"))?;
+    fresh_start(
+        &state.settings_path,
+        pair_id,
+        Path::new(&target_folder),
+        confirmed,
+    )?;
+    Ok(())
+}
+
+#[tauri::command]
 pub fn add_pair(
     state: State<'_, AppState>,
     name: String,
@@ -133,7 +165,7 @@ pub fn remove_pair(state: State<'_, AppState>, pair_id: Uuid) -> Result<UiSettin
 
 #[tauri::command]
 pub async fn scan_pair(state: State<'_, AppState>, pair_id: Uuid) -> Result<ScanReport, AppError> {
-    let source = {
+    let pair = {
         let _guard = state
             .mutation
             .lock()
@@ -143,11 +175,13 @@ pub async fn scan_pair(state: State<'_, AppState>, pair_id: Uuid) -> Result<Scan
             .into_iter()
             .find(|pair| pair.id == pair_id)
             .ok_or_else(|| AppError::new("unknown_pair"))?
-            .source_folder
     };
-    tauri::async_runtime::spawn_blocking(move || scan_source(&source))
-        .await
-        .map_err(|_| AppError::new("scan_unavailable"))?
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = CollectionGuard::acquire(&pair.source_folder)?;
+        scan_collection(&pair)
+    })
+    .await
+    .map_err(|_| AppError::new("scan_unavailable"))?
 }
 
 fn mutate(
@@ -158,6 +192,7 @@ fn mutate(
         .mutation
         .lock()
         .map_err(|_| AppError::new("state_unavailable"))?;
+    let _config_guard = CollectionGuard::acquire(&state.app_config_root)?;
     let mut settings = load_registry(state)?;
     change(&mut settings)?;
     settings.validate_registry(std::slice::from_ref(&state.app_config_root))?;

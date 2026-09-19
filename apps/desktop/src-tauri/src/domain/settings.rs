@@ -1,4 +1,5 @@
 use super::{
+    mapping::{CollectionGuard, MappingData as Mapping, MAPPING_FILE},
     paths::{canonical_directory, validate_roots},
     storage::ValidatedWrite,
 };
@@ -12,8 +13,6 @@ use std::{
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use unicode_normalization::UnicodeNormalization;
 use uuid::Uuid;
-
-const MAPPING_FILE: &str = "_document-mapping.json";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -132,36 +131,27 @@ impl Settings {
         )?;
         let other_roots = self.roots();
         let (source, target) = validate_roots(source, target, &other_roots)?;
+        let _guard = CollectionGuard::acquire(&source)?;
         let mapping_path = source.join(MAPPING_FILE);
         let mapping_write = ValidatedWrite::new(&source, &mapping_path)?;
-        let mapping = match fs::read(&mapping_path) {
-            Ok(bytes) => {
-                let mapping: Mapping =
-                    serde_json::from_slice(&bytes).map_err(|_| AppError::new("invalid_mapping"))?;
-                mapping.validate()?;
-                if canonical_directory(&mapping.target_folder)? != target {
-                    return Err(AppError::new("mapping_target_mismatch"));
-                }
+        let mapping = match Mapping::read(&source) {
+            Ok(mapping) => {
+                mapping.validate_binding(mapping.sync_pair_id, &target)?;
+                super::recovery::ensure_recovered(&source, mapping.sync_pair_id)?;
                 mapping_write.validate()?;
                 mapping
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Err(error) if error.code == "mapping_missing" => {
                 if fs::read_dir(&target)?.next().is_some() {
                     return Err(AppError::new("target_not_empty"));
                 }
-                let mapping = Mapping {
-                    schema_version: 1,
-                    sync_pair_id: Uuid::new_v4(),
-                    target_folder: target.clone(),
-                    next_document_number: 1,
-                    entries: Vec::new(),
-                };
+                let mapping = Mapping::empty(Uuid::new_v4(), target.clone());
                 let bytes = serde_json::to_vec_pretty(&mapping)
                     .map_err(|_| AppError::new("invalid_mapping"))?;
                 mapping_write.write_atomic(&bytes)?;
                 mapping
             }
-            Err(error) => return Err(error.into()),
+            Err(error) => return Err(error),
         };
         if self
             .sync_pairs
@@ -299,26 +289,13 @@ impl Settings {
     pub fn validate_registry(&self, extra_roots: &[PathBuf]) -> Result<(), AppError> {
         self.validate_roots_with(extra_roots)?;
         for pair in &self.sync_pairs {
+            super::recovery::ensure_recovered(&pair.source_folder, pair.id)?;
             let source = canonical_directory(&pair.source_folder)?;
             let target = canonical_directory(&pair.target_folder)?;
             let mapping_path = source.join(MAPPING_FILE);
             let mapping_read = ValidatedWrite::new(&source, &mapping_path)?;
-            let bytes = match fs::read(&mapping_path) {
-                Ok(bytes) => bytes,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                    return Err(AppError::new("mapping_missing"));
-                }
-                Err(error) => return Err(error.into()),
-            };
-            let mapping: Mapping =
-                serde_json::from_slice(&bytes).map_err(|_| AppError::new("invalid_mapping"))?;
-            mapping.validate()?;
-            if mapping.sync_pair_id != pair.id {
-                return Err(AppError::new("mapping_pair_mismatch"));
-            }
-            if canonical_directory(&mapping.target_folder)? != target {
-                return Err(AppError::new("mapping_target_mismatch"));
-            }
+            let mapping = Mapping::read(&source)?;
+            mapping.validate_binding(pair.id, &target)?;
             mapping_read.validate()?;
         }
         Ok(())
@@ -382,27 +359,4 @@ fn checked_name<'a>(
 
 fn fold_name(name: &str) -> String {
     name.nfc().flat_map(char::to_lowercase).nfc().collect()
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Mapping {
-    schema_version: u8,
-    sync_pair_id: Uuid,
-    target_folder: PathBuf,
-    next_document_number: u64,
-    entries: Vec<serde_json::Value>,
-}
-
-impl Mapping {
-    fn validate(&self) -> Result<(), AppError> {
-        if self.schema_version != 1
-            || self.sync_pair_id.is_nil()
-            || self.next_document_number == 0
-            || !self.target_folder.is_absolute()
-        {
-            return Err(AppError::new("invalid_mapping"));
-        }
-        Ok(())
-    }
 }

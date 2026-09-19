@@ -50,7 +50,8 @@ async function scan() {
   }
 }
 
-function formatMtime(value: string): string {
+function formatMtime(value: string | null): string {
+  if (value === null) return "—";
   return new Intl.DateTimeFormat("de-DE", {
     dateStyle: "medium",
     timeStyle: "short",

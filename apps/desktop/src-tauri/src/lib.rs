@@ -14,6 +14,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::list_pairs,
+            commands::list_recovery_pairs,
+            commands::fresh_start_pair,
             commands::add_pair,
             commands::rename_pair,
             commands::select_pair,

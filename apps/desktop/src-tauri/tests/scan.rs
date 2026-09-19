@@ -40,13 +40,13 @@ fn scan_returns_stable_paths_hashes_and_new_state() {
 
     assert_eq!(report.files[0].relative_path, "first.docx");
     assert_eq!(report.files[1].relative_path, "z/document.docx");
-    assert_eq!(report.files[0].size_bytes, 9);
+    assert_eq!(report.files[0].size_bytes, Some(9));
     assert_eq!(
-        report.files[0].source_hash_sha256,
-        "b3cc0475bb78a5026098858e9889acf666d31062d513d303314eca31d36e72f2"
+        report.files[0].source_hash_sha256.as_deref(),
+        Some("b3cc0475bb78a5026098858e9889acf666d31062d513d303314eca31d36e72f2")
     );
     assert_eq!(format!("{:?}", report.files[0].state), "New");
-    assert!(report.files[0].mtime.ends_with('Z'));
+    assert!(report.files[0].mtime.as_ref().unwrap().ends_with('Z'));
 }
 
 #[test]

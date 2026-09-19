@@ -161,6 +161,66 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), AppError> {
     ValidatedWrite::new(parent, path)?.write_atomic(bytes)
 }
 
+/// Fresh-start recovery only: retain the entire private metadata directory without
+/// replacing another backup. Source documents and the old target are never moved.
+pub(crate) fn retain_private_metadata(source: &Path, backup: &Path) -> Result<(), AppError> {
+    reject_links(source)?;
+    reject_links(backup)?;
+    if backup.parent() != Some(source) {
+        return Err(AppError::new("outside_root"));
+    }
+    let from = source.join("_redactio");
+    let to = backup.join("_redactio");
+    let destination = ValidatedWrite::new(source, &to)?;
+    reject_links(&from)?;
+    let expected = identity(&from)?.0;
+    let ancestors = source
+        .ancestors()
+        .map(open_directory)
+        .collect::<Result<Vec<_>, _>>()?;
+    let source_handle = &ancestors[0];
+    let backup_handle = open_directory(backup)?;
+    destination.validate()?;
+    let from = anchored_parent(source, source_handle).join("_redactio");
+    let to = anchored_parent(backup, &backup_handle).join("_redactio");
+    if identity(&from)?.0 != expected {
+        return Err(AppError::new("path_changed"));
+    }
+    #[cfg(target_os = "linux")]
+    {
+        use std::{ffi::CString, os::unix::ffi::OsStrExt};
+        let from =
+            CString::new(from.as_os_str().as_bytes()).map_err(|_| AppError::new("invalid_path"))?;
+        let to =
+            CString::new(to.as_os_str().as_bytes()).map_err(|_| AppError::new("invalid_path"))?;
+        if unsafe {
+            libc::renameat2(
+                libc::AT_FDCWD,
+                from.as_ptr(),
+                libc::AT_FDCWD,
+                to.as_ptr(),
+                libc::RENAME_NOREPLACE,
+            )
+        } != 0
+        {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        source_handle
+            .sync_all()
+            .map_err(|_| AppError::new("storage_durability_uncertain"))?;
+        backup_handle
+            .sync_all()
+            .map_err(|_| AppError::new("storage_durability_uncertain"))?;
+    }
+    #[cfg(windows)]
+    windows::move_no_replace(&from, &to)?;
+    #[cfg(not(any(target_os = "linux", windows)))]
+    {
+        return Err(AppError::new("unsupported_platform"));
+    }
+    Ok(())
+}
+
 fn optional_snapshot(path: &Path) -> Result<Option<FileSnapshot>, AppError> {
     match fs::symlink_metadata(path) {
         Ok(_) => file_snapshot(path).map(Some),
@@ -362,6 +422,20 @@ pub(crate) mod windows {
             ),
             info.nNumberOfLinks as u64,
         ))
+    }
+
+    pub(super) fn move_no_replace(from: &Path, to: &Path) -> Result<(), AppError> {
+        if unsafe {
+            MoveFileExW(
+                wide(from).as_ptr(),
+                wide(to).as_ptr(),
+                MOVEFILE_WRITE_THROUGH,
+            )
+        } == 0
+        {
+            return Err(io::Error::last_os_error().into());
+        }
+        Ok(())
     }
 
     pub(super) fn replace(

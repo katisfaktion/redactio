@@ -10,7 +10,7 @@ const pairA = "11111111-1111-4111-8111-111111111111";
 const pairB = "22222222-2222-4222-8222-222222222222";
 const report: ScanReport = {
   files: [{
-    relative_path: "nested/document.docx",
+    doc_id: null, relative_path: "nested/document.docx",
     size_bytes: 9,
     mtime: "2026-09-19T10:00:00Z",
     source_hash_sha256: "b3cc0475bb78a5026098858e9889acf666d31062d513d303314eca31d36e72f2",
