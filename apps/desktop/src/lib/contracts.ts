@@ -145,6 +145,19 @@ export const ReviewViewDataSchema = z.object({
       && view.warnings.every(code => view.acknowledged_warnings.includes(code))));
 });
 export type DocumentKey = z.infer<typeof DocumentKeySchema>;
+
+export const ExportSummarySchema = z.object({
+  sync_pair_id: DocumentKeySchema.shape.sync_pair_id,
+  exported: z.array(DocumentKeySchema.shape.doc_id),
+  failed: z.array(z.object({ doc_id: DocumentKeySchema.shape.doc_id, error: SafeErrorSchema }).strict()),
+  error: SafeErrorSchema.nullable(),
+  cancelled: z.boolean(),
+  audit_warning: z.boolean(),
+}).strict().refine((summary) => {
+  const ids = [...summary.exported, ...summary.failed.map((failure) => failure.doc_id)];
+  return new Set(ids).size === ids.length && (!summary.cancelled || ids.length === 0);
+}, "Inconsistent export results");
+export type ExportSummary = z.infer<typeof ExportSummarySchema>;
 export type ReviewStatus = z.infer<typeof ReviewStatusSchema>;
 export type Decisions = z.infer<typeof DecisionsSchema>;
 export type OutputEntry = z.infer<typeof OutputEntrySchema>;

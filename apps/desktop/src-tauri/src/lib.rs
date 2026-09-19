@@ -30,6 +30,7 @@ pub fn run() {
             commands::list_models,
             commands::open_review,
             commands::save_review,
+            commands::export_approved,
             commands::start_sync,
             commands::cancel_sync,
             commands::get_run_summary,

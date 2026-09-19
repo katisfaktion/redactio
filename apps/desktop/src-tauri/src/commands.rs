@@ -330,6 +330,23 @@ pub fn audit_location(state: State<'_, AppState>) -> String {
 }
 
 #[tauri::command]
+pub async fn export_approved(
+    state: State<'_, AppState>,
+    pair_id: Uuid,
+    doc_ids: Vec<String>,
+    destination: Option<PathBuf>,
+) -> Result<crate::domain::export::ExportSummary, AppError> {
+    crate::domain::export::export_approved(
+        &state.runs,
+        pair_id,
+        doc_ids,
+        destination.as_deref(),
+        || state.sidecar(),
+    )
+    .await
+}
+
+#[tauri::command]
 pub fn open_audit_folder(state: State<'_, AppState>) -> Result<(), AppError> {
     let directory = &state.app_config_root;
     #[cfg(windows)]

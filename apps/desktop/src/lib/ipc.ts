@@ -12,6 +12,7 @@ import {
   DocumentKeySchema,
   ReviewViewDataSchema,
   SaveReviewSchema,
+  ExportSummarySchema,
   type DocumentKey,
   type SaveReview,
   type ProcessingConfig,
@@ -81,6 +82,28 @@ export const reviewApi = {
   },
 };
 export type ReviewApi = typeof reviewApi;
+
+export const exportApi = {
+  approved: async (pairId: string, keys: DocumentKey[], destination: string | null) => {
+    const pair = DocumentKeySchema.shape.sync_pair_id.parse(pairId);
+    const requested = z.array(DocumentKeySchema).min(1).parse(keys);
+    const ids = requested.map((key) => key.doc_id);
+    if (requested.some((key) => key.sync_pair_id !== pair) || new Set(ids).size !== ids.length) {
+      throw { code: "invalid_export_selection", retryable: false };
+    }
+    const result = ExportSummarySchema.parse(await invoke<unknown>("export_approved", {
+      pairId: pair, docIds: ids, destination: z.string().min(1).nullable().parse(destination),
+    }));
+    const returned = [...result.exported, ...result.failed.map((failure) => failure.doc_id)];
+    if (result.sync_pair_id !== pair || returned.some((id) => !ids.includes(id))
+      || (!result.error && !result.cancelled && returned.length !== ids.length)
+      || result.cancelled !== (destination === null)) {
+      throw { code: "ipc_error", retryable: false };
+    }
+    return result;
+  },
+};
+export type ExportApi = typeof exportApi;
 
 export function safeError(error: unknown): SafeError {
   const parsed = SafeErrorSchema.safeParse(error);

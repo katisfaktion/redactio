@@ -61,9 +61,9 @@ pub struct SaveReview {
     pub acknowledged_warnings: Vec<String>,
 }
 
-struct CurrentReview {
+pub(crate) struct CurrentReview {
     mapping: Mapping,
-    record: ReviewRecord,
+    pub(crate) record: ReviewRecord,
     source: ValidatedWrite,
     output: ValidatedWrite,
     source_path: String,
@@ -252,7 +252,7 @@ pub async fn save_review(
     Ok(view(record, result))
 }
 
-fn load_current(
+pub(crate) fn load_current(
     pair: &SyncPair,
     key: &DocumentKey,
     settings_path: &Path,
@@ -322,7 +322,7 @@ fn load_current(
     })
 }
 
-fn recheck(
+pub(crate) fn recheck(
     current: &CurrentReview,
     pair: &SyncPair,
     key: &DocumentKey,
