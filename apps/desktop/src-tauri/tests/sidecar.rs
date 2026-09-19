@@ -515,6 +515,132 @@ fn fresh_process_restores_configuration_after_timeout_and_ping() {
 }
 
 #[test]
+fn shutdown_during_configuration_replay_is_classified_as_cancellation() {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_io()
+        .enable_time()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let directory = tempfile::tempdir().unwrap();
+            let marker = directory.path().join("cancel-replay");
+            let child = fake_with_marker("replay-hang", &marker);
+            let pair = "00000000-0000-0000-0000-000000000001";
+            let revision = "00000000-0000-0000-0000-000000000003";
+            child
+                .request::<_, ConfigureResult>(
+                    "configure",
+                    &configuration(pair, revision),
+                    Duration::from_secs(1),
+                )
+                .await
+                .unwrap();
+            child.shutdown().await;
+
+            let request_child = child.clone();
+            let request = tokio::spawn(async move {
+                request_child
+                    .request::<_, serde_json::Value>(
+                        "process_document",
+                        &document(pair, revision),
+                        Duration::from_secs(10),
+                    )
+                    .await
+            });
+            wait_for_marker(&marker).await;
+            child.shutdown().await;
+
+            let error = request.await.unwrap().unwrap_err();
+            assert_eq!(error.code, "operation_cancelled");
+        });
+}
+
+#[test]
+fn first_exit_during_initial_replay_uses_the_single_restart_budget() {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_io()
+        .enable_time()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let directory = tempfile::tempdir().unwrap();
+            let marker = directory.path().join("one-replay-exit");
+            let child = fake_with_marker("replay-exit-once", &marker);
+            let pair = "00000000-0000-0000-0000-000000000001";
+            let revision = "00000000-0000-0000-0000-000000000003";
+            child
+                .request::<_, ConfigureResult>(
+                    "configure",
+                    &configuration(pair, revision),
+                    Duration::from_secs(1),
+                )
+                .await
+                .unwrap();
+            child.shutdown().await;
+
+            let processed: serde_json::Value = child
+                .request(
+                    "process_document",
+                    &document(pair, revision),
+                    Duration::from_secs(2),
+                )
+                .await
+                .unwrap();
+            assert_eq!(processed["configured_model"], "de_core_news_sm");
+            assert_eq!(
+                std::fs::read_to_string(marker.with_extension("configs"))
+                    .unwrap()
+                    .lines()
+                    .count(),
+                3
+            );
+            child.shutdown().await;
+        });
+}
+
+#[test]
+fn second_exit_during_replay_stops_without_a_third_attempt() {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_io()
+        .enable_time()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let directory = tempfile::tempdir().unwrap();
+            let marker = directory.path().join("two-replay-exits");
+            let child = fake_with_marker("replay-exit-twice", &marker);
+            let pair = "00000000-0000-0000-0000-000000000001";
+            let revision = "00000000-0000-0000-0000-000000000003";
+            child
+                .request::<_, ConfigureResult>(
+                    "configure",
+                    &configuration(pair, revision),
+                    Duration::from_secs(1),
+                )
+                .await
+                .unwrap();
+            child.shutdown().await;
+
+            let processed: Result<serde_json::Value, _> = child
+                .request(
+                    "process_document",
+                    &document(pair, revision),
+                    Duration::from_secs(2),
+                )
+                .await;
+            assert_eq!(processed.unwrap_err().code, "engine_unavailable");
+            assert_eq!(
+                std::fs::read_to_string(marker.with_extension("configs"))
+                    .unwrap()
+                    .lines()
+                    .count(),
+                3
+            );
+            child.shutdown().await;
+        });
+}
+
+#[test]
 fn invalid_configure_result_is_not_saved_or_replayed() {
     tokio::runtime::Builder::new_current_thread()
         .enable_io()

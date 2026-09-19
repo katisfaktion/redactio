@@ -116,7 +116,16 @@ impl Sidecar {
 
         for attempt in 0..2 {
             if is_collection_request(kind) {
-                self.restore_configuration(deadline, cancellation).await?;
+                let restored = self.restore_configuration(deadline, cancellation).await;
+                self.check_cancellation(cancellation)?;
+                match restored {
+                    Ok(()) => {}
+                    Err(AttemptError::Exited) if attempt == 0 => continue,
+                    Err(AttemptError::Exited) => {
+                        return Err(AppError::new("engine_unavailable"));
+                    }
+                    Err(AttemptError::Public(error)) => return Err(error),
+                }
             }
             let result = self
                 .request_once(kind, &payload, identity.as_ref(), deadline, cancellation)
@@ -155,12 +164,14 @@ impl Sidecar {
         &self,
         deadline: tokio::time::Instant,
         cancellation: u64,
-    ) -> Result<(), AppError> {
+    ) -> Result<(), AttemptError> {
         let saved = self.inner.configured.lock().await.clone();
         let Some(saved) = saved else {
             return Ok(());
         };
-        let running = self.ensure_started(cancellation)?;
+        let running = self
+            .ensure_started(cancellation)
+            .map_err(AttemptError::Public)?;
         if running.is_configured(&saved.identity) {
             return Ok(());
         }
@@ -175,12 +186,12 @@ impl Sidecar {
             .await
         {
             Ok(success) => success,
-            Err(AttemptError::Exited) => return Err(AppError::new("engine_unavailable")),
-            Err(AttemptError::Public(error)) => return Err(error),
+            Err(error) => return Err(error),
         };
-        self.check_cancellation(cancellation)?;
+        self.check_cancellation(cancellation)
+            .map_err(AttemptError::Public)?;
         serde_json::from_value::<ConfigureResult>(success.payload.clone())
-            .map_err(|_| AppError::new("invalid_sidecar_protocol"))?;
+            .map_err(|_| AttemptError::Public(AppError::new("invalid_sidecar_protocol")))?;
         success
             .guard
             .running

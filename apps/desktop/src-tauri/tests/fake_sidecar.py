@@ -129,6 +129,9 @@ def main() -> None:
                 "timeout-then-require-config",
                 "invalid-configure-then-exit",
                 "invalid-configure-replay",
+                "replay-exit-once",
+                "replay-exit-twice",
+                "replay-hang",
             }
             and marker is not None
         ):
@@ -137,6 +140,17 @@ def main() -> None:
                 configured = request["payload"]
                 with config_log.open("a", encoding="utf-8") as log:
                     log.write(json.dumps(configured, sort_keys=True) + "\n")
+                configure_count = len(
+                    config_log.read_text(encoding="utf-8").splitlines()
+                )
+                if mode == "replay-exit-once" and configure_count == 2:
+                    os._exit(7)
+                if mode == "replay-exit-twice" and configure_count in {2, 3}:
+                    os._exit(7)
+                if mode == "replay-hang" and configure_count == 2:
+                    marker.write_text("replaying", encoding="utf-8")
+                    time.sleep(5)
+                    continue
             elif request["type"] == "process_document":
                 if mode == "timeout-then-require-config" and not marker.exists():
                     marker.write_text("timed", encoding="utf-8")
@@ -227,6 +241,9 @@ def main() -> None:
                 "timeout-then-require-config",
                 "invalid-configure-then-exit",
                 "invalid-configure-replay",
+                "replay-exit-once",
+                "replay-exit-twice",
+                "replay-hang",
             }
             and request["type"] == "process_document"
             and configured is not None
