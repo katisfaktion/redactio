@@ -1,0 +1,2 @@
+# Upstream notices are hash-pinned; preserve their exact bytes on Windows too.
+packaging/licenses/** -text -whitespace

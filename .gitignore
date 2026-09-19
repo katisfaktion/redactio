@@ -20,6 +20,7 @@ audit-log.jsonl
 node_modules/
 .pnpm-store/
 dist/
+packaging/*.pkg
 target/
 apps/desktop/src-tauri/gen/
 .venv/
