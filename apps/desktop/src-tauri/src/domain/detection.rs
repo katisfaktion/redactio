@@ -47,7 +47,7 @@ pub(crate) async fn apply_configuration(
         guard
             .config
             .validate(path.parent().ok_or_else(|| AppError::new("invalid_path"))?)?;
-        guard.source.validate(&pair.source_folder)?;
+        guard.source()?.validate(&pair.source_folder)?;
         let mut settings = load_settings(path)?;
         let saved_settings = settings.clone();
         if !settings.sync_pairs.iter().any(|current| current == pair) {
@@ -74,7 +74,7 @@ pub(crate) async fn apply_configuration(
         }
         if changed {
             let mut mapping = Mapping::load(&pair.source_folder, pair.id, &pair.target_folder)?;
-            recover_pending(pair, &mut mapping, &guard.source, path, &guard.config)?;
+            recover_pending(pair, &mut mapping, guard.source()?, path, &guard.config)?;
             if mapping
                 .entries()
                 .iter()
@@ -83,7 +83,7 @@ pub(crate) async fn apply_configuration(
                 return Err(AppError::new("recovery_pending"));
             }
         }
-        guard.source.validate(&pair.source_folder)?;
+        guard.source()?.validate(&pair.source_folder)?;
         guard.config.validate(path.parent().unwrap())?;
         if load_settings(path)? != saved_settings {
             return Err(AppError::new("configuration_changed"));

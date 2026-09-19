@@ -807,3 +807,128 @@ fn overflow_never_wraps_into_a_consistent_count() {
         assert_eq!(counts.completed(), u64::MAX);
     }
 }
+
+#[test]
+fn registered_missing_root_preparation_is_an_audited_failed_run_with_visible_audit_warning() {
+    runtime().block_on(async {
+        for target_missing in [false, true] {
+            for audit_blocked in [false, true] {
+                let f = Fixture::new();
+                let pair = &f.settings.sync_pairs[0];
+                let unavailable = if target_missing {
+                    &pair.target_folder
+                } else {
+                    &pair.source_folder
+                };
+                let retained = f._root.path().join("retained-root");
+                fs::rename(unavailable, &retained).unwrap();
+                let before: Vec<_> = fs::read_dir(&retained)
+                    .unwrap()
+                    .map(|entry| entry.unwrap().file_name())
+                    .collect();
+                let audit = f.path.parent().unwrap().join("audit-log.jsonl");
+                if audit_blocked {
+                    fs::create_dir(&audit).unwrap();
+                }
+                let run = f.controller.prepare(pair.id, None, vec![]).unwrap();
+                let run_id = run.run_id;
+                assert!(f.controller.try_operation().is_err());
+                assert!(CollectionGuard::acquire(f.path.parent().unwrap()).is_err());
+                let mut finished = false;
+                let summary = f
+                    .controller
+                    .execute(
+                        run,
+                        Err(std::io::Error::other("CANARY_SIDECAR_FAILURE").into()),
+                        |progress| {
+                            if progress.stage == redactio_lib::domain::sync::RunStage::Finished {
+                                finished = true;
+                            }
+                        },
+                    )
+                    .await;
+                assert!(finished);
+                assert_eq!(summary.outcome, RunOutcome::Failed);
+                assert_eq!(summary.error.as_ref().unwrap().code, "path_unavailable");
+                assert_eq!(summary.audit_warning, audit_blocked);
+                assert_eq!(summary.progress.counts, RunCounts::default());
+                assert_eq!(
+                    f.controller
+                        .summary(pair.id, run_id)
+                        .unwrap()
+                        .unwrap()
+                        .audit_warning,
+                    audit_blocked
+                );
+                assert!(!unavailable.exists());
+                assert_eq!(
+                    fs::read_dir(&retained)
+                        .unwrap()
+                        .map(|entry| entry.unwrap().file_name())
+                        .collect::<Vec<_>>(),
+                    before
+                );
+                if !audit_blocked {
+                    let bytes = fs::read_to_string(&audit).unwrap();
+                    let entry: serde_json::Value = serde_json::from_str(bytes.trim()).unwrap();
+                    assert_eq!(entry["sync_pair_id"], pair.id.to_string());
+                    assert_eq!(entry["action"], "sync");
+                    assert_eq!(entry["outcome"], "failed");
+                    assert_eq!(
+                        entry["error_codes"],
+                        serde_json::json!(["path_unavailable"])
+                    );
+                    assert!(entry["engine"].is_null());
+                    assert!(!bytes.contains("CANARY"));
+                }
+                assert!(f.controller.try_operation().is_ok());
+                assert!(CollectionGuard::acquire(f.path.parent().unwrap()).is_ok());
+            }
+        }
+    });
+}
+
+#[test]
+fn preparation_keeps_eager_source_exclusion_and_busy_unknown_attempts_unadmitted() {
+    let f = Fixture::new();
+    let pair = &f.settings.sync_pairs[0];
+    let audit = f.path.parent().unwrap().join("audit-log.jsonl");
+    let run = f.controller.prepare(pair.id, None, vec![]).unwrap();
+    assert!(CollectionGuard::acquire(&pair.source_folder).is_err());
+    assert!(CollectionGuard::acquire(f.path.parent().unwrap()).is_err());
+    assert_eq!(
+        f.controller
+            .prepare(pair.id, None, vec![])
+            .err()
+            .unwrap()
+            .code,
+        "operation_busy"
+    );
+    drop(run);
+    let unknown = uuid::Uuid::new_v4();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+    loop {
+        let error = f.controller.prepare(unknown, None, vec![]).err().unwrap();
+        // Concurrent test sidecars briefly inherit a dropped lock until exec.
+        // Configuration locking correctly precedes unknown-pair validation.
+        if error.code != "file_busy" || std::time::Instant::now() >= deadline {
+            assert_eq!(error.code, "unknown_pair");
+            break;
+        }
+        std::thread::yield_now();
+    }
+    let held = CollectionGuard::acquire(&pair.source_folder).unwrap();
+    assert_eq!(
+        f.controller
+            .prepare(pair.id, None, vec![])
+            .err()
+            .unwrap()
+            .code,
+        "file_busy"
+    );
+    assert!(f.controller.try_operation().is_ok());
+    assert!(CollectionGuard::acquire(f.path.parent().unwrap()).is_ok());
+    assert!(!audit.exists());
+    drop(held);
+    assert!(f.controller.prepare(pair.id, None, vec![]).is_ok());
+}

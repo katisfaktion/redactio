@@ -744,3 +744,132 @@ fn snapshot_recheck_rejects_source_output_and_destination_races_under_all_guards
         }
     });
 }
+
+#[test]
+fn registered_missing_roots_and_picker_cancellation_are_audited_without_source_or_model_access() {
+    runtime().block_on(async {
+        for root_kind in ["source", "target", "other-source"] {
+            for cancelled in [false, true] {
+                for audit_blocked in [false, true] {
+                    let f = Fixture::new();
+                    let settings = load_settings(&f.path).unwrap();
+                    let pair = &settings.sync_pairs[0];
+                    let unavailable = match root_kind {
+                        "source" => &pair.source_folder,
+                        "target" => &pair.target_folder,
+                        _ => &settings.sync_pairs[1].source_folder,
+                    };
+                    let retained = f.root.path().join("retained-root");
+                    fs::rename(unavailable, &retained).unwrap();
+                    let before: Vec<_> = fs::read_dir(&retained)
+                        .unwrap()
+                        .map(|entry| entry.unwrap().file_name())
+                        .collect();
+                    let destination = f.root.path().join("export");
+                    fs::create_dir(&destination).unwrap();
+                    let audit = f.path.parent().unwrap().join("audit-log.jsonl");
+                    if audit_blocked {
+                        fs::create_dir(&audit).unwrap();
+                    }
+                    let result = export_approved(
+                        &f.controller,
+                        pair.id,
+                        vec!["doc-0001".into()],
+                        (!cancelled).then_some(destination.as_path()),
+                        || panic!("missing roots/cancellation must not resolve sidecar"),
+                    )
+                    .await
+                    .unwrap();
+                    assert_eq!(result.cancelled, cancelled);
+                    assert_eq!(result.audit_warning, audit_blocked);
+                    if cancelled {
+                        assert!(result.error.is_none());
+                    } else {
+                        assert_eq!(result.error.unwrap().code, "path_unavailable");
+                    }
+                    assert!(result.exported.is_empty());
+                    assert!(result.failed.is_empty());
+                    assert!(!unavailable.exists());
+                    assert_eq!(fs::read_dir(&destination).unwrap().count(), 0);
+                    let after: Vec<_> = fs::read_dir(&retained)
+                        .unwrap()
+                        .map(|entry| entry.unwrap().file_name())
+                        .collect();
+                    assert_eq!(after, before);
+                    if !audit_blocked {
+                        let bytes = fs::read_to_string(&audit).unwrap();
+                        let entry: serde_json::Value = serde_json::from_str(bytes.trim()).unwrap();
+                        assert_eq!(entry["sync_pair_id"], pair.id.to_string());
+                        assert_eq!(entry["action"], "export");
+                        assert_eq!(
+                            entry["outcome"],
+                            if cancelled { "cancelled" } else { "failed" }
+                        );
+                        assert_eq!(entry["counts"]["unprocessed"], 1);
+                        assert!(entry["engine"].is_null());
+                        assert!(!bytes.contains("retained-root"));
+                    }
+                    assert!(f.controller.try_operation().is_ok());
+                    assert!(CollectionGuard::acquire(f.path.parent().unwrap()).is_ok());
+                }
+            }
+        }
+    });
+}
+
+#[test]
+fn export_busy_and_unknown_commands_remain_unadmitted() {
+    runtime().block_on(async {
+        let f = Fixture::new();
+        let pair = load_settings(&f.path).unwrap().sync_pairs.remove(0);
+        let destination = f.root.path().join("export");
+        fs::create_dir(&destination).unwrap();
+        let held = f.controller.try_operation().unwrap();
+        assert_eq!(
+            export_approved(
+                &f.controller,
+                pair.id,
+                vec!["doc-0001".into()],
+                Some(&destination),
+                || panic!("busy")
+            )
+            .await
+            .unwrap_err()
+            .code,
+            "operation_busy"
+        );
+        drop(held);
+        assert_eq!(
+            export_approved(
+                &f.controller,
+                uuid::Uuid::new_v4(),
+                vec!["doc-0001".into()],
+                Some(&destination),
+                || panic!("unknown")
+            )
+            .await
+            .unwrap_err()
+            .code,
+            "unknown_pair"
+        );
+        let source = CollectionGuard::acquire(&pair.source_folder).unwrap();
+        assert_eq!(
+            export_approved(
+                &f.controller,
+                pair.id,
+                vec!["doc-0001".into()],
+                Some(&destination),
+                || panic!("source busy")
+            )
+            .await
+            .unwrap_err()
+            .code,
+            "file_busy"
+        );
+        assert!(!f.path.parent().unwrap().join("audit-log.jsonl").exists());
+        assert_eq!(fs::read_dir(destination).unwrap().count(), 0);
+        assert!(f.controller.try_operation().is_ok());
+        assert!(CollectionGuard::acquire(f.path.parent().unwrap()).is_ok());
+        drop(source);
+    });
+}

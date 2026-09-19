@@ -104,9 +104,16 @@ struct ActiveRun {
 /// Lock order is app operation, app config, then source. All survive awaits and
 /// all exits release them, including a dropped worker future.
 pub struct OperationGuard {
-    pub(crate) source: CollectionGuard,
+    source: Option<CollectionGuard>,
     pub(crate) config: CollectionGuard,
     _operation: OwnedMutexGuard<()>,
+}
+impl OperationGuard {
+    pub(crate) fn source(&self) -> Result<&CollectionGuard, AppError> {
+        self.source
+            .as_ref()
+            .ok_or_else(|| AppError::new("source_not_locked"))
+    }
 }
 pub struct BatchRun {
     pub run_id: Uuid,
@@ -118,6 +125,7 @@ pub struct BatchRun {
     guard: OperationGuard,
     started_at: String,
     engine: Option<ProcessingFingerprint>,
+    preparation_error: Option<AppError>,
 }
 
 impl Drop for BatchRun {
@@ -166,6 +174,14 @@ impl RunController {
     }
 
     pub(crate) fn lock_pair(&self, pair_id: Uuid) -> Result<(SyncPair, OperationGuard), AppError> {
+        let (pair, mut guard) = self.admit_pair(pair_id)?;
+        self.lock_source(&pair, &mut guard)?;
+        Ok((pair, guard))
+    }
+
+    /// A registered attempt can be audited even when its pair roots are unavailable.
+    /// This stage only acquires the app/config locks and validates saved identity.
+    pub(crate) fn admit_pair(&self, pair_id: Uuid) -> Result<(SyncPair, OperationGuard), AppError> {
         let operation = self.try_operation()?;
         let root = self
             .inner
@@ -180,17 +196,36 @@ impl RunController {
             .find(|pair| pair.id == pair_id)
             .cloned()
             .ok_or_else(|| AppError::new("unknown_pair"))?;
-        settings.validate_roots_with(&[root.to_path_buf()])?;
-        let source = CollectionGuard::acquire(&pair.source_folder)?;
-        settings.validate_registry(&[root.to_path_buf()])?;
         Ok((
             pair,
             OperationGuard {
                 _operation: operation,
                 config,
-                source,
+                source: None,
             },
         ))
+    }
+
+    pub(crate) fn lock_source(
+        &self,
+        pair: &SyncPair,
+        guard: &mut OperationGuard,
+    ) -> Result<(), AppError> {
+        let root = self
+            .inner
+            .settings_path
+            .parent()
+            .ok_or_else(|| AppError::new("invalid_path"))?;
+        guard.config.validate(root)?;
+        let settings = load_settings(&self.inner.settings_path)?;
+        if !settings.sync_pairs.iter().any(|saved| saved == pair) {
+            return Err(AppError::new("configuration_changed"));
+        }
+        settings.validate_roots_with(&[root.to_path_buf()])?;
+        let source = CollectionGuard::acquire(&pair.source_folder)?;
+        settings.validate_registry(&[root.to_path_buf()])?;
+        guard.source = Some(source);
+        Ok(())
     }
 
     pub fn prepare(
@@ -199,7 +234,13 @@ impl RunController {
         paths: Option<Vec<String>>,
         force: Vec<String>,
     ) -> Result<BatchRun, AppError> {
-        let (pair, guard) = self.lock_pair(pair_id)?;
+        let (pair, mut guard) = self.admit_pair(pair_id)?;
+        let started_at = now();
+        let preparation_error = match self.lock_source(&pair, &mut guard) {
+            Ok(()) => None,
+            Err(error) if error.code == "file_busy" => return Err(error),
+            Err(error) => Some(error),
+        };
         let run_id = Uuid::new_v4();
         let cancelled = Arc::new(AtomicBool::new(false));
         *self
@@ -219,8 +260,9 @@ impl RunController {
             cancelled,
             controller: self.clone(),
             guard,
-            started_at: now(),
+            started_at,
             engine: None,
+            preparation_error,
         })
     }
 
@@ -350,6 +392,9 @@ impl RunController {
     ) -> Result<(), AppError> {
         publish(&summary.progress, emit)?;
         cancelled(run)?;
+        if let Some(error) = run.preparation_error.take() {
+            return Err(error);
+        }
         let sidecar = sidecar?;
         let config = run.pair.config.clone();
         let configured = super::detection::apply_configuration(
@@ -372,7 +417,7 @@ impl RunController {
         match recover_pending(
             &run.pair,
             &mut mapping,
-            &run.guard.source,
+            run.guard.source()?,
             &self.inner.settings_path,
             &run.guard.config,
         ) {
@@ -625,7 +670,7 @@ async fn process_file(
             }
         }
     }
-    let doc_id = mapping.reserve_with_guard(&file.relative_path, &run.guard.source)?;
+    let doc_id = mapping.reserve_with_guard(&file.relative_path, run.guard.source()?)?;
     let key = DocumentKey {
         sync_pair_id: run.pair.id,
         doc_id: doc_id.clone(),
@@ -755,7 +800,7 @@ async fn process_file(
         mapping,
         candidate,
         observed_output.as_deref(),
-        &run.guard.source,
+        run.guard.source()?,
         &run.controller.inner.settings_path,
         &run.guard.config,
     );
@@ -765,7 +810,7 @@ async fn process_file(
         let _ = recover_pending(
             &run.pair,
             mapping,
-            &run.guard.source,
+            run.guard.source()?,
             &run.controller.inner.settings_path,
             &run.guard.config,
         );

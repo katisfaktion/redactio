@@ -104,12 +104,22 @@ pub async fn export_approved(
     destination: Option<&Path>,
     sidecar: impl FnOnce() -> Result<Sidecar, AppError>,
 ) -> Result<ExportSummary, AppError> {
-    let (mut pair, guard) = controller.lock_pair(pair_id)?;
+    let (mut pair, mut guard) = controller.admit_pair(pair_id)?;
     let settings_path = controller.settings_path();
     let config_dir = settings_path
         .parent()
         .ok_or_else(|| AppError::new("invalid_path"))?;
     let started_at = now();
+    let preparation_error = if destination.is_some() {
+        match controller.lock_source(&pair, &mut guard) {
+            Ok(()) => None,
+            Err(error) if error.code == "file_busy" => return Err(error),
+            Err(error) => Some(error),
+        }
+    } else {
+        None
+    };
+    let mut engine = None;
     let mut summary = ExportSummary {
         sync_pair_id: pair_id,
         exported: vec![],
@@ -122,6 +132,9 @@ pub async fn export_approved(
         let Some(destination) = destination else {
             return Ok(());
         };
+        if let Some(error) = preparation_error {
+            return Err(error);
+        }
         let mut unique = HashSet::new();
         if doc_ids.is_empty()
             || doc_ids
@@ -140,6 +153,7 @@ pub async fn export_approved(
             &sidecar,
         )
         .await?;
+        engine = pair.processing_fingerprint.clone();
         let mapping = Mapping::load(&pair.source_folder, pair.id, &pair.target_folder)?;
         if doc_ids
             .iter()
@@ -216,7 +230,7 @@ pub async fn export_approved(
             outcome,
             counts,
             processing_revision: pair.processing_revision,
-            engine: pair.processing_fingerprint.clone(),
+            engine,
             error_codes,
         },
     )
@@ -238,7 +252,7 @@ fn export_one(
         &destination.path,
         &destination.path.join(format!("{}.md", key.doc_id)),
     )?;
-    let current = review::load_current(pair, key, settings_path, &guard.config, &guard.source)?;
+    let current = review::load_current(pair, key, settings_path, &guard.config, guard.source()?)?;
     if &current.record.engine != engine {
         return Err(AppError::new("reprocess_required"));
     }
@@ -278,7 +292,7 @@ fn export_one(
         key,
         settings_path,
         &guard.config,
-        &guard.source,
+        guard.source()?,
     )?;
     destination.validate()?;
     checked.create_atomic(&bytes)

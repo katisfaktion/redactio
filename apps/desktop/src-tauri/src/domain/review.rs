@@ -91,7 +91,7 @@ pub async fn open_configured(
         key,
         controller.settings_path(),
         &guard.config,
-        &guard.source,
+        guard.source()?,
         sidecar,
         &configured.engine,
     )
@@ -120,7 +120,7 @@ pub async fn save_configured(
         input,
         controller.settings_path(),
         &guard.config,
-        &guard.source,
+        guard.source()?,
         sidecar,
         &configured.engine,
     )
