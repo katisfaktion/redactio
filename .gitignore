@@ -21,6 +21,7 @@ node_modules/
 .pnpm-store/
 dist/
 target/
+apps/desktop/src-tauri/gen/
 .venv/
 __pycache__/
 *.py[cod]

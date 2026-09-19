@@ -1,0 +1,1 @@
+{"name":"redactio","private":true,"scripts":{"dev":"pnpm --filter @redactio/desktop dev","tauri:dev":"pnpm --filter @redactio/desktop tauri dev","typecheck":"pnpm --filter @redactio/desktop typecheck","test":"pnpm --filter @redactio/desktop test","build":"pnpm --filter @redactio/desktop build"}}
