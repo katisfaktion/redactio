@@ -18,6 +18,7 @@ const entities = EntityTypeSchema.options.map(value => ({ value, label: labels[v
 const statuses = { pending: "Ausstehend", approved: "Freigegeben", rejected: "Abgelehnt", "needs-rework": "Nacharbeit erforderlich" };
 const errors: Record<string, string> = {
   review_conflict: "Das gespeicherte Ergebnis wurde geändert. Ihre Änderungen bleiben erhalten. Verwerfen Sie sie nur, wenn Sie den aktuellen Stand neu öffnen möchten.",
+  review_mismatch: "Die gespeicherte Prüfung stimmt nicht mit der aktuellen Ausgabe überein. Kehren Sie zur Dokumentliste zurück und verarbeiten Sie das Dokument erneut.",
   output_conflict: "Die Ausgabedatei wurde geändert. Ihre Änderungen bleiben erhalten; prüfen Sie den Konflikt in der Dokumentliste.",
   reprocess_required: "Quelle oder Erkennung hat sich geändert. Das Dokument muss erneut verarbeitet werden.",
   operation_busy: "Eine andere Verarbeitung läuft. Versuchen Sie es danach erneut.",

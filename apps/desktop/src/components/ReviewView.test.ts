@@ -124,6 +124,15 @@ test("warnings and empty extraction prevent approval and save failures are annou
   cleanup();
 });
 
+test("review mismatch directs the user back to reprocess the document", async () => {
+  const { review, wrapper, cleanup } = await setup();
+  review.error.value = { code: "review_mismatch", retryable: false };
+  await flushPromises();
+  expect(wrapper.get('[role="alert"]').text()).toContain("gespeicherte Prüfung stimmt nicht mit der aktuellen Ausgabe überein");
+  expect(wrapper.get('[role="alert"]').text()).toContain("Dokumentliste zurück und verarbeiten Sie das Dokument erneut");
+  cleanup();
+});
+
 test("warning acknowledgement explicitly gates approval through a labeled control", async () => {
   const { review, wrapper, cleanup } = await setup({ ...view, warnings: ["headers_footers"], status: "needs-rework" });
   expect(wrapper.get('[data-testid="approve-review"]').attributes("disabled")).toBeDefined();

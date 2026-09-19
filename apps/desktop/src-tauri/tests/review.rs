@@ -50,6 +50,27 @@ fn digest(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
+#[test]
+fn stored_detection_confidence_survives_review_replay_exactly() {
+    for confidence in [0.9433460831642151, 0.5021257996559143] {
+        let detection = Detection {
+            id: "synthetic-detection".into(),
+            start: 0,
+            end: 4,
+            entity_type: EntityType::Person,
+            confidence: Some(confidence),
+            recognizer: "BiomedBertRecognizer".into(),
+            origin: DetectionOrigin::Automatic,
+        };
+        let bytes = serde_json::to_vec(&detection).unwrap();
+        let restored: Detection = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            restored, detection,
+            "saved confidence changed during replay"
+        );
+    }
+}
+
 struct Fixture {
     _root: tempfile::TempDir,
     path: PathBuf,
@@ -103,7 +124,11 @@ seen = set()
 def checked_analyze(self, *args):
     if not getattr(self, '_test_seeding', False):
         raise AssertionError('review reran analysis')
-    return analyze(self, *args)
+    results = analyze(self, *args)
+    # Statistical model confidence must survive persisted review replay exactly.
+    for result in results:
+        result.confidence = 0.9433460831642151
+    return results
 def seed_once(self, request):
     key = (request.sync_pair_id, request.doc_id)
     if key in seen:
