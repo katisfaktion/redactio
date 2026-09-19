@@ -93,7 +93,7 @@ def run_loop(
             raw_request = json.loads(decoded)
             request_id = _request_id(raw_request)
             request = REQUEST_ADAPTER.validate_python(raw_request)
-        except (UnicodeDecodeError, json.JSONDecodeError, RecursionError, ValidationError):
+        except (UnicodeDecodeError, RecursionError, ValueError, ValidationError):
             _write_error(stdout, request_id, EngineError("invalid_request"))
             continue
 

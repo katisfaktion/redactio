@@ -142,6 +142,27 @@ def test_deeply_nested_json_returns_safe_error_and_loop_survives():
     assert replies[1]["type"] == "ping_result"
 
 
+def test_overlong_json_integer_returns_safe_error_and_loop_survives(capsys):
+    overlong_integer = b"9" * 5_000 + b"\n"
+    ping = b'{"id":"after-value-error","type":"ping","payload":{}}\n'
+
+    replies = replies_for(overlong_integer + ping)
+
+    assert replies == [
+        {
+            "id": "",
+            "type": "error",
+            "payload": {"code": "invalid_request", "retryable": False},
+        },
+        {
+            "id": "after-value-error",
+            "type": "ping_result",
+            "payload": {"protocol_version": 1},
+        },
+    ]
+    assert capsys.readouterr().err == ""
+
+
 def test_over_limit_input_returns_error_and_stops(monkeypatch):
     monkeypatch.setattr(ipc, "MAX_MESSAGE_BYTES", 128)
     raw = b"x" * 129 + b'\n{"id":"later","type":"ping","payload":{}}\n'
