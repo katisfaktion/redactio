@@ -59,19 +59,19 @@ Every row requires recorded outcomes and evidence against the final artifact. St
 | A03 Extraction | Run paragraphs/tables, separate warning/corrupt/empty cases and bounded size/expansion tests. Reading order is preserved; unsupported surfaces warn, corrupt input errors, empty bodies cannot approve, and limits stop work safely. | partial |
 | A04 Redaction | Inspect canary, repeated-name, overlap and Unicode outputs. All active synthetic identifiers are removed; repeated values reuse placeholders; zero-based code-point offsets delimit exactly the output placeholders. | partial |
 | A05 Configuration | Toggle entities, add invalid/valid regex and words, switch prefetched models and simulate engine/extraction revisions. Only affected pair results become stale; invalid/unavailable configuration does not save; rename/select leaves revisions stable. | partial |
-| A06 Incremental | Run twice, edit a source, remove output, tamper with output, and force a reviewed document. Unchanged work skips; changed/missing work regenerates; external edits/reviews require explicit resolution and no silent replacement. | unverified |
+| A06 Incremental | Run twice, edit a source, remove output, tamper with output, and force a reviewed document. Unchanged work skips; changed/missing work regenerates; external edits/reviews require explicit resolution and no silent replacement. | partial |
 | A07 Recovery | Inject every journal boundary, native locked-file failure and restart. Incomplete work stays pending, original bytes survive failed replacement, retry completes coherently and IDs are never reused. | partial |
-| A08 Cancellation | Cancel initialization and a document, double-click start, switch pair while busy and start another instance. No partial success or cross-pair changes appear; only one writer runs and cancellation visibly settles. | unverified |
+| A08 Cancellation | Cancel initialization and a document, double-click start, switch pair while busy and start another instance. No partial success or cross-pair changes appear; only one writer runs and cancellation visibly settles. | partial |
 | A09 Sidecar | Run real serialized requests plus malformed input, EOF/crash, timeout, late reply and shutdown tests. Errors remain bounded/safe, restart is limited, model identity matches and retries never duplicate commits. | partial |
 | A10 Review | Keyboard-add/dismiss/change entity types, save/reopen and change source/config. Body, offsets and counts agree; bound decisions persist; changed inputs invalidate decisions; approval binds exact final bytes. | partial |
-| A11 Export | Export current approvals to an empty directory outside all pairs, then try mixed ownership/stale/tampered output. Only selected current approved Markdown is copied; invalid selections fail and originals, notes, mappings and identifying rules are absent. | unverified |
+| A11 Export | Export current approvals to an empty directory outside all pairs, then try mixed ownership/stale/tampered output. Only selected current approved Markdown is copied; invalid selections fail and originals, notes, mappings and identifying rules are absent. | partial |
 | A12 Privacy | Use canaries in paths/rules/invalid data/errors and malicious Markdown links/HTML. Logs/frontmatter contain no canaries; preview cannot execute scripts or request remote assets. Observe app and all children during cold startup and the full flow: zero external attempts. | unverified |
-| A13 Audit | Complete/fail/cancel attempts, concurrent append/recovery and unwritable audit directory. Records retain correct opaque pair IDs, prior entries remain valid, no pair names leak, and audit failure is visibly announced. | unverified |
+| A13 Audit | Complete/fail/cancel attempts, concurrent append/recovery and unwritable audit directory. Records retain correct opaque pair IDs, prior entries remain valid, no pair names leak, and audit failure is visibly announced. | partial |
 | A14 Windows artifact | Extract exact ZIP to `C:\Users\Public\Redactio Prüfung` in a disposable Windows 11 x64 standard-user environment without dev tools/network. Launch/configure/scan/process/review/export/restart/exit succeed; app-local fixed WebView identity is observed; all Onyx assets/German text render without remote attempts. | unverified |
 | A15 Usability | Complete the main flow with Tab/Shift+Tab/Enter/Space/Escape and a screen reader. All controls have names, visible ordered focus and focus restoration; progress/errors announce, warning status is not color-only, contrast passes and large views/ordinary controls respond within 200 ms. | unverified |
 | A16 Pair lifecycle | Add/rename/select/restart/remove/re-add. Duplicate names fail, selected pair persists, removal preserves all data and re-adding restores managed identity and target binding. | partial |
 | A17 Pair isolation | Use two `doc-0001` records with distinct rules/models. Processing/review/retry/export stay in their owning pair; sidecar switches remove previous custom rules and load the selected local model. | partial |
-| A18 Pair routing | Send unknown/mismatched pair ownership, late replies, and switch with unsaved edits. Host rejects mismatches, late events never populate another pair, and switching requires save/discard. | unverified |
+| A18 Pair routing | Send unknown/mismatched pair ownership, late replies, and switch with unsaved edits. Host rejects mismatches, late events never populate another pair, and switching requires save/discard. | partial |
 
 ## Real-window evidence protocol
 
@@ -181,6 +181,16 @@ fixtures use the same runtime manifest-directory helper; no production code chan
 CI now explicitly executes the detection and review real-model opt-ins as well.
 This bounded checkpoint does not validate the final UI, export flow or rebuilt artifact;
 the Sandbox and symlink limitations above remain outstanding.
+
+Reviewed full P4 native regression on `49c6896`: 165 distinct default cases plus all
+five real-model opt-ins passed on Windows after focused fixture-only corrections
+(170 total). New export coverage includes native junction/alias rejection, destination
+ownership/races, exact approved bytes, mixed/stale/tampered records, partial retention,
+post-publication uncertainty, and missing-root/cancel audit behavior. The initial failures
+and focused reruns are retained separately; this count does not imply an unchanged
+all-green initial run. One file-symlink fixture remains explicitly unverified. Strict
+MSVC all-target Clippy and rustfmt passed. These checks run actual native test executables
+against reviewed production code; exact packaged GUI/A15 acceptance is still pending.
 
 Detailed command outputs and local synthetic evidence locations are maintained in the
 P5.2 task report. Remote CI has not run: no remote or publishing action was authorized.

@@ -45,7 +45,10 @@ fn empty_separate_directory_with_shared_name_prefix_is_accepted_without_writes()
         fs::create_dir(directory).unwrap();
     }
     assert_eq!(
-        validate_export_destination(&destination, &[source], &config).unwrap(),
+        validate_export_destination(&destination, &[source], &config)
+            .unwrap()
+            .canonicalize()
+            .unwrap(),
         destination.canonicalize().unwrap()
     );
     assert_eq!(fs::read_dir(destination).unwrap().count(), 0);

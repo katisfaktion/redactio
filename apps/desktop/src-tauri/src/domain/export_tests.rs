@@ -1,3 +1,6 @@
+#[path = "../../tests/common/mod.rs"]
+mod common;
+
 use crate::{
     domain::{
         detection,
@@ -48,7 +51,7 @@ impl Fixture {
         Sidecar::new(
             std::env::var_os("REDACTIO_TEST_PYTHON").unwrap().into(),
             vec![
-                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                common::manifest_dir()
                     .join("tests/fake_sidecar.py")
                     .into_os_string(),
                 mode.into(),
@@ -593,7 +596,9 @@ fn post_publication_error_retains_bytes_but_never_claims_durable_success() {
         let destination = f.root.path().join("export");
         fs::create_dir(&destination).unwrap();
         crate::domain::storage::tests::FAIL_AFTER_WRITE.set(Some((
-            destination.canonicalize().unwrap().join("doc-0002.md"),
+            crate::domain::paths::canonical_directory(&destination)
+                .unwrap()
+                .join("doc-0002.md"),
             "storage_durability_uncertain",
             false,
         )));
@@ -606,6 +611,7 @@ fn post_publication_error_retains_bytes_but_never_claims_durable_success() {
         )
         .await
         .unwrap();
+        assert!(crate::domain::storage::tests::FAIL_AFTER_WRITE.with_borrow(Option::is_none));
         assert_eq!(result.exported, ["doc-0001"]);
         assert_eq!(result.failed[0].doc_id, "doc-0002");
         assert_eq!(result.failed[0].error.code, "storage_durability_uncertain");
