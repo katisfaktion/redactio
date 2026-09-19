@@ -3,7 +3,7 @@ import socket
 import struct
 from io import BytesIO
 from pathlib import Path
-from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile
+from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile, ZipInfo
 
 import pytest
 from docx import Document
@@ -42,7 +42,11 @@ def package(
         for info in original.infolist():
             archive.writestr(info.filename, additions.pop(info.filename, original.read(info)))
         for name, content in additions.items():
-            archive.writestr(name, content)
+            info = ZipInfo(name)
+            # ZipInfo normalizes Windows separators; malformed fixtures need the raw name.
+            info.filename = name
+            info.compress_type = compression
+            archive.writestr(info, content)
     return target
 
 
