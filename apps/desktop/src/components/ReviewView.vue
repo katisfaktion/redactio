@@ -113,7 +113,7 @@ function capture(view: "original" | "preview") {
 function add() {
   if (!selected.value) return;
   props.review.add(selected.value, entity.value); selected.value = null;
-  window.getSelection()?.removeAllRanges();
+  if (!keyboard.value) window.getSelection()?.removeAllRanges();
 }
 function restorePreview(event: Event) {
   (event.target as HTMLTextAreaElement).value = projection.value.text;
