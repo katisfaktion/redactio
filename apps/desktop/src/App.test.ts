@@ -18,3 +18,12 @@ test("a settings load failure is visible instead of pretending setup is empty", 
   expect(wrapper.text()).toContain("Einstellungen konnten nicht geladen werden");
   expect(wrapper.text()).not.toContain("Ordnerpaar hinzufügen");
 });
+
+test("a missing source mapping asks for repair without offering empty setup", () => {
+  const wrapper = mount(App, { props: {
+    initialSettings: null,
+    initialError: { code: "mapping_missing", retryable: false },
+  } });
+  expect(wrapper.text()).toContain("muss repariert werden");
+  expect(wrapper.text()).not.toContain("Ordnerpaar hinzufügen");
+});

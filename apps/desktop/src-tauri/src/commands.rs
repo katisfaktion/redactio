@@ -77,7 +77,11 @@ impl From<Settings> for UiSettings {
 
 #[tauri::command]
 pub fn list_pairs(state: State<'_, AppState>) -> Result<UiSettings, AppError> {
-    Ok(load_settings(&state.settings_path)?.into())
+    let _guard = state
+        .mutation
+        .lock()
+        .map_err(|_| AppError::new("state_unavailable"))?;
+    Ok(load_registry(&state)?.into())
 }
 
 #[tauri::command]
@@ -134,10 +138,9 @@ fn mutate(
         .mutation
         .lock()
         .map_err(|_| AppError::new("state_unavailable"))?;
-    let mut settings = load_settings(&state.settings_path)?;
-    settings.validate_roots_with(std::slice::from_ref(&state.app_config_root))?;
+    let mut settings = load_registry(state)?;
     change(&mut settings)?;
-    settings.validate_roots_with(std::slice::from_ref(&state.app_config_root))?;
+    settings.validate_registry(std::slice::from_ref(&state.app_config_root))?;
     match save_settings(&state.settings_path, &settings) {
         Ok(()) => Ok(settings.into()),
         Err(error) => {
@@ -145,4 +148,10 @@ fn mutate(
             Err(error)
         }
     }
+}
+
+fn load_registry(state: &State<'_, AppState>) -> Result<Settings, AppError> {
+    let settings = load_settings(&state.settings_path)?;
+    settings.validate_registry(std::slice::from_ref(&state.app_config_root))?;
+    Ok(settings)
 }

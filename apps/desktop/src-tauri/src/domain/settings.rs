@@ -10,6 +10,7 @@ use std::{
     path::{Path, PathBuf},
 };
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
+use unicode_normalization::UnicodeNormalization;
 use uuid::Uuid;
 
 const MAPPING_FILE: &str = "_document-mapping.json";
@@ -295,6 +296,34 @@ impl Settings {
         Ok(())
     }
 
+    pub fn validate_registry(&self, extra_roots: &[PathBuf]) -> Result<(), AppError> {
+        self.validate_roots_with(extra_roots)?;
+        for pair in &self.sync_pairs {
+            let source = canonical_directory(&pair.source_folder)?;
+            let target = canonical_directory(&pair.target_folder)?;
+            let mapping_path = source.join(MAPPING_FILE);
+            let mapping_read = ValidatedWrite::new(&source, &mapping_path)?;
+            let bytes = match fs::read(&mapping_path) {
+                Ok(bytes) => bytes,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    return Err(AppError::new("mapping_missing"));
+                }
+                Err(error) => return Err(error.into()),
+            };
+            let mapping: Mapping =
+                serde_json::from_slice(&bytes).map_err(|_| AppError::new("invalid_mapping"))?;
+            mapping.validate()?;
+            if mapping.sync_pair_id != pair.id {
+                return Err(AppError::new("mapping_pair_mismatch"));
+            }
+            if canonical_directory(&mapping.target_folder)? != target {
+                return Err(AppError::new("mapping_target_mismatch"));
+            }
+            mapping_read.validate()?;
+        }
+        Ok(())
+    }
+
     pub fn roots(&self) -> Vec<PathBuf> {
         self.sync_pairs
             .iter()
@@ -352,7 +381,7 @@ fn checked_name<'a>(
 }
 
 fn fold_name(name: &str) -> String {
-    name.chars().flat_map(char::to_lowercase).collect()
+    name.nfc().flat_map(char::to_lowercase).nfc().collect()
 }
 
 #[derive(Debug, Serialize, Deserialize)]

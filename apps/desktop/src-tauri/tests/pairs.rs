@@ -61,6 +61,21 @@ fn names_are_trimmed_nonempty_and_unicode_case_insensitively_unique() {
 }
 
 #[test]
+fn canonically_equivalent_names_are_duplicates_without_changing_display_text() {
+    let root = tempfile::tempdir().unwrap();
+    let (source_a, target_a) = folders(&root, "a");
+    let (source_b, target_b) = folders(&root, "b");
+    let mut settings = Settings::default();
+
+    settings.add("Cafe\u{301}", &source_a, &target_a).unwrap();
+    assert_eq!(settings.sync_pairs[0].name, "Cafe\u{301}");
+    assert_eq!(
+        settings.add("CAFÉ", &source_b, &target_b).unwrap_err().code,
+        "duplicate_pair_name"
+    );
+}
+
+#[test]
 fn load_rejects_unknown_fields_invalid_selection_and_duplicate_ids() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("settings.json");
@@ -127,7 +142,74 @@ fn readd_compares_the_mapping_target_by_canonical_identity() {
     mapping["target_folder"] = json!(target_alias);
     fs::write(&mapping_path, serde_json::to_vec(&mapping).unwrap()).unwrap();
 
+    settings.validate_registry(&[]).unwrap();
     assert_eq!(settings.add("Book again", &source, &target).unwrap(), id);
+}
+
+#[test]
+fn registry_validation_rejects_a_missing_mapping_without_discarding_settings() {
+    let root = tempfile::tempdir().unwrap();
+    let (source, target) = folders(&root, "book");
+    let mut settings = Settings::default();
+    let id = settings.add("Book", &source, &target).unwrap();
+    fs::remove_file(source.join("_document-mapping.json")).unwrap();
+
+    assert_eq!(
+        settings.validate_registry(&[]).unwrap_err().code,
+        "mapping_missing"
+    );
+    assert_eq!(settings.sync_pairs[0].id, id);
+}
+
+#[test]
+fn registry_validation_rejects_a_corrupt_mapping_without_replacing_it() {
+    let root = tempfile::tempdir().unwrap();
+    let (source, target) = folders(&root, "book");
+    let mut settings = Settings::default();
+    settings.add("Book", &source, &target).unwrap();
+    let mapping_path = source.join("_document-mapping.json");
+    fs::write(&mapping_path, b"not json").unwrap();
+
+    assert_eq!(
+        settings.validate_registry(&[]).unwrap_err().code,
+        "invalid_mapping"
+    );
+    assert_eq!(fs::read(mapping_path).unwrap(), b"not json");
+}
+
+#[test]
+fn registry_validation_rejects_a_mismatched_target_binding() {
+    let root = tempfile::tempdir().unwrap();
+    let (source, target) = folders(&root, "book");
+    let (_, wrong_target) = folders(&root, "wrong");
+    let mut settings = Settings::default();
+    settings.add("Book", &source, &target).unwrap();
+    let mapping_path = source.join("_document-mapping.json");
+    let mut mapping: Value = serde_json::from_slice(&fs::read(&mapping_path).unwrap()).unwrap();
+    mapping["target_folder"] = json!(fs::canonicalize(wrong_target).unwrap());
+    fs::write(mapping_path, serde_json::to_vec(&mapping).unwrap()).unwrap();
+
+    assert_eq!(
+        settings.validate_registry(&[]).unwrap_err().code,
+        "mapping_target_mismatch"
+    );
+}
+
+#[test]
+fn registry_validation_rejects_a_mapping_replaced_with_another_pair_id() {
+    let root = tempfile::tempdir().unwrap();
+    let (source, target) = folders(&root, "book");
+    let mut settings = Settings::default();
+    settings.add("Book", &source, &target).unwrap();
+    let mapping_path = source.join("_document-mapping.json");
+    let mut mapping: Value = serde_json::from_slice(&fs::read(&mapping_path).unwrap()).unwrap();
+    mapping["sync_pair_id"] = json!(Uuid::new_v4());
+    fs::write(mapping_path, serde_json::to_vec(&mapping).unwrap()).unwrap();
+
+    assert_eq!(
+        settings.validate_registry(&[]).unwrap_err().code,
+        "mapping_pair_mismatch"
+    );
 }
 
 #[test]

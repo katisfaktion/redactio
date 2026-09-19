@@ -14,6 +14,9 @@ const pairs = usePairs(props.initialSettings ?? empty);
 const errorText: Record<string, string> = {
   invalid_settings: "Einstellungen konnten nicht geladen werden. Die vorhandene Datei wurde nicht verändert.",
   invalid_mapping: "Die Zuordnungsdatei ist ungültig und wurde nicht verändert.",
+  mapping_missing: "Die Zuordnungsdatei fehlt. Das Ordnerpaar muss repariert werden, bevor es verwendet werden kann.",
+  mapping_pair_mismatch: "Die Identität des Ordnerpaars stimmt nicht mit der Zuordnungsdatei überein. Das Ordnerpaar muss repariert werden.",
+  mapping_target_mismatch: "Der Zielordner stimmt nicht mit der Zuordnungsdatei überein. Das Ordnerpaar muss repariert werden.",
   invalid_pair_name: "Bitte geben Sie einen Namen ein.",
   duplicate_pair_name: "Dieser Name wird bereits verwendet.",
   target_not_empty: "Der Zielordner ist nicht leer und gehört noch nicht zu dieser Quelle.",
