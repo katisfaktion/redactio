@@ -3,6 +3,7 @@ import math
 import subprocess
 import sys
 from copy import deepcopy
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -247,6 +248,58 @@ def test_detection_rejects_invalid_spans_confidence_and_fields(mutation):
     mutation(value)
     with pytest.raises(ValidationError):
         Detection.model_validate(value)
+
+
+@pytest.mark.parametrize("confidence", [True, "0.5"])
+def test_detection_rejects_non_numeric_json_confidence(confidence):
+    value = detection()
+    value["confidence"] = confidence
+    with pytest.raises(ValidationError):
+        Detection.model_validate(value)
+
+
+@pytest.mark.parametrize("field", ["enabled", "include_positions"])
+def test_processing_config_rejects_coerced_json_booleans(field):
+    value: dict[str, Any] = {"include_positions": True}
+    if field == "enabled":
+        value["custom_rules"] = [
+            {
+                "id": RULE_ID,
+                "entity_type": "CUSTOM",
+                "enabled": "false",
+                "kind": "words",
+                "words": ["Synthetic"],
+            }
+        ]
+    else:
+        value[field] = "false"
+    with pytest.raises(ValidationError):
+        ProcessingConfig.model_validate(value)
+
+
+@pytest.mark.parametrize("timestamp", [0, "2026-09-19 10:00:00+02:00"])
+def test_document_metadata_requires_rfc3339_timestamp_string(timestamp):
+    payload = document_meta()
+    payload["redacted_at"] = timestamp
+    message = {
+        "id": "invalid-time",
+        "type": "process_document",
+        "payload": {**payload, "source_path": "synthetic.docx"},
+    }
+    with pytest.raises(ValidationError):
+        REQUEST_ADAPTER.validate_python(message)
+
+
+def test_internal_model_construction_accepts_aware_datetime():
+    payload = document_meta()
+    payload["redacted_at"] = datetime(2026, 9, 19, 8, 0, tzinfo=UTC)
+    REQUEST_ADAPTER.validate_python(
+        {
+            "id": "internal-time",
+            "type": "process_document",
+            "payload": {**payload, "source_path": "synthetic.docx"},
+        }
+    )
 
 
 @pytest.mark.parametrize(

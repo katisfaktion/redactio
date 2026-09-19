@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from typing import Annotated, Literal, TypeAlias
 from uuid import UUID
 
@@ -8,6 +9,7 @@ from pydantic import (
     AfterValidator,
     AwareDatetime,
     BaseModel,
+    BeforeValidator,
     ConfigDict,
     Field,
     StringConstraints,
@@ -26,6 +28,23 @@ def _canonical_uuid(value: str) -> str:
     return value
 
 
+_RFC3339 = re.compile(
+    r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}"
+    r"(?:\.[0-9]+)?(?:Z|[+-][0-9]{2}:[0-9]{2})$"
+)
+
+
+def _parse_rfc3339(value: object) -> datetime:
+    if isinstance(value, datetime):
+        return value
+    if not isinstance(value, str) or _RFC3339.fullmatch(value) is None:
+        raise ValueError("timestamp must be an RFC-3339 string")
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ValueError("invalid RFC-3339 timestamp") from error
+
+
 UuidString = Annotated[str, AfterValidator(_canonical_uuid)]
 RequestId = Annotated[str, StringConstraints(min_length=1, max_length=128)]
 OpaqueId = Annotated[str, StringConstraints(min_length=1, max_length=128)]
@@ -36,7 +55,11 @@ SafeCode = Annotated[
 ]
 Sha256 = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
 Offset = Annotated[int, Field(strict=True, ge=0)]
-Confidence = Annotated[float, Field(ge=0.0, le=1.0, allow_inf_nan=False)]
+Confidence = Annotated[
+    float,
+    Field(strict=True, ge=0.0, le=1.0, allow_inf_nan=False),
+]
+Timestamp = Annotated[AwareDatetime, BeforeValidator(_parse_rfc3339)]
 
 EntityType: TypeAlias = Literal[
     "PERSON",
@@ -64,7 +87,7 @@ DEFAULT_ENTITIES: tuple[EntityType, ...] = (
 
 
 class StrictModel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True)
 
 
 class EmptyPayload(StrictModel):
@@ -175,7 +198,7 @@ class DocumentKey(StrictModel):
 class DocumentMeta(DocumentKey):
     source_hash_sha256: Sha256
     processing_revision: UuidString
-    redacted_at: AwareDatetime
+    redacted_at: Timestamp
 
 
 class ProcessRequest(DocumentMeta):
@@ -186,7 +209,7 @@ class ReviewRequest(ProcessRequest):
     detections: list[Detection]
     decisions: Decisions
     review_status: ReviewStatus
-    reviewed_at: AwareDatetime | None
+    reviewed_at: Timestamp | None
     acknowledged_warnings: list[SafeCode]
 
 

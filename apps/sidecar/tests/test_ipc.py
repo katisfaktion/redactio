@@ -127,6 +127,21 @@ def test_nonfinite_confidence_is_an_invalid_request():
     }
 
 
+def test_deeply_nested_json_returns_safe_error_and_loop_survives():
+    nested = b"[" * 10_000 + b"]" * 10_000 + b"\n"
+    ping = b'{"id":"after-recursion","type":"ping","payload":{}}\n'
+
+    replies = replies_for(nested + ping)
+
+    assert replies[0] == {
+        "id": "",
+        "type": "error",
+        "payload": {"code": "invalid_request", "retryable": False},
+    }
+    assert replies[1]["id"] == "after-recursion"
+    assert replies[1]["type"] == "ping_result"
+
+
 def test_over_limit_input_returns_error_and_stops(monkeypatch):
     monkeypatch.setattr(ipc, "MAX_MESSAGE_BYTES", 128)
     raw = b"x" * 129 + b'\n{"id":"later","type":"ping","payload":{}}\n'
