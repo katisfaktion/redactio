@@ -4,3 +4,4 @@ pub mod recovery;
 pub mod scan;
 pub mod settings;
 pub mod storage;
+pub mod sync;

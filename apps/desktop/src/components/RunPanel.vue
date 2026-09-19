@@ -1,0 +1,103 @@
+<script setup lang="ts">
+import { OnyxButton } from "sit-onyx";
+import { computed, useId } from "vue";
+import type { SafeError } from "../lib/contracts";
+
+const props = defineProps<{
+  pairName: string;
+  counts: { discovered: number; processed: number; skipped: number; failed: number; unprocessed: number; warned: number };
+  stage: "initializing" | "scanning" | "processing" | "finished" | null;
+  outcome?: "completed" | "completed-with-errors" | "cancelled" | "failed";
+  cancelling?: boolean;
+  disabled?: boolean;
+  error?: SafeError | null;
+  errors?: (SafeError & { relative_path: string })[];
+  auditWarning?: boolean;
+}>();
+defineEmits<{ start: []; cancel: [] }>();
+
+const headingId = useId();
+const active = computed(() => props.stage !== null && props.stage !== "finished");
+const completed = computed(() => props.counts.processed + props.counts.skipped + props.counts.failed);
+const stageLabels = {
+  initializing: "Vorbereitung der Verarbeitung …",
+  scanning: "Quellordner wird eingelesen …",
+  processing: "Dokumente werden verarbeitet …",
+  finished: "Verarbeitung beendet",
+};
+const outcomeLabels = {
+  completed: "Abgeschlossen",
+  "completed-with-errors": "Mit Fehlern abgeschlossen",
+  cancelled: "Abgebrochen",
+  failed: "Verarbeitung fehlgeschlagen",
+};
+const status = computed(() => {
+  if (active.value && props.cancelling) return "Abbruch angefordert. Der laufende Arbeitsschritt wird beendet; bei Zeitüberschreitung wird die Verarbeitung gestoppt.";
+  if (props.stage === "finished" && props.outcome) return outcomeLabels[props.outcome];
+  return props.stage ? stageLabels[props.stage] : "Bereit zur Verarbeitung";
+});
+</script>
+
+<template>
+  <section class="run-panel" :aria-labelledby="headingId">
+    <h2 :id="headingId">Verarbeitung: {{ pairName }}</h2>
+    <p role="status" aria-live="polite">
+      {{ status }}
+      <template v-if="stage === 'processing' || stage === 'finished'">
+        {{ completed }} von {{ counts.discovered }} Dokumenten abgeschlossen.
+      </template>
+    </p>
+    <progress
+      v-if="active || (stage === 'finished' && counts.discovered > 0)"
+      aria-label="Verarbeitungsfortschritt"
+      :max="counts.discovered || 1"
+      :value="stage === 'processing' || stage === 'finished' ? completed : undefined"
+    />
+    <ul v-if="stage !== null" class="counts">
+      <li>Gefunden: {{ counts.discovered }}</li>
+      <li>Verarbeitet: {{ counts.processed }}</li>
+      <li>Davon mit Warnungen: {{ counts.warned }}</li>
+      <li>Übersprungen: {{ counts.skipped }}</li>
+      <li>Fehlgeschlagen: {{ counts.failed }}</li>
+      <li>Nicht verarbeitet: {{ counts.unprocessed }}</li>
+    </ul>
+    <p v-if="stage === 'finished' && outcome === 'completed' && counts.discovered === 0">
+      Keine geeigneten DOCX-Dokumente gefunden.
+    </p>
+    <p v-if="error" class="error" role="alert">
+      Die Verarbeitung konnte nicht durchgeführt werden. Bitte prüfen Sie die Ordner und die lokalen Verarbeitungskomponenten.
+    </p>
+    <div v-if="errors?.length" class="error" role="alert">
+      <p>Diese Dokumente konnten nicht verarbeitet werden:</p>
+      <ul>
+        <li v-for="failure in errors" :key="failure.relative_path">{{ failure.relative_path }}</li>
+      </ul>
+    </div>
+    <p v-if="auditWarning" class="error" role="alert">
+      Das Protokoll konnte nicht vollständig gespeichert werden. Bereits gespeicherte Ergebnisse bleiben erhalten.
+    </p>
+    <OnyxButton
+      v-if="active"
+      label="Abbrechen"
+      type="button"
+      :disabled="cancelling"
+      @click="$emit('cancel')"
+    />
+    <OnyxButton
+      v-else
+      label="Verarbeitung starten"
+      type="button"
+      :disabled="disabled"
+      @click="$emit('start')"
+    />
+  </section>
+</template>
+
+<style scoped>
+.run-panel { display: grid; gap: var(--onyx-spacing-md); }
+h2, p, ul { margin-block: 0; }
+progress { width: 100%; accent-color: var(--onyx-color-text-icons-primary-intense); }
+.counts { display: flex; flex-wrap: wrap; gap: var(--onyx-spacing-md); padding: 0; list-style: none; }
+.error { color: var(--onyx-color-text-icons-danger-intense); }
+.run-panel > :last-child { justify-self: start; }
+</style>
