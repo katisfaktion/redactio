@@ -28,7 +28,9 @@ fn fresh_start_is_explicit_preserves_originals_old_outputs_and_private_backup() 
     )
     .unwrap();
     fs::write(source.join("_document-mapping.json"), b"broken mapping").unwrap();
-    assert!(settings.validate_registry(&[config.clone()]).is_err());
+    assert!(settings
+        .validate_registry(std::slice::from_ref(&config))
+        .is_err());
     assert_eq!(recovery_pairs(&settings_path).unwrap().len(), 1);
     assert_eq!(
         fresh_start(&settings_path, old_id, &fresh, false)

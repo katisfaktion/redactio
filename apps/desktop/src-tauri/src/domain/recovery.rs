@@ -329,10 +329,7 @@ fn fresh_start_with(
         }
         (Err(a), Err(b), false)
             if a.kind() == std::io::ErrorKind::NotFound
-                && b.kind() == std::io::ErrorKind::NotFound =>
-        {
-            ()
-        }
+                && b.kind() == std::io::ErrorKind::NotFound => {}
         _ => return Err(AppError::new("recovery_metadata_changed")),
     }
     intent.stage = Stage::MetadataRetained;
@@ -401,7 +398,10 @@ mod tests {
             let expected_id = intent.new_pair.id;
             let saved = load_settings(&path).unwrap();
             assert_eq!(
-                saved.validate_registry(&[config.clone()]).unwrap_err().code,
+                saved
+                    .validate_registry(std::slice::from_ref(&config))
+                    .unwrap_err()
+                    .code,
                 "mapping_recovery_required"
             );
             let candidate = recovery_pairs(&path).unwrap().remove(0);
