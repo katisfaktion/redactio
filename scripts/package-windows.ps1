@@ -7,12 +7,24 @@ $root = Split-Path $PSScriptRoot -Parent
 $inputs = Get-Content -Raw -LiteralPath (Join-Path $root 'packaging/build-inputs.json') | ConvertFrom-Json
 $work = Join-Path $root 'dist/windows'
 $package = Join-Path $work 'redactio'
+$desktopSupplied = [bool]$DesktopExecutable
 if ($root.StartsWith('\\')) { throw 'Build from a local Windows checkout; UNC paths are unsupported' }
 if (Test-Path -LiteralPath $package) { throw 'Package output already exists; use a fresh build directory' }
-New-Item -ItemType Directory -Force -Path (Join-Path $work 'inputs') | Out-Null
 function Invoke-Checked([string]$Program, [string[]]$Arguments) {
     & $Program @Arguments
     if ($LASTEXITCODE -ne 0) { throw "Build command failed: $Program" }
+}
+function Get-SourceIdentity([string]$Path) {
+    $checkout = & git -C $Path rev-parse --show-toplevel 2>$null
+    if ($LASTEXITCODE -ne 0 -or -not $checkout -or
+        [IO.Path]::GetFullPath($checkout) -ne [IO.Path]::GetFullPath($Path)) {
+        throw 'clean_git_checkout_required'
+    }
+    $commit = & git -C $Path rev-parse --verify HEAD
+    if ($LASTEXITCODE -ne 0 -or $commit -cnotmatch '^[0-9a-f]{40}$') { throw 'invalid_source_commit' }
+    $status = & git -C $Path status --porcelain --untracked-files=normal
+    if ($LASTEXITCODE -ne 0 -or $status) { throw 'dirty_source_checkout' }
+    return @{ commit = $commit; verification = 'clean_git_checkout' }
 }
 function Get-VerifiedArtifact($Artifact) {
     $file = Join-Path $work ('inputs/' + ([uri]$Artifact.url).Segments[-1])
@@ -24,13 +36,22 @@ function Get-VerifiedArtifact($Artifact) {
 }
 Push-Location $root
 try {
-    if ((& uv --version) -notlike "uv $($inputs.tools.uv) *") { throw 'Pinned uv version required' }
+    $source = Get-SourceIdentity $root
+    New-Item -ItemType Directory -Force -Path (Join-Path $work 'inputs') | Out-Null
+    $tools = @{ powershell = $PSVersionTable.PSVersion.ToString(); git = (& git --version); uv = (& uv --version) }
+    if ($tools.uv -notlike "uv $($inputs.tools.uv) *") { throw 'Pinned uv version required' }
     $env:UV_PROJECT_ENVIRONMENT = Join-Path $work 'venv'
     $env:UV_PYTHON_INSTALL_DIR = Join-Path $work 'python'
     $env:PYINSTALLER_CONFIG_DIR = Join-Path $work 'pyinstaller-cache'
     Invoke-Checked uv @('--directory', 'apps/sidecar', 'sync', '--locked', '--no-dev', '--group', 'build', '--python', $inputs.tools.python)
     $python = Join-Path $env:UV_PROJECT_ENVIRONMENT 'Scripts/python.exe'
-    if ((& $python --version) -cne "Python $($inputs.tools.python)") { throw 'Pinned Python version required' }
+    $tools.python = & $python --version
+    if ($tools.python -cne "Python $($inputs.tools.python)") { throw 'Pinned Python version required' }
+    $tools.pyinstaller = & $python -m PyInstaller --version
+    if ($LASTEXITCODE -ne 0 -or $tools.pyinstaller -cne $inputs.tools.pyinstaller) { throw 'Pinned PyInstaller version required' }
+    $distributions = & $python -c 'import importlib.metadata as m, json; print(json.dumps(sorted(({"name": d.metadata["Name"], "version": d.version} for d in m.distributions()), key=lambda d: d["name"].lower())))'
+    if ($LASTEXITCODE -ne 0) { throw 'Python dependency metadata failed' }
+    $distributions = @($distributions | ConvertFrom-Json)
     foreach ($notice in $inputs.notices) {
         $file = Join-Path $root ('packaging/' + $notice.path)
         if ((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant() -cne $notice.sha256) {
@@ -38,10 +59,14 @@ try {
         }
     }
     if (-not $DesktopExecutable) {
-        if ((& node --version) -cne "v$($inputs.tools.node)" -or (& pnpm --version) -cne $inputs.tools.pnpm) {
+        $tools.node = & node --version
+        $tools.pnpm = & pnpm --version
+        $tools.rustc = & rustc --version
+        $tools.cargo = & cargo --version
+        if ($tools.node -cne "v$($inputs.tools.node)" -or $tools.pnpm -cne $inputs.tools.pnpm) {
             throw 'Pinned Node/pnpm versions required'
         }
-        if ((& rustc --version) -notlike "rustc $($inputs.tools.rust) *") { throw 'Pinned MSVC Rust toolchain required' }
+        if ($tools.rustc -notlike "rustc $($inputs.tools.rust) *") { throw 'Pinned MSVC Rust toolchain required' }
         Invoke-Checked pnpm @('install', '--frozen-lockfile')
         Invoke-Checked pnpm @('--filter', '@redactio/desktop', 'tauri', 'build', '--no-bundle', '--target', $inputs.target, '--', '--locked')
         $DesktopExecutable = Join-Path $root "apps/desktop/src-tauri/target/$($inputs.target)/release/redactio.exe"
@@ -89,7 +114,18 @@ try {
     $locks = @('pnpm-lock.yaml', 'apps/sidecar/uv.lock', 'apps/desktop/src-tauri/Cargo.lock') | ForEach-Object {
         @{ path = $_; sha256 = (Get-FileHash -LiteralPath (Join-Path $root $_)).Hash.ToLowerInvariant() }
     }
-    @{ schema_version = 1; inputs = $inputs; lockfiles = @($locks); files = $files } | ConvertTo-Json -Depth 20 |
+    if ((Get-SourceIdentity $root).commit -cne $source.commit) { throw 'source_commit_changed_during_build' }
+    $references = @('docs/release-checks.md', 'scripts/check-package.ps1', 'scripts/benchmark.py') | ForEach-Object {
+        @{ path = $_; sha256 = (Get-FileHash -LiteralPath (Join-Path $root $_)).Hash.ToLowerInvariant(); kind = 'procedure_only' }
+    }
+    @{ schema_version = 1; inputs = $inputs; lockfiles = @($locks); files = $files
+       source = $source; built_at = [DateTimeOffset]::UtcNow.ToString('o'); observed_tools = $tools
+       python_distributions = $distributions
+       desktop = @{ mode = $(if ($desktopSupplied) { 'supplied' } else { 'built_here' })
+                    provenance = $(if ($desktopSupplied) { 'caller_supplied_unverified' } else { 'local_build' })
+                    sha256 = (Get-FileHash -LiteralPath (Join-Path $package 'redactio.exe')).Hash.ToLowerInvariant() }
+       test_evaluation_references = @($references); acceptance = 'unverified'
+    } | ConvertTo-Json -Depth 20 |
         Set-Content -Encoding utf8NoBOM -LiteralPath (Join-Path $package 'build-manifest.json')
     & (Join-Path $work 'check-package.ps1') -PackageRoot $package -CorpusRoot (Join-Path $work 'smoke')
     $archive = Join-Path $work 'redactio-0.1.0-windows-x64.zip'
