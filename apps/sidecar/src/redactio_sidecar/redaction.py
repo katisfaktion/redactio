@@ -13,6 +13,8 @@ def apply_redactions(
         raise ValueError("unknown dismissed detection ID")
     if any(detection.origin != "manual" for detection in decisions.manual):
         raise ValueError("manual decision must have manual origin")
+    if any(detection.confidence is not None for detection in decisions.manual):
+        raise ValueError("manual decision confidence must be null")
 
     for detection in [*detections, *decisions.manual]:
         if detection.end > len(text):

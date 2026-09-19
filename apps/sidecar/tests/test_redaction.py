@@ -161,12 +161,25 @@ def test_span_past_original_text_is_rejected(manual: bool) -> None:
         apply_redactions("Anna", detections, decisions)
 
 
-def test_manual_span_has_no_invented_confidence() -> None:
+def test_manual_decision_rejects_confidence() -> None:
     manual = detection(
         "manual",
         0,
         4,
         confidence=0.7,
+        origin="manual",
+    )
+
+    with pytest.raises(ValueError, match="manual decision confidence must be null"):
+        apply_redactions("Anna", [], Decisions(manual=[manual]))
+
+
+def test_manual_span_uses_safe_recognizer() -> None:
+    manual = detection(
+        "manual",
+        0,
+        4,
+        confidence=None,
         recognizer="stale-client-value",
         origin="manual",
     )
