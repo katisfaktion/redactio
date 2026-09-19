@@ -379,6 +379,7 @@ async fn render(
         .request("render_review", &request, DOCUMENT_TIMEOUT)
         .await?;
     validate_spans(record, result.original_text.chars().count() as u64)?;
+    let body_length = result.body.chars().count() as u64;
     if result.sync_pair_id != record.key.sync_pair_id
         || result.doc_id != record.key.doc_id
         || result.source_hash_sha256 != record.source_hash
@@ -393,7 +394,7 @@ async fn render(
         || result
             .redactions
             .iter()
-            .any(|span| span.end_offset > result.body.chars().count() as u64)
+            .any(|span| span.end_offset > body_length)
     {
         return Err(AppError::new("invalid_sidecar_response"));
     }
