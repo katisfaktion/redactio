@@ -920,6 +920,7 @@ fn nullable_protocol_fields_are_required_even_when_null_is_allowed() {
 }
 
 #[test]
+#[cfg(debug_assertions)]
 fn resource_resolution_uses_explicit_development_process_arguments() {
     static ENVIRONMENT: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _environment = ENVIRONMENT.lock().unwrap();
@@ -930,10 +931,20 @@ fn resource_resolution_uses_explicit_development_process_arguments() {
     std::env::set_var("REDACTIO_MODEL_DIR", model_root.path());
 
     let resolved = resources::resolve();
+    std::env::set_var("REDACTIO_SIDECAR_ARGS_JSON", "not-json");
+    let malformed = resources::resolve();
+    std::env::remove_var("REDACTIO_MODEL_DIR");
+    let incomplete = resources::resolve();
+    std::env::set_var("REDACTIO_MODEL_DIR", "relative-models");
+    let relative = resources::resolve();
 
     std::env::remove_var("REDACTIO_SIDECAR_EXECUTABLE");
     std::env::remove_var("REDACTIO_SIDECAR_ARGS_JSON");
     std::env::remove_var("REDACTIO_MODEL_DIR");
+    assert!(malformed.is_err());
+    assert!(incomplete.is_err());
+    assert!(relative.is_err());
+    let resolved = resolved.unwrap();
     assert_eq!(resolved.sidecar_executable, executable);
     assert_eq!(
         resolved.sidecar_args,
