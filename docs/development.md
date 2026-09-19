@@ -124,7 +124,7 @@ coverage on your own documents locally; synthetic checks do not establish recall
 
 Known limitation of this pinned model: in the synthetic sentence
 “Der Patient Jörg Müller wohnt in der Hauptstraße 12, 10115 Berlin.” it detects
-the name, postcode and city, but misses the street and house number. Raw model
+the name, postcode and city, but misses the street. Raw model
 predictions have the same omission. Do not assume an address-recall improvement
 over spaCy without evaluating your documents.
 
