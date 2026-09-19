@@ -2,11 +2,13 @@
 
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from docx import Document
 
@@ -14,6 +16,37 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class PackagingTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == "win32", "requires Windows command resolution")
+    def test_desktop_notices_resolves_pnpm_cmd_from_path(self):
+        spec = importlib.util.spec_from_file_location("notices", ROOT / "packaging/notices.py")
+        notices = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(notices)
+        with tempfile.TemporaryDirectory(prefix="redactio notices ") as directory:
+            root = Path(directory)
+            (root / "packaging").mkdir()
+            (root / "packaging/build-inputs.json").write_text('{"notices": []}')
+            (root / "LICENSE").write_text("Synthetic application license")
+            metadata = root / "cargo-metadata.json"
+            metadata.write_text('{"packages": []}')
+            dependency = root / "dependency"
+            dependency.mkdir()
+            (dependency / "package.json").write_text('{"version": "1.0.0"}')
+            (dependency / "LICENSE").write_text("Synthetic dependency license")
+            command_dir = root / "command directory"
+            command_dir.mkdir()
+            (command_dir / "licenses.json").write_text(
+                json.dumps(
+                    {"MIT": [{"name": "fixture", "license": "MIT", "paths": [str(dependency)]}]}
+                )
+            )
+            (command_dir / "pnpm.cmd").write_text(
+                '@echo off\nif not "%*"=="licenses list --prod --json" exit /b 9\n'
+                'type "%~dp0licenses.json"\n'
+            )
+            with patch.dict(os.environ, {"PATH": str(command_dir), "PATHEXT": ".CMD"}):
+                output = notices.desktop_notices(root, metadata)
+            self.assertIn("fixture 1.0.0\nLicense: MIT\nSynthetic dependency license", output)
+
     def test_canary_generation_refuses_to_overwrite_and_contains_contact(self):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "corpus"

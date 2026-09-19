@@ -3,6 +3,7 @@
 import argparse
 import importlib.metadata
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -74,8 +75,11 @@ def desktop_notices(root: Path, cargo_metadata: Path) -> str:
             f"\nCorresponding source: https://crates.io/api/v1/crates/"
             f"{package['name']}/{package['version']}/download\n"
         )
+    pnpm = shutil.which("pnpm")
+    if pnpm is None:
+        raise FileNotFoundError("pnpm is required to collect desktop licenses")
     licenses = json.loads(
-        subprocess.check_output(["pnpm", "licenses", "list", "--prod", "--json"], cwd=root)
+        subprocess.check_output([pnpm, "licenses", "list", "--prod", "--json"], cwd=root)
     )
     for packages in licenses.values():
         for package in packages:
