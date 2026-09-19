@@ -186,6 +186,12 @@ class EngineInfo(StrictModel):
     extraction_version: NonEmptyString
 
 
+class ModelInfo(StrictModel):
+    name: NonEmptyString
+    version: NonEmptyString
+    compatible: bool
+
+
 class DocumentKey(StrictModel):
     sync_pair_id: UuidString
     doc_id: str

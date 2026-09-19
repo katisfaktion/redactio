@@ -8,7 +8,9 @@ version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
     "pydantic>=2.11,<3",
+    "presidio-analyzer>=2.2.362,<3",
     "python-docx>=1.2,<2",
+    "spacy>=3.8,<3.9",
 ]
 
 [dependency-groups]
@@ -32,3 +34,7 @@ select = ["E", "F", "I", "UP"]
 python_version = "3.11"
 strict = true
 exclude = ["tests/"]
+
+[[tool.mypy.overrides]]
+module = ["presidio_analyzer.*"]
+ignore_missing_imports = true

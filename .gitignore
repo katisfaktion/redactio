@@ -23,6 +23,7 @@ dist/
 target/
 apps/desktop/src-tauri/gen/
 .venv/
+apps/sidecar/models/
 __pycache__/
 *.py[cod]
 *.egg-info/
