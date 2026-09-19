@@ -1,6 +1,7 @@
 use crate::{
     domain::{
         paths::{create_target as create_target_directory, validate_roots},
+        scan::{scan_source, ScanReport},
         settings::{load_settings, save_settings, ProcessingConfig, Settings},
     },
     error::AppError,
@@ -128,6 +129,25 @@ pub fn select_pair(state: State<'_, AppState>, pair_id: Uuid) -> Result<UiSettin
 #[tauri::command]
 pub fn remove_pair(state: State<'_, AppState>, pair_id: Uuid) -> Result<UiSettings, AppError> {
     mutate(&state, |settings| settings.remove(pair_id))
+}
+
+#[tauri::command]
+pub async fn scan_pair(state: State<'_, AppState>, pair_id: Uuid) -> Result<ScanReport, AppError> {
+    let source = {
+        let _guard = state
+            .mutation
+            .lock()
+            .map_err(|_| AppError::new("state_unavailable"))?;
+        load_registry(&state)?
+            .sync_pairs
+            .into_iter()
+            .find(|pair| pair.id == pair_id)
+            .ok_or_else(|| AppError::new("unknown_pair"))?
+            .source_folder
+    };
+    tauri::async_runtime::spawn_blocking(move || scan_source(&source))
+        .await
+        .map_err(|_| AppError::new("scan_unavailable"))?
 }
 
 fn mutate(

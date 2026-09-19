@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { OnyxAppLayout, OnyxPageLayout } from "sit-onyx";
+import DocumentList from "./components/DocumentList.vue";
 import PairManager from "./components/PairManager.vue";
 import { usePairs } from "./composables/usePairs";
 import type { SafeError, Settings } from "./lib/contracts";
@@ -52,7 +53,7 @@ const errorText: Record<string, string> = {
           />
           <section v-if="pairs.selectedPair.value" data-testid="document-view" aria-labelledby="documents-heading">
             <h2 id="documents-heading">Dokumente: {{ pairs.selectedPair.value.name }}</h2>
-            <p>Die Dokumentliste wird nach dem Einlesen dieses Ordnerpaars angezeigt.</p>
+            <DocumentList :pair-id="pairs.selectedPair.value.id" />
           </section>
         </template>
       </main>

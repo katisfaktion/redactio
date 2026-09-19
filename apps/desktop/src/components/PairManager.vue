@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { confirm, open, save } from "@tauri-apps/plugin-dialog";
-import { reactive, ref } from "vue";
+import { OnyxButton, OnyxInput, OnyxSelect } from "sit-onyx";
+import { computed, reactive, ref } from "vue";
 import type { Settings } from "../lib/contracts";
 
-defineProps<{ settings: Settings; busy: boolean }>();
+const props = defineProps<{ settings: Settings; busy: boolean }>();
 const emit = defineEmits<{
   add: [name: string, source: string, target: string, createTarget: boolean];
   rename: [pairId: string, name: string];
@@ -16,6 +17,10 @@ const source = ref("");
 const target = ref("");
 const createTarget = ref(false);
 const renameNames = reactive<Record<string, string>>({});
+const pairOptions = computed(() => props.settings.sync_pairs.map((pair) => ({
+  label: pair.name,
+  value: pair.id,
+})));
 
 async function chooseSource() {
   const chosen = await open({ directory: true, multiple: false, title: "Quellordner auswählen" });
@@ -47,6 +52,10 @@ function submit() {
   emit("add", name.value, source.value, target.value, createTarget.value);
 }
 
+function selectPair(value?: string | number | null) {
+  if (typeof value === "string") emit("select", value);
+}
+
 async function remove(pairId: string) {
   if (await confirm("Das Ordnerpaar aus der App entfernen? Dateien und Ergebnisse bleiben erhalten.", {
     title: "Ordnerpaar entfernen",
@@ -59,51 +68,78 @@ async function remove(pairId: string) {
   <section class="pair-manager" aria-labelledby="pairs-heading">
     <h2 id="pairs-heading">Ordnerpaare</h2>
 
-    <label v-if="settings.sync_pairs.length">
-      Aktives Ordnerpaar
-      <select :value="settings.selected_sync_pair_id ?? ''" :disabled="busy" @change="emit('select', ($event.target as HTMLSelectElement).value)">
-        <option v-for="pair in settings.sync_pairs" :key="pair.id" :value="pair.id">{{ pair.name }}</option>
-      </select>
-    </label>
+    <OnyxSelect
+      v-if="settings.sync_pairs.length"
+      data-testid="active-pair-select"
+      label="Aktives Ordnerpaar"
+      list-label="Gespeicherte Ordnerpaare"
+      :model-value="settings.selected_sync_pair_id ?? undefined"
+      :options="pairOptions"
+      :disabled="busy"
+      @update:model-value="selectPair"
+    />
 
-    <ul v-if="settings.sync_pairs.length" class="pairs">
-      <li v-for="pair in settings.sync_pairs" :key="pair.id">
-        <div>
-          <strong>{{ pair.name }}</strong>
-          <small>{{ pair.source_folder }} → {{ pair.target_folder }}</small>
-        </div>
-        <div class="pair-actions">
-          <input v-model="renameNames[pair.id]" :placeholder="pair.name" :aria-label="`Neuer Name für ${pair.name}`" :disabled="busy">
-          <button type="button" :disabled="busy || !renameNames[pair.id]?.trim()" @click="emit('rename', pair.id, renameNames[pair.id])">Umbenennen</button>
-          <button type="button" :disabled="busy" @click="remove(pair.id)">Entfernen</button>
-        </div>
-      </li>
-    </ul>
+    <component :is="settings.sync_pairs.length ? 'details' : 'div'" class="management">
+      <summary v-if="settings.sync_pairs.length">Ordnerpaare verwalten</summary>
 
-    <form class="add-pair" @submit.prevent="submit">
-      <h3>{{ settings.sync_pairs.length ? "Weiteres Ordnerpaar" : "Noch kein Ordnerpaar eingerichtet" }}</h3>
-      <p v-if="!settings.sync_pairs.length">Wählen Sie einen Quellordner und einen getrennten Zielordner aus.</p>
-      <label>Name <input v-model="name" required :disabled="busy"></label>
-      <div class="folder-choice">
-        <button type="button" :disabled="busy" @click="chooseSource">Quellordner auswählen</button>
-        <span>{{ source || "Kein Quellordner gewählt" }}</span>
-      </div>
-      <div class="folder-choice">
-        <button type="button" :disabled="busy" @click="chooseTarget">Bestehenden Zielordner auswählen</button>
-        <button type="button" :disabled="busy" @click="chooseNewTarget">Neuen Zielordner festlegen</button>
-        <span>{{ target || "Kein Zielordner gewählt" }}</span>
-      </div>
-      <p class="hint">Ein nicht leerer Zielordner wird nur übernommen, wenn er bereits zu dieser Quelle gehört.</p>
-      <button type="submit" :disabled="busy || !name.trim() || !source || !target">Ordnerpaar hinzufügen</button>
-    </form>
+      <ul v-if="settings.sync_pairs.length" class="pairs">
+        <li v-for="pair in settings.sync_pairs" :key="pair.id">
+          <div>
+            <strong>{{ pair.name }}</strong>
+            <small>{{ pair.source_folder }} → {{ pair.target_folder }}</small>
+          </div>
+          <div class="pair-actions">
+            <OnyxInput
+              v-model="renameNames[pair.id]"
+              :label="`Neuer Name für ${pair.name}`"
+              :placeholder="pair.name"
+              :disabled="busy"
+            />
+            <OnyxButton
+              label="Umbenennen"
+              type="button"
+              mode="outline"
+              :disabled="busy || !renameNames[pair.id]?.trim()"
+              @click="emit('rename', pair.id, renameNames[pair.id])"
+            />
+            <OnyxButton
+              label="Entfernen"
+              type="button"
+              color="danger"
+              mode="outline"
+              :disabled="busy"
+              @click="remove(pair.id)"
+            />
+          </div>
+        </li>
+      </ul>
+
+      <form class="add-pair" @submit.prevent="submit">
+        <h3>{{ settings.sync_pairs.length ? "Weiteres Ordnerpaar" : "Noch kein Ordnerpaar eingerichtet" }}</h3>
+        <p v-if="!settings.sync_pairs.length">Wählen Sie einen Quellordner und einen getrennten Zielordner aus.</p>
+        <OnyxInput v-model="name" label="Name" required :disabled="busy" />
+        <div class="folder-choice">
+          <OnyxButton label="Quellordner auswählen" type="button" mode="outline" :disabled="busy" @click="chooseSource" />
+          <span>{{ source || "Kein Quellordner gewählt" }}</span>
+        </div>
+        <div class="folder-choice">
+          <OnyxButton label="Bestehenden Zielordner auswählen" type="button" mode="outline" :disabled="busy" @click="chooseTarget" />
+          <OnyxButton label="Neuen Zielordner festlegen" type="button" mode="outline" :disabled="busy" @click="chooseNewTarget" />
+          <span>{{ target || "Kein Zielordner gewählt" }}</span>
+        </div>
+        <p class="hint">Ein nicht leerer Zielordner wird nur übernommen, wenn er bereits zu dieser Quelle gehört.</p>
+        <OnyxButton label="Ordnerpaar hinzufügen" type="submit" :disabled="busy || !name.trim() || !source || !target" />
+      </form>
+    </component>
   </section>
 </template>
 
 <style scoped>
-.pair-manager, .add-pair { display: grid; gap: var(--onyx-spacing-lg); }
+.pair-manager, .management, .add-pair { display: grid; gap: var(--onyx-spacing-lg); }
+.management[open] { padding-block-start: var(--onyx-spacing-md); }
+.management summary { cursor: pointer; font-weight: var(--onyx-font-weight-semibold); }
 .pairs { display: grid; gap: var(--onyx-spacing-md); list-style: none; margin: 0; padding: 0; }
 .pairs li, .pair-actions, .folder-choice { align-items: center; display: flex; flex-wrap: wrap; gap: var(--onyx-spacing-sm); justify-content: space-between; }
 .pairs small { display: block; }
 .hint { color: var(--onyx-color-text-icons-neutral-medium); font-size: var(--onyx-font-size-sm); }
-label { display: grid; gap: var(--onyx-spacing-xs); }
 </style>

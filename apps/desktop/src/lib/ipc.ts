@@ -1,5 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
-import { SafeErrorSchema, SettingsSchema, type SafeError, type Settings } from "./contracts";
+import {
+  SafeErrorSchema,
+  ScanReportSchema,
+  SettingsSchema,
+  type SafeError,
+  type Settings,
+} from "./contracts";
 
 async function settingsCommand(command: string, args?: Record<string, unknown>): Promise<Settings> {
   return SettingsSchema.parse(await invoke<unknown>(command, args));
@@ -12,6 +18,9 @@ export const pairApi = {
   renamePair: (pairId: string, name: string) => settingsCommand("rename_pair", { pairId, name }),
   selectPair: (pairId: string) => settingsCommand("select_pair", { pairId }),
   removePair: (pairId: string) => settingsCommand("remove_pair", { pairId }),
+  scanPair: async (pairId: string) => ScanReportSchema.parse(
+    await invoke<unknown>("scan_pair", { pairId }),
+  ),
 };
 
 export function safeError(error: unknown): SafeError {

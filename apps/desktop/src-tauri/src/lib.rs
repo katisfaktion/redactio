@@ -18,6 +18,7 @@ pub fn run() {
             commands::rename_pair,
             commands::select_pair,
             commands::remove_pair,
+            commands::scan_pair,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
