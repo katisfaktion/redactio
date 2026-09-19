@@ -196,7 +196,7 @@ fn check_all_roots(source: &Path, target: &Path, other_roots: &[PathBuf]) -> Res
     Ok(())
 }
 
-fn ensure_separate(a: &Path, b: &Path) -> Result<(), AppError> {
+pub(crate) fn ensure_separate(a: &Path, b: &Path) -> Result<(), AppError> {
     if contains(a, b) || contains(b, a) {
         Err(AppError::new("folder_overlap"))
     } else {
