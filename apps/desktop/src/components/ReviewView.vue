@@ -48,6 +48,24 @@ function segments(text: string, spans: { start: number; end: number }[]) {
 }
 const originalSegments = computed(() => keyboard.value ? [] : segments(props.review.data.value?.original_text ?? "", props.review.active.value));
 const outputSegments = computed(() => segments(props.review.data.value?.body ?? "", props.review.data.value?.redactions.map(span => ({ start: span.start_offset, end: span.end_offset })) ?? []));
+// Textareas collapse CRLF to LF. Cache the native boundary after each collapsed pair.
+const collapsedNewlines = computed(() => {
+  const boundaries: number[] = [];
+  for (const match of (props.review.data.value?.original_text ?? "").matchAll(/\r\n/g)) {
+    boundaries.push(match.index + 1 - boundaries.length);
+  }
+  return boundaries;
+});
+function sourceOffset(nativeOffset: number) {
+  const boundaries = collapsedNewlines.value;
+  let low = 0, high = boundaries.length;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    if (boundaries[middle]! <= nativeOffset) low = middle + 1;
+    else high = middle;
+  }
+  return codePointOffset(props.review.data.value!.original_text, nativeOffset + low);
+}
 async function keyboardSelection() {
   keyboard.value = !keyboard.value; selected.value = null;
   await nextTick();
@@ -59,7 +77,7 @@ function capture() {
   if (keyboard.value && textarea.value) {
     const control = textarea.value;
     if (control.selectionStart === control.selectionEnd) return;
-    try { selected.value = { start: codePointOffset(control.value, control.selectionStart), end: codePointOffset(control.value, control.selectionEnd) }; }
+    try { selected.value = { start: sourceOffset(control.selectionStart), end: sourceOffset(control.selectionEnd) }; }
     catch { /* A partial surrogate pair is not a selectable redaction. */ }
   } else {
     const selection = window.getSelection();
@@ -101,7 +119,7 @@ function restoreSource(event: Event) {
         <OnyxButton data-testid="undo-review" label="Korrektur zurücknehmen" type="button" mode="outline" :disabled="review.busy.value || !review.canUndo.value" @click="review.undo" />
       </div>
       <p v-if="selected" role="status">Auswahl: Position {{ selected.start }}–{{ selected.end }}</p>
-      <p v-if="keyboard" id="selection-help">Wählen Sie Text mit Umschalt- und Pfeiltasten aus. Wechseln Sie mit Umschalt+Tab zu „Auswahl schwärzen“. Der Originaltext ist schreibgeschützt.</p>
+      <p v-if="keyboard" id="selection-help">Wählen Sie Text mit Umschalt- und Pfeiltasten aus. Navigieren Sie anschließend mit Umschalt+Tab rückwärts bis zu „Auswahl schwärzen“. Der Originaltext ist schreibgeschützt.</p>
       <div class="comparison">
         <section aria-label="Originaltext">
           <h3>Originaltext</h3>

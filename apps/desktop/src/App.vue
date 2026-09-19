@@ -192,7 +192,7 @@ const errorText: Record<string, string> = {
             <div class="view-navigation">
               <OnyxButton data-testid="leave-save" label="Speichern und fortfahren" type="button" :disabled="busy" @click="leave('save')" />
               <OnyxButton data-testid="leave-discard" label="Änderungen verwerfen" type="button" mode="outline" :disabled="busy" @click="leave('discard')" />
-              <OnyxButton data-testid="leave-stay" label="Hier bleiben" type="button" mode="outline" :disabled="busy" autofocus @click="leave('stay')" />
+              <OnyxButton data-testid="leave-stay" label="Hier bleiben" type="button" mode="outline" :disabled="busy" @click="leave('stay')" />
             </div>
           </div>
         </OnyxModal>
