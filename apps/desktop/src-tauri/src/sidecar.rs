@@ -33,7 +33,7 @@ struct Inner {
     model_root: PathBuf,
     request_lock: Mutex<()>,
     running: StdMutex<Option<Arc<Running>>>,
-    configured: Mutex<Option<SavedConfiguration>>,
+    configured: StdMutex<Option<SavedConfiguration>>,
     cancellation: AtomicU64,
 }
 
@@ -92,7 +92,7 @@ impl Sidecar {
                 model_root,
                 request_lock: Mutex::new(()),
                 running: StdMutex::new(None),
-                configured: Mutex::new(None),
+                configured: StdMutex::new(None),
                 cancellation: AtomicU64::new(0),
             }),
         }
@@ -143,10 +143,15 @@ impl Sidecar {
                         let identity = identity
                             .clone()
                             .ok_or_else(|| AppError::new("invalid_sidecar_request"))?;
-                        *self.inner.configured.lock().await = Some(SavedConfiguration {
-                            payload: payload.clone(),
-                            identity: identity.clone(),
-                        });
+                        *self
+                            .inner
+                            .configured
+                            .lock()
+                            .map_err(|_| AppError::new("state_unavailable"))? =
+                            Some(SavedConfiguration {
+                                payload: payload.clone(),
+                                identity: identity.clone(),
+                            });
                         success.guard.running.mark_configured(identity);
                     }
                     success.commit();
@@ -165,7 +170,12 @@ impl Sidecar {
         deadline: tokio::time::Instant,
         cancellation: u64,
     ) -> Result<(), AttemptError> {
-        let saved = self.inner.configured.lock().await.clone();
+        let saved = self
+            .inner
+            .configured
+            .lock()
+            .map_err(|_| AttemptError::Public(AppError::new("state_unavailable")))?
+            .clone();
         let Some(saved) = saved else {
             return Ok(());
         };
@@ -315,6 +325,18 @@ impl Sidecar {
         self.inner.cancellation.fetch_add(1, Ordering::SeqCst);
         if let Some(running) = self.inner.take_running() {
             running.shutdown().await;
+        }
+    }
+
+    /// Called while the host operation guard is retained, including on abort.
+    /// A temporary configuration must never be replayed by a later request.
+    pub(crate) fn discard_configuration(&self) {
+        self.inner.cancellation.fetch_add(1, Ordering::SeqCst);
+        if let Ok(mut configured) = self.inner.configured.lock() {
+            *configured = None;
+        }
+        if let Some(running) = self.inner.take_running() {
+            running.abort_background();
         }
     }
 

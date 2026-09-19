@@ -7,6 +7,9 @@ import {
   ScanReportSchema,
   SettingsSchema,
   RunSummarySchema,
+  ModelInfoSchema,
+  DetectionSchema,
+  type ProcessingConfig,
   type SafeError,
   type Settings,
 } from "./contracts";
@@ -41,6 +44,15 @@ export const runApi = {
   auditLocation: async () => z.string().parse(await invoke<unknown>("audit_location")),
   openAuditFolder: async (): Promise<void> => { await invoke("open_audit_folder"); },
 };
+
+export const detectionApi = {
+  listModels: async () => z.array(ModelInfoSchema).parse(await invoke<unknown>("list_models")),
+  refresh: (pairId: string) => settingsCommand("refresh_processing_config", { pairId }),
+  save: (pairId: string, config: ProcessingConfig) => settingsCommand("save_processing_config", { pairId, config }),
+  preview: async (pairId: string, config: ProcessingConfig, text: string) => z.array(DetectionSchema).parse(
+    await invoke<unknown>("preview_rules", { pairId, config, text })),
+};
+export type DetectionApi = typeof detectionApi;
 
 export function safeError(error: unknown): SafeError {
   const parsed = SafeErrorSchema.safeParse(error);

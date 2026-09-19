@@ -1,12 +1,15 @@
 <script setup lang="ts">
 import { OnyxButton, OnyxCheckbox, OnyxInput, OnyxSelect, OnyxTextarea } from "sit-onyx";
 import { computed, ref, watch } from "vue";
-import { EntityTypeSchema, ProcessingConfigSchema, type CustomRule, type EntityType, type ProcessingConfig, type SyncPair } from "../lib/contracts";
+import { EntityTypeSchema, ProcessingConfigSchema, type CustomRule, type EntityType, type ProcessingConfig, type SyncPair, type ModelInfo, type RulePreview, type SafeError } from "../lib/contracts";
 
 const props = defineProps<{
   pair: SyncPair;
-  models: { name: string; version: string; compatible: boolean }[];
+  models: ModelInfo[];
   busy: boolean;
+  preview?: RulePreview | null;
+  error?: SafeError | null;
+  saved?: boolean;
 }>();
 const emit = defineEmits<{
   save: [pairId: string, config: ProcessingConfig];
@@ -14,6 +17,20 @@ const emit = defineEmits<{
 }>();
 const draft = ref(ProcessingConfigSchema.parse(props.pair.config));
 const previewText = ref("");
+const visiblePreview = computed(() => props.preview?.pairId === props.pair.id
+  && props.preview.text === previewText.value
+  && JSON.stringify(props.preview.config) === JSON.stringify(draft.value) ? props.preview : null);
+const errors: Record<string, string> = {
+  invalid_configuration: "Die Erkennung ist ungültig. Prüfen Sie das Python-RegEx-Muster und die Wortlisten.",
+  model_not_found: "Das Sprachmodell ist lokal nicht verfügbar. Wählen Sie ein installiertes Modell.",
+  model_incompatible: "Das Sprachmodell ist nicht kompatibel. Wählen Sie ein kompatibles installiertes Modell.",
+  invalid_model_manifest: "Die lokale Modellübersicht ist ungültig. Prüfen Sie die Installation.",
+  setup_incomplete: "Die lokale Installation ist unvollständig. Bitte prüfen Sie die mitgelieferten Modelle und das Programmpaket.",
+  engine_timeout: "Die Prüfung hat das Zeitlimit überschritten. Vereinfachen Sie das Muster oder verkürzen Sie den Testtext.",
+  operation_busy: "Eine andere Verarbeitung ist noch aktiv. Versuchen Sie es anschließend erneut.",
+  file_busy: "Das Ordnerpaar wird gerade von einer anderen Instanz verwendet.",
+  recovery_pending: "Zuerst muss die unterbrochene Verarbeitung mit der bisherigen Erkennung wiederhergestellt werden. Die Einstellungen wurden nicht geändert.",
+};
 watch(() => [props.pair.id, props.pair.config], () => {
   draft.value = ProcessingConfigSchema.parse(props.pair.config);
   previewText.value = "";
@@ -97,6 +114,19 @@ function submit(preview = false) {
       <OnyxTextarea v-model="previewText" data-testid="preview-text" label="Testtext für die Vorschau" :disabled="busy" />
       <p>Verwenden Sie erfundenen Testtext. Die Vorschau speichert keine Einstellungen.</p>
       <p v-if="validation" role="alert">{{ validation }}</p>
+      <p v-if="error" role="alert">{{ errors[error.code] ?? "Die Erkennung konnte nicht geprüft oder gespeichert werden. Bitte versuchen Sie es erneut." }}</p>
+      <p v-if="busy" role="status">Erkennung wird geprüft …</p>
+      <p v-else-if="saved && JSON.stringify(pair.config) === JSON.stringify(draft)" role="status">Erkennung gespeichert. Bei Änderungen sind vorhandene Ergebnisse veraltet; geprüfte Dokumente benötigen vor erneuter Verarbeitung Ihre Bestätigung.</p>
+      <section v-if="visiblePreview" data-testid="preview-results" aria-live="polite">
+        <h3>Vorschau: {{ visiblePreview.detections.length }} Treffer</h3>
+        <p>Die Vorschau unterstützt die Prüfung; sie garantiert keine vollständige Erkennung.</p>
+        <ul>
+          <li v-for="detection in visiblePreview.detections" :key="detection.id">
+            {{ labels[detection.entity_type] }}: <q>{{ Array.from(visiblePreview.text).slice(detection.start, detection.end).join('') }}</q>
+            (Position {{ detection.start }}–{{ detection.end }})
+          </li>
+        </ul>
+      </section>
       <div class="actions">
         <OnyxButton data-testid="preview" label="Vorschau prüfen" type="button" mode="outline"
           :disabled="busy || !!validation || !previewText.length" @click="submit(true)" />

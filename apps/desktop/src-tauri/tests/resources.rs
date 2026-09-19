@@ -26,6 +26,45 @@ fn package(root: &Path) {
 }
 
 #[test]
+fn model_listing_uses_only_local_manifest_packages_and_rejects_unsafe_entries() {
+    let root = tempfile::tempdir().unwrap();
+    fs::create_dir(root.path().join("lg")).unwrap();
+    fs::write(root.path().join("lg/config.cfg"), "synthetic").unwrap();
+    fs::write(
+        root.path().join("lg/meta.json"),
+        r#"{"lang":"de","name":"core_news_lg","version":"3.8.0","spacy_version":">=3.8.0,<3.9.0"}"#,
+    )
+    .unwrap();
+    let entry = serde_json::json!({"name":"de_core_news_lg","version":"3.8.0","path":"lg"});
+    let missing = serde_json::json!({"name":"de_core_news_sm","version":"3.8.0","path":"sm"});
+    let manifest = root.path().join("manifest.json");
+    fs::write(
+        &manifest,
+        serde_json::to_vec(&serde_json::json!({"models":[entry,missing]})).unwrap(),
+    )
+    .unwrap();
+    let models = resources::list_models(root.path()).unwrap();
+    assert_eq!(models.len(), 2);
+    assert!(models[0].compatible);
+    assert!(!models[1].compatible);
+    assert_eq!(models[0].name, "de_core_news_lg");
+    for models in [
+        serde_json::json!([entry, entry]),
+        serde_json::json!([{ "name":"de_core_news_lg","version":"3.8.0","path":"../outside" }]),
+    ] {
+        fs::write(
+            &manifest,
+            serde_json::to_vec(&serde_json::json!({"models":models})).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            resources::list_models(root.path()).unwrap_err().code,
+            "invalid_model_manifest"
+        );
+    }
+}
+
+#[test]
 fn packaged_resources_are_absolute_and_missing_runtime_or_model_fails_closed() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("Redactio Prüfung");

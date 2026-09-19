@@ -6,6 +6,8 @@ import MappingRecovery from "./components/MappingRecovery.vue";
 import DocumentList from "./components/DocumentList.vue";
 import PairManager from "./components/PairManager.vue";
 import RunPanel from "./components/RunPanel.vue";
+import DetectionSettings from "./components/DetectionSettings.vue";
+import { useDetection } from "./composables/useDetection";
 import { usePairs } from "./composables/usePairs";
 import { useRun } from "./composables/useRun";
 import { runApi, safeError } from "./lib/ipc";
@@ -21,12 +23,15 @@ function recovered(settings: Settings) { pairs.settings.value = settings; startu
 
 const empty: Settings = { schema_version: 1, sync_pairs: [], selected_sync_pair_id: null };
 const pairs = usePairs(props.initialSettings ?? empty);
+const detection = useDetection(pairs.selectedPair, (settings) => { pairs.settings.value = settings; });
+const view = ref<"documents" | "settings">("documents");
 const selectedId = computed(() => pairs.selectedPair.value?.id ?? null);
 const run = useRun(selectedId);
 const scanned = ref(false), confirming = ref(false);
-const busy = computed(() => pairs.busy.value || run.busy.value || confirming.value);
+const busy = computed(() => pairs.busy.value || run.busy.value || detection.busy.value || confirming.value);
 const emptyCounts = { discovered: 0, processed: 0, skipped: 0, failed: 0, unprocessed: 0, warned: 0 };
 watch(selectedId, () => { scanned.value = false; });
+watch(() => pairs.selectedPair.value?.processing_revision, () => { scanned.value = false; });
 const auditPath = ref("");
 const auditError = ref(false);
 async function loadAuditLocation() {
@@ -88,10 +93,15 @@ const errorText: Record<string, string> = {
             @select="pairs.selectPair"
             @remove="pairs.removePair"
           />
-          <section v-if="pairs.selectedPair.value" data-testid="document-view" aria-labelledby="documents-heading">
+          <nav aria-label="Ansichten" class="view-navigation">
+            <OnyxButton data-testid="documents-nav" label="Dokumente" type="button" :mode="view === 'documents' ? 'default' : 'outline'" :aria-current="view === 'documents' ? 'page' : undefined" :disabled="busy" @click="view = 'documents'" />
+            <OnyxButton data-testid="settings-nav" label="Einstellungen" type="button" :mode="view === 'settings' ? 'default' : 'outline'" :aria-current="view === 'settings' ? 'page' : undefined" :disabled="busy" @click="view = 'settings'; loadAuditLocation()" />
+          </nav>
+          <p v-if="view === 'documents' && detection.error.value" role="alert">Die Erkennung ist derzeit nicht verfügbar. Prüfen Sie die Modelle und Regeln unter Einstellungen.</p>
+          <section v-if="pairs.selectedPair.value" v-show="view === 'documents'" data-testid="document-view" aria-labelledby="documents-heading">
             <h2 id="documents-heading">Dokumente: {{ pairs.selectedPair.value.name }}</h2>
             <p>Der Arbeitsordner enthält auch ungeprüfte Ergebnisse. Prüfen Sie Dokumente vor der Weitergabe.</p>
-            <DocumentList :pair-id="pairs.selectedPair.value.id" :disabled="busy" @scanned="scanned = true" @reprocess="reprocess" />
+            <DocumentList :key="`${pairs.selectedPair.value.id}:${pairs.selectedPair.value.processing_revision}`" :pair-id="pairs.selectedPair.value.id" :disabled="busy" @scanned="scanned = true" @reprocess="reprocess" />
             <RunPanel
               :pair-name="pairs.selectedPair.value.name"
               :counts="run.progress.value ?? emptyCounts"
@@ -106,12 +116,15 @@ const errorText: Record<string, string> = {
             />
             <OnyxButton v-if="run.summary.value?.errors.length" label="Fehlgeschlagene Dokumente erneut versuchen" type="button" :disabled="busy" @click="run.start(run.summary.value.errors.map((failure) => failure.relative_path))" />
           </section>
-          <details class="settings">
-            <summary @click="loadAuditLocation">Einstellungen: Protokoll</summary>
+          <section v-if="view === 'settings'" class="settings" aria-label="Einstellungen">
+            <DetectionSettings v-if="pairs.selectedPair.value" :pair="pairs.selectedPair.value" :models="detection.models.value" :busy="busy"
+              :preview="detection.result.value" :error="detection.error.value" :saved="detection.saved.value"
+              @save="detection.save" @preview="detection.preview" />
+            <h2>Protokoll</h2>
             <p>{{ auditPath }}</p>
             <OnyxButton label="Protokollordner öffnen" type="button" @click="openAuditFolder" />
             <p v-if="auditError" role="alert">Der Protokollordner ist derzeit nicht verfügbar.</p>
-          </details>
+          </section>
         </template>
       </main>
     </OnyxPageLayout>
@@ -125,4 +138,7 @@ const errorText: Record<string, string> = {
 h1, h2, h3, p { margin-block: 0; }
 :deep(.pair-manager), .error, [data-testid="document-view"] { background: var(--onyx-color-base-background-blank); border: var(--onyx-1px-in-rem) solid var(--onyx-color-component-border-neutral); border-radius: var(--onyx-radius-md); padding: var(--onyx-spacing-xl); }
 .error { color: var(--onyx-color-text-icons-danger-intense); }
+.view-navigation { display: flex; gap: var(--onyx-spacing-sm); }
+.settings { display: grid; gap: var(--onyx-spacing-lg); }
+:deep(.pair-manager) { position: sticky; top: 0; z-index: 1; align-self: start; padding: var(--onyx-spacing-md); }
 </style>

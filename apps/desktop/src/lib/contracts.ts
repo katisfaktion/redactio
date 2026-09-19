@@ -91,6 +91,16 @@ export type ScannedFile = z.infer<typeof ScannedFileSchema>;
 export type ScanFailure = z.infer<typeof ScanFailureSchema>;
 export type ScanReport = z.infer<typeof ScanReportSchema>;
 
+export const ModelInfoSchema = z.object({ name: z.string().min(1), version: z.string().min(1), compatible: z.boolean() }).strict();
+export const DetectionSchema = z.object({
+  id: z.string().min(1).max(128), start: z.number().int().nonnegative(), end: z.number().int().positive(),
+  entity_type: EntityTypeSchema, confidence: z.number().min(0).max(1).nullable(),
+  recognizer: z.string().min(1), origin: z.enum(["automatic", "manual"]),
+}).strict().refine(span => span.end > span.start);
+export type ModelInfo = z.infer<typeof ModelInfoSchema>;
+export type Detection = z.infer<typeof DetectionSchema>;
+export type RulePreview = { pairId: string; config: ProcessingConfig; text: string; detections: Detection[] };
+
 export const RecoveryPairSchema = z.object({
   id: z.uuid(), name: z.string(), source_folder: z.string(), target_folder: z.string(),
   pending_target: z.string().nullable(),

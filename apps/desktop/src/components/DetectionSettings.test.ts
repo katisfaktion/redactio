@@ -98,3 +98,18 @@ test("switching pairs clears the private preview and draft rules", async () => {
   await wrapper.get("form").trigger("submit");
   expect(wrapper.emitted("save")![0]).toEqual([other.id, other.config]);
 });
+
+test("preview uses Unicode code points, escapes text and disappears after draft changes", async () => {
+  const wrapper = setup();
+  const text = "😀 <b>Anna</b>";
+  await wrapper.get('[data-testid="preview-text"]').setValue(text);
+  await wrapper.setProps({ preview: { pairId: pair.id, config: pair.config, text,
+    detections: [{ id: "1", start: 2, end: 13, entity_type: "CUSTOM", confidence: 1, recognizer: "synthetic", origin: "automatic" }],
+  } });
+  expect(wrapper.get('[data-testid="preview-results"]').text()).toContain("<b>Anna</b>");
+  expect(wrapper.find('[data-testid="preview-results"] b').exists()).toBe(false);
+  await wrapper.get('[data-testid="include-positions"]').setValue(false);
+  expect(wrapper.find('[data-testid="preview-results"]').exists()).toBe(false);
+  await wrapper.setProps({ error: { code: "engine_timeout", retryable: false } });
+  expect(wrapper.text()).toContain("Zeitlimit");
+});

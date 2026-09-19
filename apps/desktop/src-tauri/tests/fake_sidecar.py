@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -32,6 +33,67 @@ def main() -> None:
     configured = None
     for line in sys.stdin:
         request = json.loads(line)
+        if mode == "detection":
+            payload = request["payload"]
+            code = None
+            if request["type"] == "configure":
+                candidate = payload["config"]
+                if candidate["model"] == "missing":
+                    code = "model_not_found"
+                else:
+                    try:
+                        for rule in candidate["custom_rules"]:
+                            if rule["kind"] == "regex":
+                                re.compile(rule["pattern"])
+                    except re.error:
+                        code = "invalid_configuration"
+                if code is None:
+                    configured = payload
+                    payload = configure_result(request)
+                    if marker is not None and marker.exists():
+                        payload["engine"]["engine_version"] = marker.read_text()
+            elif request["type"] == "preview_rules":
+                if configured is None or any(
+                    payload[key] != configured[key]
+                    for key in ("sync_pair_id", "processing_revision")
+                ):
+                    code = "configuration_mismatch"
+                else:
+                    detections = []
+                    for rule in configured["config"]["custom_rules"]:
+                        if rule["kind"] == "regex" and rule["enabled"]:
+                            if rule["pattern"] == "HANG":
+                                time.sleep(60)
+                            for match in re.finditer(rule["pattern"], payload["text"]):
+                                detections.append(
+                                    {
+                                        "id": str(len(detections)),
+                                        "start": match.start(),
+                                        "end": match.end(),
+                                        "entity_type": rule["entity_type"],
+                                        "confidence": 1.0,
+                                        "recognizer": rule["id"],
+                                        "origin": "automatic",
+                                    }
+                                )
+                    payload = {
+                        key: payload[key]
+                        for key in ("sync_pair_id", "processing_revision")
+                    }
+                    payload["detections"] = detections
+            print(
+                json.dumps(
+                    {
+                        "id": request["id"],
+                        "type": "error" if code else f"{request['type']}_result",
+                        "payload": {"code": code, "retryable": False}
+                        if code
+                        else payload,
+                    }
+                ),
+                flush=True,
+            )
+            continue
         if mode == "pid-hang" and marker is not None:
             marker.write_text(str(os.getpid()), encoding="utf-8")
             time.sleep(5)

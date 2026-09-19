@@ -104,8 +104,8 @@ struct ActiveRun {
 /// Lock order is app operation, app config, then source. All survive awaits and
 /// all exits release them, including a dropped worker future.
 pub struct OperationGuard {
-    source: CollectionGuard,
-    config: CollectionGuard,
+    pub(crate) source: CollectionGuard,
+    pub(crate) config: CollectionGuard,
     _operation: OwnedMutexGuard<()>,
 }
 pub struct BatchRun {
@@ -161,7 +161,11 @@ impl RunController {
         scan_collection(&pair)
     }
 
-    fn lock_pair(&self, pair_id: Uuid) -> Result<(SyncPair, OperationGuard), AppError> {
+    pub(crate) fn settings_path(&self) -> &std::path::Path {
+        &self.inner.settings_path
+    }
+
+    pub(crate) fn lock_pair(&self, pair_id: Uuid) -> Result<(SyncPair, OperationGuard), AppError> {
         let operation = self.try_operation()?;
         let root = self
             .inner
@@ -347,7 +351,15 @@ impl RunController {
         publish(&summary.progress, emit)?;
         cancelled(run)?;
         let sidecar = sidecar?;
-        let configured = configure_pair(&run.pair, &sidecar).await?;
+        let config = run.pair.config.clone();
+        let configured = super::detection::apply_configuration(
+            &self.inner.settings_path,
+            &run.guard,
+            &mut run.pair,
+            config,
+            &sidecar,
+        )
+        .await?;
         run.engine = Some(fingerprint(&configured.engine));
         cancelled(run)?;
         summary.progress.stage = RunStage::Scanning;
@@ -494,7 +506,7 @@ fn configuration(pair: &SyncPair) -> ConfigurePayload {
         config: pair.config.clone(),
     }
 }
-fn now() -> String {
+pub(crate) fn now() -> String {
     request_timestamp(OffsetDateTime::now_utc())
 }
 
@@ -781,8 +793,7 @@ impl RunCounts {
     }
 }
 
-/// P3.5 owns applying validated configuration/fingerprint changes under the held
-/// guards before this snapshot is configured again and discovery begins.
+/// Validate engine identity; persistence and revision policy live in detection.
 pub async fn configure_pair(
     pair: &SyncPair,
     sidecar: &Sidecar,
@@ -796,16 +807,9 @@ pub async fn configure_pair(
     {
         return Err(AppError::new("invalid_sidecar_response"));
     }
-    if pair
-        .processing_fingerprint
-        .as_ref()
-        .is_some_and(|saved| saved != &fingerprint(&configured.engine))
-    {
-        return Err(AppError::new("processing_version_changed"));
-    }
     Ok(configured)
 }
-fn fingerprint(engine: &EngineInfo) -> ProcessingFingerprint {
+pub(crate) fn fingerprint(engine: &EngineInfo) -> ProcessingFingerprint {
     ProcessingFingerprint {
         engine_version: engine.engine_version.clone(),
         extraction_version: engine.extraction_version.clone(),
@@ -814,7 +818,7 @@ fn fingerprint(engine: &EngineInfo) -> ProcessingFingerprint {
     }
 }
 
-fn same_timestamp(left: &str, right: &str) -> bool {
+pub(crate) fn same_timestamp(left: &str, right: &str) -> bool {
     matches!((OffsetDateTime::parse(left, &Rfc3339), OffsetDateTime::parse(right, &Rfc3339)), (Ok(a), Ok(b)) if a == b)
 }
 

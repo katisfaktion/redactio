@@ -490,6 +490,8 @@ fn reviewed_work_requires_explicit_force_and_force_never_overwrites_external_edi
         f.controller
             .execute(run, Ok(f.sidecar("batch")), |_| {})
             .await;
+        let settings = redactio_lib::domain::settings::load_settings(&f.path).unwrap();
+        let pair = &settings.sync_pairs[0];
         {
             let config_guard = CollectionGuard::acquire(f.path.parent().unwrap()).unwrap();
             let guard = CollectionGuard::acquire(&pair.source_folder).unwrap();
@@ -520,7 +522,17 @@ fn reviewed_work_requires_explicit_force_and_force_never_overwrites_external_edi
             )
             .unwrap();
         }
-        fs::write(pair.source_folder.join("a.docx"), b"changed input").unwrap();
+        let mut changed_config = pair.config.clone();
+        changed_config.include_positions = false;
+        redactio_lib::domain::detection::save_processing_config(
+            &f.controller,
+            &f.sidecar("batch"),
+            pair.id,
+            changed_config,
+        )
+        .await
+        .unwrap();
+        let reviewed_output = fs::read(pair.target_folder.join("doc-0001.md")).unwrap();
         let run = f
             .controller
             .prepare(pair.id, Some(vec!["a.docx".into()]), vec![])
@@ -530,6 +542,10 @@ fn reviewed_work_requires_explicit_force_and_force_never_overwrites_external_edi
             .execute(run, Ok(f.sidecar("batch")), |_| {})
             .await;
         assert_eq!(blocked.errors[0].error.code, "confirmation_required");
+        assert_eq!(
+            fs::read(pair.target_folder.join("doc-0001.md")).unwrap(),
+            reviewed_output
+        );
         let run = f
             .controller
             .prepare(
@@ -613,6 +629,112 @@ fn missing_partial_stage_is_rebuilt_only_from_the_exact_journal_candidate() {
                 assert!(after.entries[0].pending.is_none());
                 assert_eq!(after.entries[0].committed.as_ref().unwrap(), &generation);
             }
+        }
+    });
+}
+
+#[test]
+fn configuration_changes_reconcile_old_journals_without_stranding_incomplete_candidates() {
+    runtime().block_on(async {
+        use redactio_lib::{
+            domain::{
+                detection,
+                mapping::{MappingData, PendingCommit, ReviewRecord},
+                settings::load_settings,
+            },
+            protocol::DocumentKey,
+        };
+        use uuid::Uuid;
+        for staged in [false, true] {
+            let f = Fixture::new();
+            let id = f.settings.sync_pairs[0].id;
+            fs::write(
+                f.settings.sync_pairs[0].source_folder.join("a.docx"),
+                b"synthetic",
+            )
+            .unwrap();
+            let run = f.controller.prepare(id, None, vec![]).unwrap();
+            assert_eq!(
+                f.controller
+                    .execute(run, Ok(f.sidecar("batch")), |_| {})
+                    .await
+                    .outcome,
+                RunOutcome::Completed
+            );
+            let saved = load_settings(&f.path).unwrap();
+            let pair = &saved.sync_pairs[0];
+            let mut mapping = MappingData::read(&pair.source_folder).unwrap();
+            let generation = mapping.entries[0].committed.take().unwrap();
+            let review_path = pair.source_folder.join("_redactio/reviews/doc-0001.json");
+            let review_bytes = fs::read(&review_path).unwrap();
+            let review = ReviewRecord::read(
+                &pair.source_folder,
+                &DocumentKey {
+                    sync_pair_id: id,
+                    doc_id: "doc-0001".into(),
+                },
+                &generation,
+            )
+            .unwrap();
+            let pending = PendingCommit {
+                generation: generation.clone(),
+                prior_output_hash: None,
+                prior_review_hash: None,
+                review,
+                output_temporary: format!(".redactio-commit-{}.tmp", Uuid::new_v4()),
+                review_temporary: format!(".redactio-commit-{}.tmp", Uuid::new_v4()),
+            };
+            if staged {
+                fs::write(
+                    review_path
+                        .parent()
+                        .unwrap()
+                        .join(&pending.review_temporary),
+                    &review_bytes,
+                )
+                .unwrap();
+            }
+            mapping.entries[0].pending = Some(pending.clone());
+            fs::write(
+                pair.source_folder.join("_document-mapping.json"),
+                serde_json::to_vec_pretty(&mapping).unwrap(),
+            )
+            .unwrap();
+            fs::remove_file(&review_path).unwrap();
+            let bytes = fs::read(&f.path).unwrap();
+            let output = fs::read(pair.target_folder.join("doc-0001.md")).unwrap();
+            let mut config = pair.config.clone();
+            config.include_positions = false;
+            let result =
+                detection::save_processing_config(&f.controller, &f.sidecar("batch"), id, config)
+                    .await;
+            let after = MappingData::read(&pair.source_folder).unwrap();
+            if staged {
+                assert_ne!(
+                    result.unwrap().sync_pairs[0].processing_revision,
+                    pair.processing_revision
+                );
+                assert!(after.entries[0].pending.is_none());
+                assert_eq!(after.entries[0].committed.as_ref().unwrap(), &generation);
+                assert_eq!(fs::read(&review_path).unwrap(), review_bytes);
+            } else {
+                assert_eq!(result.unwrap_err().code, "recovery_pending");
+                assert_eq!(fs::read(&f.path).unwrap(), bytes);
+                assert_eq!(after.entries[0].pending.as_ref(), Some(&pending));
+                let run = f.controller.prepare(id, None, vec![]).unwrap();
+                assert_eq!(
+                    f.controller
+                        .execute(run, Ok(f.sidecar("batch")), |_| {})
+                        .await
+                        .outcome,
+                    RunOutcome::Completed
+                );
+                assert_eq!(fs::read(&review_path).unwrap(), review_bytes);
+            }
+            assert_eq!(
+                fs::read(pair.target_folder.join("doc-0001.md")).unwrap(),
+                output
+            );
         }
     });
 }

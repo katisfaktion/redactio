@@ -1,4 +1,5 @@
 pub mod audit;
+pub mod detection;
 pub mod mapping;
 pub mod paths;
 pub mod recovery;

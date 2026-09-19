@@ -1,7 +1,7 @@
 import { flushPromises, mount } from "@vue/test-utils";
 import { afterEach, expect, test, vi } from "vitest";
 import App from "./App.vue";
-import { pairApi, runApi } from "./lib/ipc";
+import { pairApi, runApi, detectionApi } from "./lib/ipc";
 import { ProcessingConfigSchema } from "./lib/contracts";
 import PairManager from "./components/PairManager.vue";
 import * as dialog from "@tauri-apps/plugin-dialog";
@@ -48,6 +48,7 @@ test("a scanned selected pair can run and its controls stay locked until the aut
     }],
   } } });
   const button = (label: string) => wrapper.findAll("button").find((item) => item.text().includes(label))!;
+  await flushPromises();
   expect(button("Verarbeitung starten").attributes("disabled")).toBeDefined();
   await button("Quellordner einlesen").trigger("click"); await flushPromises();
   await button("Verarbeitung starten").trigger("click"); await flushPromises();
@@ -75,10 +76,40 @@ test.each([false, true])("reprocessing sends exact force IDs only after confirma
     }],
   } } });
   const button = (label: string) => wrapper.findAll("button").find((item) => item.text().includes(label))!;
+  await flushPromises();
   await button("Quellordner einlesen").trigger("click"); await flushPromises();
   await wrapper.get('input[type="checkbox"]').setValue(true);
   await button("Auswahl erneut verarbeiten").trigger("click"); await flushPromises();
   if (accepted) expect(start).toHaveBeenCalledWith(pairId, ["reviewed.docx"], ["doc-0001"]);
   else expect(start).not.toHaveBeenCalled();
+  wrapper.unmount();
+});
+
+test("Documents and Settings navigation retains pair selection and saves validated settings", async () => {
+  const pairId = "11111111-1111-4111-8111-111111111111";
+  const initial = { schema_version: 1 as const, selected_sync_pair_id: pairId, sync_pairs: [{
+    id: pairId, name: "Sammlung", source_folder: "/source", target_folder: "/target", created_at: "2026-09-19T10:00:00Z", processing_revision: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    config: { model: "de_core_news_lg", enabled_entities: [], custom_rules: [], include_positions: true },
+  }] };
+  vi.spyOn(detectionApi,"listModels").mockResolvedValue([{name:"de_core_news_lg",version:"3.8.0",compatible:true}]);
+  vi.spyOn(detectionApi,"refresh").mockResolvedValue(initial);
+  const save = vi.spyOn(detectionApi,"save").mockImplementation(async (_,config)=>({...initial,sync_pairs:[{...initial.sync_pairs[0]!,config,processing_revision:"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"}]}));
+  vi.spyOn(runApi,"auditLocation").mockResolvedValue("/config/audit-log.jsonl");
+  vi.spyOn(runApi,"listen").mockResolvedValue(()=>{});
+  const wrapper=mount(App,{props:{initialSettings:initial},attachTo:document.body}); await flushPromises();
+  expect(wrapper.find('[data-testid="document-view"]').isVisible()).toBe(true);
+  expect(wrapper.get('[data-testid="settings-nav"]').attributes("disabled")).toBeUndefined();
+  await wrapper.get('[data-testid="settings-nav"]').trigger("click"); await flushPromises();
+  expect(wrapper.get('[data-testid="settings-nav"]').attributes("aria-current")).toBe("page");
+  expect(wrapper.get('[data-testid="document-view"]').attributes("style")).toContain("display: none");
+  expect(wrapper.get('[data-testid="active-pair-select"]').isVisible()).toBe(true);
+  expect(wrapper.find('[data-testid="document-view"]').isVisible()).toBe(false);
+  await wrapper.get('[data-testid="include-positions"]').setValue(false);
+  await wrapper.get('.detection-settings form').trigger("submit"); await flushPromises();
+  expect(save).toHaveBeenCalledWith(pairId,{...initial.sync_pairs[0]!.config,include_positions:false});
+  expect(wrapper.text()).toContain("Erkennung gespeichert");
+  await wrapper.get('[data-testid="documents-nav"]').trigger("click");
+  expect(wrapper.get('[data-testid="active-pair-select"]').isVisible()).toBe(true);
+  expect(wrapper.find('[data-testid="document-view"]').isVisible()).toBe(true);
   wrapper.unmount();
 });

@@ -1,6 +1,7 @@
 use crate::sidecar::Sidecar;
 use crate::{
     domain::{
+        detection,
         mapping::CollectionGuard,
         paths::{create_target as create_target_directory, validate_roots},
         recovery::{fresh_start, recovery_pairs, RecoveryPair},
@@ -27,6 +28,22 @@ pub struct AppState {
 }
 
 impl AppState {
+    fn sidecar(&self) -> Result<Sidecar, AppError> {
+        let mut saved = self
+            .sidecar
+            .lock()
+            .map_err(|_| AppError::new("state_unavailable"))?;
+        if saved.is_none() {
+            let resources = crate::resources::resolve()?;
+            *saved = Some(Sidecar::new(
+                resources.sidecar_executable,
+                resources.sidecar_args,
+                resources.model_root,
+            ));
+        }
+        Ok(saved.as_ref().unwrap().clone())
+    }
+
     pub fn initialize(app: &AppHandle) -> Result<Self, AppError> {
         let app_config_root = app
             .path()
@@ -167,10 +184,47 @@ pub fn remove_pair(state: State<'_, AppState>, pair_id: Uuid) -> Result<UiSettin
 
 #[tauri::command]
 pub async fn scan_pair(state: State<'_, AppState>, pair_id: Uuid) -> Result<ScanReport, AppError> {
-    let controller = state.runs.clone();
-    tauri::async_runtime::spawn_blocking(move || controller.scan(pair_id))
-        .await
-        .map_err(|_| AppError::new("scan_unavailable"))?
+    detection::scan_configured(&state.runs, &state.sidecar()?, pair_id).await
+}
+
+#[tauri::command]
+pub async fn save_processing_config(
+    state: State<'_, AppState>,
+    pair_id: Uuid,
+    config: ProcessingConfig,
+) -> Result<UiSettings, AppError> {
+    Ok(
+        detection::save_processing_config(&state.runs, &state.sidecar()?, pair_id, config)
+            .await?
+            .into(),
+    )
+}
+
+#[tauri::command]
+pub async fn refresh_processing_config(
+    state: State<'_, AppState>,
+    pair_id: Uuid,
+) -> Result<UiSettings, AppError> {
+    Ok(
+        detection::refresh_processing_config(&state.runs, &state.sidecar()?, pair_id)
+            .await?
+            .into(),
+    )
+}
+
+#[tauri::command]
+pub async fn preview_rules(
+    state: State<'_, AppState>,
+    pair_id: Uuid,
+    config: ProcessingConfig,
+    text: String,
+) -> Result<Vec<crate::protocol::Detection>, AppError> {
+    detection::preview_rules(&state.runs, &state.sidecar()?, pair_id, config, text).await
+}
+
+#[tauri::command]
+pub fn list_models() -> Result<Vec<crate::protocol::ModelInfo>, AppError> {
+    crate::resources::list_models(&crate::resources::resolve()?.model_root)
 }
 
 fn mutate(
@@ -207,21 +261,7 @@ pub fn start_sync(
 ) -> Result<Uuid, AppError> {
     let run = state.runs.prepare(pair_id, relative_paths, force_doc_ids)?;
     let run_id = run.run_id;
-    let sidecar = (|| {
-        let mut saved = state
-            .sidecar
-            .lock()
-            .map_err(|_| AppError::new("state_unavailable"))?;
-        if saved.is_none() {
-            let resources = crate::resources::resolve()?;
-            *saved = Some(Sidecar::new(
-                resources.sidecar_executable,
-                resources.sidecar_args,
-                resources.model_root,
-            ));
-        }
-        Ok(saved.as_ref().unwrap().clone())
-    })();
+    let sidecar = state.sidecar();
     let controller = state.runs.clone();
     tauri::async_runtime::spawn(async move {
         controller

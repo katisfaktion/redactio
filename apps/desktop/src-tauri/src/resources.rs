@@ -110,3 +110,62 @@ fn resource(path: PathBuf, directory: bool) -> Result<PathBuf, AppError> {
 fn setup_error() -> AppError {
     AppError::new("setup_incomplete")
 }
+
+/// Metadata-only local availability. The engine verifies actual spaCy package
+/// compatibility when configured; this never imports or downloads a model.
+pub fn list_models(root: &Path) -> Result<Vec<crate::protocol::ModelInfo>, AppError> {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Manifest {
+        models: Vec<Entry>,
+    }
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Entry {
+        name: String,
+        version: String,
+        path: PathBuf,
+    }
+    let invalid = || AppError::new("invalid_model_manifest");
+    let manifest = resource(root.join("manifest.json"), false).map_err(|_| invalid())?;
+    let manifest: Manifest = serde_json::from_slice(&fs::read(manifest).map_err(|_| invalid())?)
+        .map_err(|_| invalid())?;
+    let mut names = std::collections::HashSet::new();
+    manifest
+        .models
+        .into_iter()
+        .map(|entry| {
+            if entry.name.is_empty()
+                || entry.version.is_empty()
+                || !names.insert(entry.name.clone())
+                || entry.path.as_os_str().is_empty()
+                || entry
+                    .path
+                    .components()
+                    .any(|part| !matches!(part, std::path::Component::Normal(_)))
+            {
+                return Err(invalid());
+            }
+            let model = root.join(entry.path);
+            let compatible = (|| {
+                resource(model.join("config.cfg"), false)?;
+                let meta = resource(model.join("meta.json"), false)?;
+                let meta: serde_json::Value =
+                    serde_json::from_slice(&fs::read(meta)?).map_err(|_| invalid())?;
+                Ok::<_, AppError>(
+                    meta["lang"] == "de"
+                        && meta["version"] == entry.version
+                        && meta["name"]
+                            .as_str()
+                            .is_some_and(|name| format!("de_{name}") == entry.name),
+                )
+            })()
+            .unwrap_or(false);
+            Ok(crate::protocol::ModelInfo {
+                name: entry.name,
+                version: entry.version,
+                compatible,
+            })
+        })
+        .collect()
+}
