@@ -146,17 +146,34 @@ und bestätigen keine Berechtigung zur Weitergabe.
 
 ## 6. Freigegebene Ergebnisse exportieren
 
-Die aktuellen freigegebenen Dokumente eines Paars auswählen und einen eigenen
-**leeren Exportordner** festlegen. Er muss außerhalb aller Quellen,
-Arbeitsausgaben und App-Einstellungen liegen. Für jedes Paar einen getrennten
-Export verwenden: Dokumentnamen wie `doc-0001.md` können sich zwischen Paaren wiederholen.
+Unter **Dokumente** die gewünschten freigegebenen Dokumente in der Spalte
+**Auswahl** markieren und **Auswahl freigegeben exportieren** wählen. Im Dialog
+den Paarnamen und die aufgeführten Dokument-IDs kontrollieren. Die Auswahl bleibt
+für diesen Export fest; Paarwechsel und andere Vorgänge sind bis zum Schließen
+des Dialogs gesperrt.
+
+Mit **Exportordner auswählen und exportieren** einen eigenen **leeren
+Exportordner** wählen. Er darf keine Quelle, Arbeitsausgabe oder App-Einstellungen
+enthalten und auch nicht darin liegen. Für jedes Paar einen getrennten Export
+verwenden: Dokumentnamen wie `doc-0001.md` können sich zwischen Paaren wiederholen.
+**Abbrechen** vor der Ordnerwahl oder der Abbruch der Ordnerauswahl kopiert keine
+Dokumente. Während der anschließenden Prüfung und Kopie ist der Dialog gesperrt;
+es gibt keinen Abbruch einer bereits laufenden Kopie.
 
 Exportiert werden nur die ausgewählten, aktuell freigegebenen Markdown-Dateien.
 Originale, Zuordnung, Notizen und private Regeln werden nicht mitkopiert. Bei
 veralteten, fehlenden oder extern veränderten Dateien zunächst den Fehler beheben
-und erneut prüfen. Die Ergebnisübersicht auch auf fehlgeschlagene Kopien prüfen;
-ein unvollständiger Export ist nicht vollständig freigegebenes Liefermaterial.
-Für einen erneuten Export einen neuen leeren Ordner verwenden.
+und erneut prüfen. Die Ergebnisübersicht unterscheidet **Exportiert** und
+**Blockiert oder fehlgeschlagen**. Bei **Export unvollständig** bleiben bereits
+exportierte Dateien erhalten; fehlende oder nicht bestätigte Kopien im Exportordner
+prüfen. Ein unvollständiger Export ist kein vollständig geprüftes Liefermaterial.
+Mit **Schließen** zur Übersicht zurückkehren und für einen weiteren Versuch einen
+neuen leeren Ordner verwenden; vorhandene Dateien werden nicht überschrieben.
+
+Eine Protokollwarnung kann auch nach erfolgreichem Export oder Abbruch erscheinen.
+Sie bedeutet, dass der Vorgang nicht vollständig protokolliert wurde; bereits
+exportierte Dateien bleiben erhalten. Die Warnung vor dem Schließen beachten und
+Speicherplatz sowie Schreibrechte am Protokollort prüfen.
 
 Ein Export ist eine geprüfte **Momentaufnahme**. Spätere Änderungen oder der
 Widerruf einer Freigabe entfernen bereits exportierte Kopien nicht. Vor deren
