@@ -1,8 +1,8 @@
 use redactio_lib::{
     domain::settings::ProcessingConfig,
     protocol::{
-        ConfigurePayload, ConfigureResult, PingResult, PreviewRulesPayload, PreviewRulesResult,
-        ProcessRequest, ProcessResult, ReviewRequest,
+        ConfigurePayload, ConfigureResult, Detection, OutputEntry, PingResult, PreviewRulesPayload,
+        PreviewRulesResult, ProcessRequest, ProcessResult, ReviewRequest,
     },
     resources,
     sidecar::Sidecar,
@@ -42,9 +42,194 @@ fn fake_with_marker(mode: &str, marker: &std::path::Path) -> Sidecar {
     )
 }
 
+fn configuration(pair: &str, revision: &str) -> serde_json::Value {
+    serde_json::json!({
+        "sync_pair_id": pair,
+        "processing_revision": revision,
+        "config": {
+            "model": "de_core_news_sm",
+            "enabled_entities": ["PERSON", "EMAIL_ADDRESS"],
+            "custom_rules": [],
+            "include_positions": false
+        }
+    })
+}
+
+fn document(pair: &str, revision: &str) -> serde_json::Value {
+    serde_json::json!({
+        "sync_pair_id": pair,
+        "processing_revision": revision,
+        "source_path": "synthetic.docx"
+    })
+}
+
+async fn wait_for_marker(marker: &std::path::Path) {
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while !marker.exists() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("fake child did not reach the expected state");
+}
+
+#[test]
+fn blocked_stdin_write_obeys_timeout_and_shutdown() {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_io()
+        .enable_time()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let directory = tempfile::tempdir().unwrap();
+            let marker = directory.path().join("never-read");
+            let child = fake_with_marker("never-read", &marker);
+            let started = Instant::now();
+            let request_child = child.clone();
+            let request = tokio::spawn(async move {
+                request_child
+                    .request::<_, serde_json::Value>(
+                        "ping",
+                        &serde_json::json!({"padding": "x".repeat(2 * 1024 * 1024)}),
+                        Duration::from_millis(100),
+                    )
+                    .await
+            });
+            wait_for_marker(&marker).await;
+
+            let error = tokio::time::timeout(Duration::from_secs(1), request)
+                .await
+                .expect("blocked write must honor its deadline")
+                .unwrap()
+                .unwrap_err();
+            assert_eq!(error.code, "engine_timeout");
+            assert!(
+                started.elapsed() < Duration::from_secs(1),
+                "blocked writer delayed timeout for {:?}",
+                started.elapsed()
+            );
+            tokio::time::timeout(Duration::from_secs(1), child.shutdown())
+                .await
+                .expect("shutdown must not wait for the blocked writer");
+        });
+}
+
+#[test]
+fn shutdown_cancels_a_blocked_stdin_write() {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_io()
+        .enable_time()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let directory = tempfile::tempdir().unwrap();
+            let marker = directory.path().join("never-read-cancel");
+            let child = fake_with_marker("never-read", &marker);
+            let request_child = child.clone();
+            let request = tokio::spawn(async move {
+                request_child
+                    .request::<_, serde_json::Value>(
+                        "ping",
+                        &serde_json::json!({"padding": "x".repeat(2 * 1024 * 1024)}),
+                        Duration::from_secs(10),
+                    )
+                    .await
+            });
+            wait_for_marker(&marker).await;
+
+            tokio::time::timeout(Duration::from_secs(1), child.shutdown())
+                .await
+                .expect("shutdown must kill independently of the blocked writer");
+            let error = tokio::time::timeout(Duration::from_secs(1), request)
+                .await
+                .expect("cancelled blocked write must finish promptly")
+                .unwrap()
+                .unwrap_err();
+            assert_eq!(error.code, "operation_cancelled");
+        });
+}
+
+#[test]
+fn aborting_active_request_kills_its_process_before_unlocking_next_request() {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_io()
+        .enable_time()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let directory = tempfile::tempdir().unwrap();
+            let marker = directory.path().join("abort-steal");
+            let child = fake_with_marker("abort-steal", &marker);
+            let request_child = child.clone();
+            let abandoned = tokio::spawn(async move {
+                request_child
+                    .request::<_, serde_json::Value>(
+                        "ping",
+                        &serde_json::json!({"abandoned": true}),
+                        Duration::from_secs(10),
+                    )
+                    .await
+            });
+            wait_for_marker(&marker).await;
+            abandoned.abort();
+            assert!(abandoned.await.unwrap_err().is_cancelled());
+
+            let response: serde_json::Value = child
+                .request(
+                    "ping",
+                    &serde_json::json!({"current": true}),
+                    Duration::from_secs(1),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response, serde_json::json!({"current": true}));
+            child.shutdown().await;
+        });
+}
+
+#[cfg(unix)]
+#[test]
+fn dropping_last_owner_kills_and_reaps_an_active_child() {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_io()
+        .enable_time()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let directory = tempfile::tempdir().unwrap();
+            let marker = directory.path().join("pid-hang");
+            let sidecar = fake_with_marker("pid-hang", &marker);
+            let request = tokio::spawn(async move {
+                sidecar
+                    .request::<_, serde_json::Value>(
+                        "ping",
+                        &serde_json::json!({}),
+                        Duration::from_secs(10),
+                    )
+                    .await
+            });
+            wait_for_marker(&marker).await;
+            let pid = std::fs::read_to_string(&marker)
+                .unwrap()
+                .parse::<u32>()
+                .unwrap();
+
+            request.abort();
+            assert!(request.await.unwrap_err().is_cancelled());
+            tokio::time::timeout(Duration::from_secs(1), async {
+                while std::path::Path::new(&format!("/proc/{pid}")).exists() {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("last-owner drop must kill and reap the child");
+        });
+}
+
 #[test]
 fn hung_child_is_reaped_before_reuse() {
     tokio::runtime::Builder::new_current_thread()
+        .enable_io()
         .enable_time()
         .build()
         .unwrap()
@@ -65,6 +250,7 @@ fn hung_child_is_reaped_before_reuse() {
 #[test]
 fn response_pair_and_revision_must_match_the_request() {
     tokio::runtime::Builder::new_current_thread()
+        .enable_io()
         .enable_time()
         .build()
         .unwrap()
@@ -88,6 +274,7 @@ fn response_pair_and_revision_must_match_the_request() {
 #[test]
 fn unknown_response_id_is_ignored_without_stealing_the_current_reply() {
     tokio::runtime::Builder::new_current_thread()
+        .enable_io()
         .enable_time()
         .build()
         .unwrap()
@@ -107,6 +294,7 @@ fn unknown_response_id_is_ignored_without_stealing_the_current_reply() {
 #[test]
 fn oversized_frame_is_rejected_before_deserialization() {
     tokio::runtime::Builder::new_current_thread()
+        .enable_io()
         .enable_time()
         .build()
         .unwrap()
@@ -125,6 +313,7 @@ fn oversized_frame_is_rejected_before_deserialization() {
 #[test]
 fn response_envelope_rejects_unknown_fields() {
     tokio::runtime::Builder::new_current_thread()
+        .enable_io()
         .enable_time()
         .build()
         .unwrap()
@@ -143,6 +332,7 @@ fn response_envelope_rejects_unknown_fields() {
 #[test]
 fn sidecar_error_exposes_only_its_safe_payload() {
     tokio::runtime::Builder::new_current_thread()
+        .enable_io()
         .enable_time()
         .build()
         .unwrap()
@@ -167,6 +357,7 @@ fn sidecar_error_exposes_only_its_safe_payload() {
 #[test]
 fn sidecar_error_code_must_match_the_safe_code_contract() {
     tokio::runtime::Builder::new_current_thread()
+        .enable_io()
         .enable_time()
         .build()
         .unwrap()
@@ -183,6 +374,7 @@ fn sidecar_error_code_must_match_the_safe_code_contract() {
 #[test]
 fn unexpected_exit_is_reaped_and_retried_once_with_a_fresh_id() {
     tokio::runtime::Builder::new_current_thread()
+        .enable_io()
         .enable_time()
         .build()
         .unwrap()
@@ -207,6 +399,7 @@ fn unexpected_exit_is_reaped_and_retried_once_with_a_fresh_id() {
 #[test]
 fn document_retry_replays_the_complete_successful_configuration() {
     tokio::runtime::Builder::new_current_thread()
+        .enable_io()
         .enable_time()
         .build()
         .unwrap()
@@ -266,8 +459,147 @@ fn document_retry_replays_the_complete_successful_configuration() {
 }
 
 #[test]
+fn fresh_process_restores_configuration_after_timeout_and_ping() {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_io()
+        .enable_time()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let directory = tempfile::tempdir().unwrap();
+            let marker = directory.path().join("timed-process");
+            let child = fake_with_marker("timeout-then-require-config", &marker);
+            let pair = "00000000-0000-0000-0000-000000000001";
+            let revision = "00000000-0000-0000-0000-000000000003";
+            let configuration = configuration(pair, revision);
+            child
+                .request::<_, ConfigureResult>("configure", &configuration, Duration::from_secs(1))
+                .await
+                .unwrap();
+
+            let timed_out: Result<serde_json::Value, _> = child
+                .request(
+                    "process_document",
+                    &document(pair, revision),
+                    Duration::from_millis(100),
+                )
+                .await;
+            assert_eq!(timed_out.unwrap_err().code, "engine_timeout");
+            child
+                .request::<_, serde_json::Value>(
+                    "ping",
+                    &serde_json::json!({}),
+                    Duration::from_secs(1),
+                )
+                .await
+                .unwrap();
+
+            let processed: serde_json::Value = child
+                .request(
+                    "process_document",
+                    &document(pair, revision),
+                    Duration::from_secs(1),
+                )
+                .await
+                .unwrap();
+            assert_eq!(processed["configured_model"], "de_core_news_sm");
+            assert_eq!(
+                std::fs::read_to_string(marker.with_extension("configs"))
+                    .unwrap()
+                    .lines()
+                    .count(),
+                2
+            );
+            child.shutdown().await;
+        });
+}
+
+#[test]
+fn invalid_configure_result_is_not_saved_or_replayed() {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_io()
+        .enable_time()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let directory = tempfile::tempdir().unwrap();
+            let marker = directory.path().join("invalid-initial-config");
+            let child = fake_with_marker("invalid-configure-then-exit", &marker);
+            let pair = "00000000-0000-0000-0000-000000000001";
+            let revision = "00000000-0000-0000-0000-000000000003";
+
+            let configured: Result<serde_json::Value, _> = child
+                .request(
+                    "configure",
+                    &configuration(pair, revision),
+                    Duration::from_secs(1),
+                )
+                .await;
+            assert_eq!(configured.unwrap_err().code, "invalid_sidecar_protocol");
+            let processed: Result<serde_json::Value, _> = child
+                .request(
+                    "process_document",
+                    &document(pair, revision),
+                    Duration::from_secs(1),
+                )
+                .await;
+            assert_eq!(processed.unwrap_err().code, "configuration_mismatch");
+            assert_eq!(
+                std::fs::read_to_string(marker.with_extension("configs"))
+                    .unwrap()
+                    .lines()
+                    .count(),
+                1
+            );
+            child.shutdown().await;
+        });
+}
+
+#[test]
+fn invalid_configure_result_during_replay_stops_before_document_retry() {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_io()
+        .enable_time()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let directory = tempfile::tempdir().unwrap();
+            let marker = directory.path().join("invalid-replay-config");
+            let child = fake_with_marker("invalid-configure-replay", &marker);
+            let pair = "00000000-0000-0000-0000-000000000001";
+            let revision = "00000000-0000-0000-0000-000000000003";
+            child
+                .request::<_, ConfigureResult>(
+                    "configure",
+                    &configuration(pair, revision),
+                    Duration::from_secs(1),
+                )
+                .await
+                .unwrap();
+
+            let processed: Result<serde_json::Value, _> = child
+                .request(
+                    "process_document",
+                    &document(pair, revision),
+                    Duration::from_secs(1),
+                )
+                .await;
+            assert_eq!(processed.unwrap_err().code, "invalid_sidecar_protocol");
+            assert_eq!(
+                std::fs::read_to_string(marker.with_extension("configs"))
+                    .unwrap()
+                    .lines()
+                    .count(),
+                2
+            );
+            child.shutdown().await;
+        });
+}
+
+#[test]
 fn shutdown_cancels_a_request_during_startup_without_restarting() {
     tokio::runtime::Builder::new_current_thread()
+        .enable_io()
         .enable_time()
         .build()
         .unwrap()
@@ -299,6 +631,7 @@ fn shutdown_cancels_a_request_during_startup_without_restarting() {
 #[test]
 fn shutdown_allows_graceful_eof_before_forcing_exit() {
     tokio::runtime::Builder::new_current_thread()
+        .enable_io()
         .enable_time()
         .build()
         .unwrap()
@@ -403,6 +736,64 @@ fn process_result_enforces_python_identity_hash_timestamp_and_scalar_constraints
 }
 
 #[test]
+fn nullable_protocol_fields_are_required_even_when_null_is_allowed() {
+    let detection = serde_json::json!({
+        "id": "opaque-1",
+        "start": 0,
+        "end": 4,
+        "entity_type": "PERSON",
+        "confidence": null,
+        "recognizer": "synthetic-recognizer",
+        "origin": "automatic"
+    });
+    assert!(serde_json::from_value::<Detection>(detection.clone()).is_ok());
+    let mut missing_detection_confidence = detection;
+    missing_detection_confidence
+        .as_object_mut()
+        .unwrap()
+        .remove("confidence");
+    assert!(serde_json::from_value::<Detection>(missing_detection_confidence).is_err());
+
+    let output = serde_json::json!({
+        "start_offset": 0,
+        "end_offset": 4,
+        "entity_type": "PERSON",
+        "placeholder": "<PERSON_1>",
+        "confidence": null,
+        "recognizer": "synthetic-recognizer",
+        "origin": "automatic"
+    });
+    assert!(serde_json::from_value::<OutputEntry>(output.clone()).is_ok());
+    let mut missing_output_confidence = output;
+    missing_output_confidence
+        .as_object_mut()
+        .unwrap()
+        .remove("confidence");
+    assert!(serde_json::from_value::<OutputEntry>(missing_output_confidence).is_err());
+
+    let review = serde_json::json!({
+        "sync_pair_id": "00000000-0000-0000-0000-000000000001",
+        "doc_id": "doc-0001",
+        "source_hash_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "processing_revision": "00000000-0000-0000-0000-000000000003",
+        "redacted_at": "2026-09-19T12:34:56Z",
+        "source_path": "synthetic.docx",
+        "detections": [],
+        "decisions": {"dismissed_ids": [], "manual": []},
+        "review_status": "pending",
+        "reviewed_at": null,
+        "acknowledged_warnings": []
+    });
+    assert!(serde_json::from_value::<ReviewRequest>(review.clone()).is_ok());
+    let mut missing_reviewed_at = review;
+    missing_reviewed_at
+        .as_object_mut()
+        .unwrap()
+        .remove("reviewed_at");
+    assert!(serde_json::from_value::<ReviewRequest>(missing_reviewed_at).is_err());
+}
+
+#[test]
 fn resource_resolution_uses_explicit_development_process_arguments() {
     static ENVIRONMENT: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _environment = ENVIRONMENT.lock().unwrap();
@@ -428,6 +819,7 @@ fn resource_resolution_uses_explicit_development_process_arguments() {
 #[test]
 fn request_type_is_limited_to_the_c2_protocol() {
     tokio::runtime::Builder::new_current_thread()
+        .enable_io()
         .enable_time()
         .build()
         .unwrap()
@@ -450,6 +842,7 @@ fn request_type_is_limited_to_the_c2_protocol() {
 #[test]
 fn model_root_is_passed_as_an_explicit_child_argument() {
     tokio::runtime::Builder::new_current_thread()
+        .enable_io()
         .enable_time()
         .build()
         .unwrap()
@@ -469,6 +862,7 @@ fn model_root_is_passed_as_an_explicit_child_argument() {
 #[test]
 fn second_child_exit_fails_without_a_third_spawn() {
     tokio::runtime::Builder::new_current_thread()
+        .enable_io()
         .enable_time()
         .build()
         .unwrap()
@@ -490,6 +884,7 @@ fn second_child_exit_fails_without_a_third_spawn() {
 #[test]
 fn timeout_kills_without_automatic_retry() {
     tokio::runtime::Builder::new_current_thread()
+        .enable_io()
         .enable_time()
         .build()
         .unwrap()
@@ -511,6 +906,7 @@ fn timeout_kills_without_automatic_retry() {
 #[test]
 fn restart_keeps_the_original_whole_request_deadline() {
     tokio::runtime::Builder::new_current_thread()
+        .enable_io()
         .enable_time()
         .build()
         .unwrap()
@@ -533,6 +929,7 @@ fn restart_keeps_the_original_whole_request_deadline() {
 #[test]
 fn arbitrary_library_stderr_is_discarded_without_blocking_or_exposure() {
     tokio::runtime::Builder::new_current_thread()
+        .enable_io()
         .enable_time()
         .build()
         .unwrap()
@@ -552,6 +949,7 @@ fn arbitrary_library_stderr_is_discarded_without_blocking_or_exposure() {
 #[test]
 fn wrong_response_type_and_excessive_json_depth_fail_safely() {
     tokio::runtime::Builder::new_current_thread()
+        .enable_io()
         .enable_time()
         .build()
         .unwrap()
@@ -570,6 +968,7 @@ fn wrong_response_type_and_excessive_json_depth_fail_safely() {
 #[test]
 fn outbound_message_limit_is_enforced_before_write() {
     tokio::runtime::Builder::new_current_thread()
+        .enable_io()
         .enable_time()
         .build()
         .unwrap()
@@ -592,6 +991,7 @@ fn child_does_not_inherit_python_module_override_paths() {
     let _environment = ENVIRONMENT.lock().unwrap();
     std::env::set_var("PYTHONPATH", "/tmp/CANARY_PRIVATE_PATH");
     tokio::runtime::Builder::new_current_thread()
+        .enable_io()
         .enable_time()
         .build()
         .unwrap()
@@ -721,6 +1121,7 @@ fn reviewed_cli_roundtrips_through_the_bundled_model() {
     let revision = Uuid::new_v4();
 
     tokio::runtime::Builder::new_current_thread()
+        .enable_io()
         .enable_time()
         .build()
         .unwrap()

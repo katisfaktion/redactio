@@ -73,6 +73,7 @@ struct DetectionWire {
     start: u64,
     end: u64,
     entity_type: EntityType,
+    #[serde(deserialize_with = "required_confidence")]
     confidence: Option<f64>,
     recognizer: String,
     origin: DetectionOrigin,
@@ -130,6 +131,7 @@ struct OutputEntryWire {
     end_offset: u64,
     entity_type: EntityType,
     placeholder: String,
+    #[serde(deserialize_with = "required_confidence")]
     confidence: Option<f64>,
     recognizer: String,
     origin: OutputOrigin,
@@ -241,7 +243,7 @@ pub struct ReviewRequest {
     pub detections: Vec<Detection>,
     pub decisions: Decisions,
     pub review_status: ReviewStatus,
-    #[serde(default, deserialize_with = "optional_timestamp")]
+    #[serde(deserialize_with = "optional_timestamp")]
     pub reviewed_at: Option<String>,
     #[serde(deserialize_with = "safe_codes")]
     pub acknowledged_warnings: Vec<String>,
@@ -315,6 +317,12 @@ fn protocol_version<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u8, D:
         return Err(D::Error::custom("unsupported protocol version"));
     }
     Ok(value)
+}
+
+fn required_confidence<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<f64>, D::Error> {
+    Option::<f64>::deserialize(deserializer)
 }
 
 fn sha256<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
