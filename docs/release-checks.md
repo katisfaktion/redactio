@@ -58,23 +58,25 @@ Every row requires recorded outcomes and evidence against the final artifact. St
 | A02 Discovery | Scan nested `.docx`/`.DOCX`, hidden/lock/metadata files, junctions, and an ACL-unreadable peer. Stable ordered DOCX records appear; exclusions are absent and unreadable peers receive safe errors. | partial |
 | A03 Extraction | Run paragraphs/tables, separate warning/corrupt/empty cases and bounded size/expansion tests. Reading order is preserved; unsupported surfaces warn, corrupt input errors, empty bodies cannot approve, and limits stop work safely. | partial |
 | A04 Redaction | Inspect canary, repeated-name, overlap and Unicode outputs. All active synthetic identifiers are removed; repeated values reuse placeholders; zero-based code-point offsets delimit exactly the output placeholders. | partial |
-| A05 Configuration | Toggle entities, add invalid/valid regex and words, switch prefetched models and simulate engine/extraction revisions. Only affected pair results become stale; invalid/unavailable configuration does not save; rename/select leaves revisions stable. | unverified |
+| A05 Configuration | Toggle entities, add invalid/valid regex and words, switch prefetched models and simulate engine/extraction revisions. Only affected pair results become stale; invalid/unavailable configuration does not save; rename/select leaves revisions stable. | partial |
 | A06 Incremental | Run twice, edit a source, remove output, tamper with output, and force a reviewed document. Unchanged work skips; changed/missing work regenerates; external edits/reviews require explicit resolution and no silent replacement. | unverified |
 | A07 Recovery | Inject every journal boundary, native locked-file failure and restart. Incomplete work stays pending, original bytes survive failed replacement, retry completes coherently and IDs are never reused. | partial |
 | A08 Cancellation | Cancel initialization and a document, double-click start, switch pair while busy and start another instance. No partial success or cross-pair changes appear; only one writer runs and cancellation visibly settles. | unverified |
 | A09 Sidecar | Run real serialized requests plus malformed input, EOF/crash, timeout, late reply and shutdown tests. Errors remain bounded/safe, restart is limited, model identity matches and retries never duplicate commits. | partial |
-| A10 Review | Keyboard-add/dismiss/change entity types, save/reopen and change source/config. Body, offsets and counts agree; bound decisions persist; changed inputs invalidate decisions; approval binds exact final bytes. | unverified |
+| A10 Review | Keyboard-add/dismiss/change entity types, save/reopen and change source/config. Body, offsets and counts agree; bound decisions persist; changed inputs invalidate decisions; approval binds exact final bytes. | partial |
 | A11 Export | Export current approvals to an empty directory outside all pairs, then try mixed ownership/stale/tampered output. Only selected current approved Markdown is copied; invalid selections fail and originals, notes, mappings and identifying rules are absent. | unverified |
 | A12 Privacy | Use canaries in paths/rules/invalid data/errors and malicious Markdown links/HTML. Logs/frontmatter contain no canaries; preview cannot execute scripts or request remote assets. Observe app and all children during cold startup and the full flow: zero external attempts. | unverified |
 | A13 Audit | Complete/fail/cancel attempts, concurrent append/recovery and unwritable audit directory. Records retain correct opaque pair IDs, prior entries remain valid, no pair names leak, and audit failure is visibly announced. | unverified |
 | A14 Windows artifact | Extract exact ZIP to `C:\Users\Public\Redactio Prüfung` in a disposable Windows 11 x64 standard-user environment without dev tools/network. Launch/configure/scan/process/review/export/restart/exit succeed; app-local fixed WebView identity is observed; all Onyx assets/German text render without remote attempts. | unverified |
 | A15 Usability | Complete the main flow with Tab/Shift+Tab/Enter/Space/Escape and a screen reader. All controls have names, visible ordered focus and focus restoration; progress/errors announce, warning status is not color-only, contrast passes and large views/ordinary controls respond within 200 ms. | unverified |
 | A16 Pair lifecycle | Add/rename/select/restart/remove/re-add. Duplicate names fail, selected pair persists, removal preserves all data and re-adding restores managed identity and target binding. | partial |
-| A17 Pair isolation | Use two `doc-0001` records with distinct rules/models. Processing/review/retry/export stay in their owning pair; sidecar switches remove previous custom rules and load the selected local model. | unverified |
+| A17 Pair isolation | Use two `doc-0001` records with distinct rules/models. Processing/review/retry/export stay in their owning pair; sidecar switches remove previous custom rules and load the selected local model. | partial |
 | A18 Pair routing | Send unknown/mismatched pair ownership, late replies, and switch with unsaved edits. Host rejects mismatches, late events never populate another pair, and switching requires save/discard. | unverified |
 
 ## Real-window evidence protocol
 
+Build the candidate from a clean independent native Git clone; WSL-linked worktree Git
+metadata is not source-provenance evidence. Record source/tool manifest and clean status.
 Record build/source revision, ZIP SHA-256, OS edition/build/x64, CPU/core count, RAM,
 SSD/no GPU requirement, account/token type, process PATH and tool-absence probes. The
 reference acceptance machine is Windows 11 x64, four CPU cores, 16 GB RAM, and SSD.
@@ -82,6 +84,48 @@ Capture a full window using DPI-aware physical coordinates; inspect top/right/bo
 controls at actual scaling. Record accessible names, focus sequence/restoration,
 keyboard outcomes, screen-reader announcements, contrast measurements and control/view
 latencies. Browser/Vitest checks complement this record; they cannot replace it.
+
+For the conditional standard-user host route, launch only the reviewed complete candidate
+and only after verifying the actual Known Folder `com.redactio.app` is still the empty
+task-created directory and no Redactio process or existing settings are present. Record
+the candidate SHA-256 and owned synthetic TEMP roots before launch. If user data exists,
+stop this route. This route supplies functional evidence only, not clean-machine or
+zero-network acceptance. Preserve foreground applications, use only verified app/child
+PID-scoped automation, never overwrite the host clipboard, and clean only unchanged
+files known to have been created by this test.
+
+A15 must measure the transition into “Per Tastatur auswählen” at the 1,000,000-code-point
+limit, not only keys after the view settles. P4.2 Linux evidence found approximately
+1,167 ms queued input delay and a 1,240 ms frame gap during this transition; this failure
+remains recorded independently of Windows results. On the exact Windows/WebView2 candidate:
+
+1. Record viewport/DPI, source code-point count, source hash, WebView version and cold/warm
+   state. Verify native selection, emoji/combining/CRLF offsets and immutable source text.
+2. Attach UI Automation observers from a separate process before triggering the transition. Scope elements and
+   input handles to the verified process tree. Timestamp with one monotonic clock before
+   sending the activation key; queue a selection key during transition and record its
+   actual renderer-observable selection/focus effect. Record the ordinary settled-key
+   baseline separately. Do not time a later tree search or serialize the million-character
+   value inside the timing interval.
+3. Measure visible window/repaint response separately during the same transition. A
+   successful parent-window `WM_NULL`, `PostMessage` return or `Process.Responding` result
+   does not establish WebView renderer response. UIA callback receipt includes accessibility
+   delivery overhead; if it is slow, retain that limit and obtain a corroborating renderer
+   observation before attributing the delay. Unsupported UIA patterns leave the measurement
+   unverified, not passed.
+4. Preserve each raw timing and maximum, not only an average. No measured transition input
+   or window response above 200 ms may be accepted. Reproduce a breach and send evidence
+   to the UI owner for a measured fix. Keep settled timing, transition timing and accessibility
+   query overhead distinct. A disposable-control calibration establishes the observer only;
+   it is never an application-performance result.
+
+Exercise real native close with dirty review state: stay preserves changes; save failure
+keeps the window and changes; save/discard then close succeeds; clean close exits the owned
+app and sidecar. Also check pair/document/back navigation focus restoration, warnings and
+empty-body approval gates, private notes, hostile Markdown rendered as inert text, and
+screen-reader announcements. For final P4.3 rerun the native missing-root sync/export audit
+selection, cancellation without source/model and ordinary source exclusion/lock release.
+The known file-symlink privilege failure remains a distinct unsupported fixture.
 
 Use a disposable VM/Sandbox/profile with synthetic documents only. Verify guest startup
 and standard-user token rather than assuming them: Sandbox's default account is admin.
