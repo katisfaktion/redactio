@@ -124,6 +124,34 @@ impl ValidatedWrite {
         reject_links(&self.path)?;
         Ok(())
     }
+
+    fn open_read(self) -> Result<File, AppError> {
+        self.validate()?;
+        let directories = self
+            .directories
+            .iter()
+            .map(|(path, _)| open_directory(path))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.validate()?;
+        let parent = self
+            .path
+            .parent()
+            .ok_or_else(|| AppError::new("invalid_path"))?;
+        let path = anchored_parent(parent, &directories[0]).join(
+            self.path
+                .file_name()
+                .ok_or_else(|| AppError::new("invalid_path"))?,
+        );
+        let file = open_regular_file(&path)?;
+        if Some(snapshot_file(&file)?) != self.destination {
+            return Err(AppError::new("path_changed"));
+        }
+        Ok(file)
+    }
+}
+
+pub(crate) fn open_validated_read(root: &Path, path: &Path) -> Result<File, AppError> {
+    ValidatedWrite::new(root, path)?.open_read()
 }
 
 /// Convenience for an already authorized host path. Takes a fresh identity
@@ -142,6 +170,10 @@ fn optional_snapshot(path: &Path) -> Result<Option<FileSnapshot>, AppError> {
 }
 
 pub(crate) fn file_snapshot(path: &Path) -> Result<FileSnapshot, AppError> {
+    snapshot_file(&open_regular_file(path)?)
+}
+
+fn open_regular_file(path: &Path) -> Result<File, AppError> {
     let mut options = fs::OpenOptions::new();
     options.read(true);
     #[cfg(unix)]
@@ -154,7 +186,9 @@ pub(crate) fn file_snapshot(path: &Path) -> Result<FileSnapshot, AppError> {
         use std::os::windows::fs::OpenOptionsExt;
         options.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
     }
-    snapshot_file(&options.open(path)?)
+    let file = options.open(path)?;
+    snapshot_file(&file)?;
+    Ok(file)
 }
 
 fn snapshot_file(file: &File) -> Result<FileSnapshot, AppError> {

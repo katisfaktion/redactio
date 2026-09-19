@@ -1,8 +1,9 @@
+use super::storage::open_validated_read;
 use crate::error::AppError;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::{
-    fs::{self, File},
+    fs,
     io::{self, Read},
     path::{Component, Path},
 };
@@ -37,6 +38,13 @@ pub struct ScanFailure {
 }
 
 pub fn scan_source(source: &Path) -> Result<ScanReport, AppError> {
+    scan_source_with(source, |_| {})
+}
+
+fn scan_source_with(
+    source: &Path,
+    mut before_open: impl FnMut(&Path),
+) -> Result<ScanReport, AppError> {
     let root_metadata = fs::metadata(source)?;
     if !root_metadata.is_dir() {
         return Err(AppError::new("not_directory"));
@@ -92,7 +100,8 @@ pub fn scan_source(source: &Path) -> Result<ScanReport, AppError> {
             });
             continue;
         };
-        match scan_file(entry.path(), relative_path.clone()) {
+        before_open(entry.path());
+        match scan_file(source, entry.path(), relative_path.clone()) {
             Ok(file) => report.files.push(file),
             Err(code) => report.errors.push(ScanFailure {
                 relative_path,
@@ -110,8 +119,9 @@ pub fn scan_source(source: &Path) -> Result<ScanReport, AppError> {
     Ok(report)
 }
 
-fn scan_file(path: &Path, relative_path: String) -> Result<ScannedFile, String> {
-    let metadata = fs::metadata(path).map_err(io_code)?;
+fn scan_file(root: &Path, path: &Path, relative_path: String) -> Result<ScannedFile, String> {
+    let mut file = open_validated_read(root, path).map_err(|error| error.code)?;
+    let metadata = file.metadata().map_err(io_code)?;
     let mtime = metadata
         .modified()
         .map(OffsetDateTime::from)
@@ -121,7 +131,6 @@ fn scan_file(path: &Path, relative_path: String) -> Result<ScannedFile, String> 
                 .map_err(|_| io::Error::other("invalid timestamp"))
         })
         .map_err(io_code)?;
-    let mut file = File::open(path).map_err(io_code)?;
     let mut hasher = Sha256::new();
     let mut buffer = [0_u8; 64 * 1024];
     loop {
@@ -200,5 +209,60 @@ fn safe_io_code(kind: Option<io::ErrorKind>) -> &'static str {
         Some(io::ErrorKind::NotFound) => "path_unavailable",
         Some(io::ErrorKind::PermissionDenied) => "permission_denied",
         _ => "storage_io",
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::symlink;
+
+    #[test]
+    fn a_discovered_file_replaced_by_a_symlink_is_a_file_error() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let victim = root.path().join("victim.docx");
+        let outside_file = outside.path().join("outside.docx");
+        fs::write(&victim, b"inside").unwrap();
+        fs::write(root.path().join("readable.docx"), b"readable").unwrap();
+        fs::write(&outside_file, b"outside").unwrap();
+
+        let report = scan_source_with(root.path(), |path| {
+            if path == victim {
+                fs::remove_file(path).unwrap();
+                symlink(&outside_file, path).unwrap();
+            }
+        })
+        .unwrap();
+
+        assert_eq!(report.files.len(), 1);
+        assert_eq!(report.files[0].relative_path, "readable.docx");
+        assert_eq!(report.errors.len(), 1);
+        assert_eq!(report.errors[0].relative_path, "victim.docx");
+    }
+
+    #[test]
+    fn a_discovered_parent_replaced_by_a_symlink_is_a_file_error() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let nested = root.path().join("nested");
+        let moved = root.path().join("moved");
+        fs::create_dir(&nested).unwrap();
+        fs::write(nested.join("victim.docx"), b"inside").unwrap();
+        fs::write(root.path().join("readable.docx"), b"readable").unwrap();
+        fs::write(outside.path().join("victim.docx"), b"outside").unwrap();
+
+        let report = scan_source_with(root.path(), |path| {
+            if path == nested.join("victim.docx") {
+                fs::rename(&nested, &moved).unwrap();
+                symlink(outside.path(), &nested).unwrap();
+            }
+        })
+        .unwrap();
+
+        assert_eq!(report.files.len(), 1);
+        assert_eq!(report.files[0].relative_path, "readable.docx");
+        assert_eq!(report.errors.len(), 1);
+        assert_eq!(report.errors[0].relative_path, "nested/victim.docx");
     }
 }
