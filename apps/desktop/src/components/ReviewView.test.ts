@@ -11,13 +11,25 @@ const view: ReviewViewData = {
   original_text: '<img src="https://example.invalid/pixel"> <PERSON_1>', body: '<img src="https://example.invalid/pixel"> <PERSON_1>', markdown: "synthetic markdown",
   detections: [], redactions: [], decisions: { dismissed_ids: [], manual: [] }, warnings: [], acknowledged_warnings: [], notes: "", status: "pending",
 };
-async function setup(value = view) {
+async function setup(value = view, entityTypes: string[] = []) {
   const scope = effectScope();
   const review = scope.run(() => useReview({ open: async () => value, save: async (key, input) => ({ ...value, ...input, key }) }))!;
   await review.open(value.key);
-  const wrapper = mount(ReviewView, { props: { review, pairName: "Sammlung A" }, attachTo: document.body });
+  const wrapper = mount(ReviewView, { props: { review, pairName: "Sammlung A", entityTypes }, attachTo: document.body });
   return { review, wrapper, cleanup() { wrapper.unmount(); scope.stop(); } };
 }
+
+test("review keeps an unknown native code selectable and displays it beside its fallback label", async () => {
+  const native = { ...view, original_text: "Kontonummer", body: "<BILLING_ACCOUNT_1>\n", detections: [
+    { id: "account", start: 0, end: 11, entity_type: "BILLING_ACCOUNT", confidence: .9, recognizer: "native", origin: "automatic" as const },
+  ] };
+  const { wrapper, cleanup } = await setup(native, ["BILLING_ACCOUNT", "PERSON"]);
+  try {
+    expect(wrapper.text()).toContain("BILLING_ACCOUNT (BILLING_ACCOUNT)");
+    await wrapper.get("details summary").trigger("click");
+    expect(wrapper.get('[role="option"][aria-label="BILLING_ACCOUNT"]').exists()).toBe(true);
+  } finally { cleanup(); }
+});
 
 test("untrusted text stays inert and literal placeholders are not detections", async () => {
   const { wrapper, cleanup } = await setup();

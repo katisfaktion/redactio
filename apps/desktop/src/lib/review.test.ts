@@ -37,7 +37,7 @@ test("strict review projection rejects corrupt spans, decisions and approval pol
     { ...view, expected_review_hash: undefined },
     { ...view, expected_review_hash: "unsafe" },
     { ...view, detections: [{ ...view.detections[0], end: 7 }] },
-    { ...view, detections: [{ ...view.detections[0], entity_type: "UNKNOWN" }] },
+    { ...view, detections: [{ ...view.detections[0], entity_type: "unknown" }] },
     { ...view, detections: [view.detections[0], view.detections[0]] },
     { ...view, redactions: [{ ...view.redactions[0], end_offset: 14 }] },
     { ...view, decisions: { dismissed_ids: ["missing"], manual: [] } },
@@ -46,6 +46,7 @@ test("strict review projection rejects corrupt spans, decisions and approval pol
     { ...view, status: "approved", warnings: ["headers_footers"] },
     { ...view, status: "approved", original_text: "", detections: [], redactions: [] },
   ]) expect(ReviewViewDataSchema.safeParse(changed).success).toBe(false);
+  expect(ReviewViewDataSchema.safeParse({ ...view, detections: [{ ...view.detections[0], entity_type: "BILLING_ACCOUNT" }] }).success).toBe(true);
   expect(ReviewViewDataSchema.safeParse({ ...view, status: "approved", warnings: ["headers_footers"], acknowledged_warnings: ["headers_footers"] }).success).toBe(true);
 });
 

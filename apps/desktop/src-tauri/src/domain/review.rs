@@ -214,7 +214,11 @@ pub async fn save_review(
         record.redacted_at = timestamp.clone();
     }
     record.reviewed_at = Some(timestamp);
-    validate_spans(&record, existing.original_text.chars().count() as u64)?;
+    validate_spans(
+        &record,
+        &pair.config,
+        existing.original_text.chars().count() as u64,
+    )?;
     let result = render(&current, &record, sidecar, engine).await?;
     record.output_hash = digest(result.markdown.as_bytes());
     recheck(
@@ -312,7 +316,7 @@ pub(crate) fn load_current(
     let generation = entry.committed.as_ref().unwrap();
     let record = ReviewRecord::read(&pair.source_folder, key, generation)?;
     let review_hash = generation.review_hash.clone();
-    validate_spans(&record, 1_000_000)?;
+    validate_spans(&record, &pair.config, 1_000_000)?;
     source.validate()?;
     output.validate()?;
     Ok(CurrentReview {
@@ -346,7 +350,11 @@ pub(crate) fn recheck(
     Ok(())
 }
 
-fn validate_spans(record: &ReviewRecord, text_length: u64) -> Result<(), AppError> {
+pub(crate) fn validate_spans(
+    record: &ReviewRecord,
+    config: &super::settings::ProcessingConfig,
+    text_length: u64,
+) -> Result<(), AppError> {
     record.validate()?;
     if record
         .detections
@@ -356,7 +364,75 @@ fn validate_spans(record: &ReviewRecord, text_length: u64) -> Result<(), AppErro
     {
         return Err(AppError::new("invalid_review"));
     }
+    let model_entity_types = configured_model_entity_types(config);
+    if record.detections.iter().any(|span| {
+        span.origin != crate::protocol::DetectionOrigin::Automatic
+            || !automatic_entity_allowed(config, &span.entity_type)
+    }) || record.decisions.manual.iter().any(|span| {
+        span.origin != crate::protocol::DetectionOrigin::Manual
+            || !manual_entity_allowed(config, &model_entity_types, &span.entity_type)
+    }) {
+        return Err(AppError::new("invalid_review"));
+    }
     Ok(())
+}
+
+pub(crate) fn automatic_entity_allowed(
+    config: &super::settings::ProcessingConfig,
+    entity: &super::settings::EntityType,
+) -> bool {
+    config
+        .model_entities
+        .as_ref()
+        .is_some_and(|selected| selected.contains(entity))
+        || config.enabled_entities.contains(entity)
+        || config.custom_rules.iter().any(|rule| match rule {
+            super::settings::CustomRule::Regex {
+                entity_type,
+                enabled,
+                ..
+            }
+            | super::settings::CustomRule::Words {
+                entity_type,
+                enabled,
+                ..
+            } => *enabled && entity_type == entity,
+        })
+}
+
+fn manual_entity_allowed(
+    config: &super::settings::ProcessingConfig,
+    model_entity_types: &[super::settings::EntityType],
+    entity: &super::settings::EntityType,
+) -> bool {
+    automatic_entity_allowed(config, entity)
+        || matches!(
+            entity,
+            super::settings::EntityType::Person
+                | super::settings::EntityType::Location
+                | super::settings::EntityType::Custom
+        )
+        || entity.is_supplementary()
+        || config.custom_rules.iter().any(|rule| match rule {
+            super::settings::CustomRule::Regex { entity_type, .. }
+            | super::settings::CustomRule::Words { entity_type, .. } => entity_type == entity,
+        })
+        || model_entity_types.contains(entity)
+}
+
+fn configured_model_entity_types(
+    config: &super::settings::ProcessingConfig,
+) -> Vec<super::settings::EntityType> {
+    crate::resources::resolve()
+        .ok()
+        .and_then(|resources| crate::resources::list_models(&resources.model_root).ok())
+        .and_then(|models| {
+            models
+                .into_iter()
+                .find(|model| model.compatible && model.name == config.model)
+                .map(|model| model.entity_types)
+        })
+        .unwrap_or_else(|| config.model_entities.clone().unwrap_or_default())
 }
 
 async fn render(
@@ -384,7 +460,15 @@ async fn render(
     let result: ProcessResult = sidecar
         .request("render_review", &request, DOCUMENT_TIMEOUT)
         .await?;
-    validate_spans(record, result.original_text.chars().count() as u64)?;
+    record.validate()?;
+    if record
+        .detections
+        .iter()
+        .chain(&record.decisions.manual)
+        .any(|span| span.end > result.original_text.chars().count() as u64)
+    {
+        return Err(AppError::new("invalid_review"));
+    }
     let body_length = result.body.chars().count() as u64;
     if result.sync_pair_id != record.key.sync_pair_id
         || result.doc_id != record.key.doc_id
@@ -428,4 +512,23 @@ fn view(record: ReviewRecord, result: ProcessResult, review_hash: String) -> Rev
 }
 fn digest(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::settings::{CustomRule, EntityType, ProcessingConfig};
+
+    #[test]
+    fn enabled_custom_rule_keeps_its_automatic_label_available() {
+        let mut config = ProcessingConfig::default();
+        config.enabled_entities.clear();
+        config.custom_rules.push(CustomRule::Regex {
+            id: uuid::Uuid::new_v4(),
+            entity_type: EntityType::Person,
+            enabled: true,
+            pattern: "Anna".into(),
+        });
+        assert!(automatic_entity_allowed(&config, &EntityType::Person));
+    }
 }

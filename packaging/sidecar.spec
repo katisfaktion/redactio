@@ -13,6 +13,13 @@ for package in ('spacy', 'presidio_analyzer', 'thinc'):
 datas += collect_data_files('tldextract', includes=['.tld_set_snapshot'])
 for distribution in ('redactio-sidecar', 'spacy', 'presidio-analyzer', 'tldextract'):
     datas += copy_metadata(distribution, recursive=True)
+# Transformers loads model implementations lazily. Torch/transformers hooks
+# collect their runtime binaries, source files and dependency metadata.
+hiddenimports += [
+    'transformers.models.bert.modeling_bert',
+    'transformers.models.bert.tokenization_bert_fast',
+    'safetensors.torch',
+]
 analysis = Analysis(
     [str(root / 'packaging/sidecar-entry.py')],
     pathex=[str(root / 'apps/sidecar/src')], datas=datas, binaries=binaries,

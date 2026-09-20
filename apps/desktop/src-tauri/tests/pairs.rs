@@ -1,6 +1,9 @@
-use redactio_lib::domain::settings::{
-    load_settings, save_settings, CustomRule, EntityType, ProcessingConfig, ProcessingFingerprint,
-    Settings,
+use redactio_lib::{
+    domain::settings::{
+        load_settings, save_settings, CustomRule, EntityType, ProcessingConfig,
+        ProcessingFingerprint, Settings,
+    },
+    protocol::{Decisions, Detection, DetectionOrigin},
 };
 use serde_json::{json, Value};
 use std::fs;
@@ -35,7 +38,10 @@ fn remove_keeps_collection_data_and_readd_keeps_identity_with_fresh_defaults() {
     );
     assert_eq!(loaded.add("Buch erneut", &source, &target).unwrap(), id);
     assert_ne!(loaded.sync_pairs[0].processing_revision, first_revision);
-    assert_eq!(loaded.sync_pairs[0].config.model, "de_core_news_lg");
+    assert_eq!(
+        loaded.sync_pairs[0].config.model,
+        "OpenMed-PII-German-BiomedBERT-Large-340M-v1"
+    );
     assert_eq!(loaded.sync_pairs[0].config.enabled_entities.len(), 8);
     assert!(loaded.sync_pairs[0].config.custom_rules.is_empty());
     assert!(loaded.sync_pairs[0].config.include_positions);
@@ -101,6 +107,78 @@ fn load_rejects_unknown_fields_invalid_selection_and_duplicate_ids() {
     value["sync_pairs"][1]["id"] = value["sync_pairs"][0]["id"].clone();
     fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
     assert_eq!(load_settings(&path).unwrap_err().code, "invalid_settings");
+}
+
+#[test]
+fn entity_types_accept_valid_model_owned_codes_outside_legacy_labels() {
+    let entity: EntityType = serde_json::from_str("\"ALIEN_42\"").unwrap();
+    assert_eq!(serde_json::to_string(&entity).unwrap(), "\"ALIEN_42\"");
+}
+
+#[test]
+fn legacy_settings_omit_native_selection_and_native_selection_rotates_revision() {
+    let root = tempfile::tempdir().unwrap();
+    let (source, target) = folders(&root, "native");
+    let mut settings = Settings::default();
+    let id = settings.add("Native", &source, &target).unwrap();
+    let legacy = serde_json::to_value(&settings).unwrap();
+    assert!(legacy["sync_pairs"][0]["config"]
+        .get("model_entities")
+        .is_none());
+
+    let before = settings.sync_pairs[0].processing_revision;
+    let mut native = ProcessingConfig::default();
+    native.enabled_entities.clear();
+    native.model_entities = Some(vec![EntityType::parse("ALIEN_42".into()).unwrap()]);
+    let fingerprint = ProcessingFingerprint {
+        model_entities: native.model_entities.clone(),
+        ..fingerprint()
+    };
+    assert!(settings
+        .apply_validated_config(id, native, fingerprint)
+        .unwrap());
+    assert_ne!(settings.sync_pairs[0].processing_revision, before);
+}
+
+#[test]
+fn malformed_or_duplicate_native_labels_are_rejected() {
+    assert!(serde_json::from_str::<EntityType>("\"lowercase\"").is_err());
+    let mut config = ProcessingConfig::default();
+    let label = EntityType::parse("ALIEN_42".into()).unwrap();
+    config.enabled_entities.clear();
+    config.model_entities = Some(vec![label.clone(), label]);
+    assert_eq!(config.validate().unwrap_err().code, "invalid_settings");
+}
+
+#[test]
+fn native_detection_and_manual_review_labels_keep_exact_wire_data() {
+    let detection: Detection = serde_json::from_value(json!({
+        "id": "native-1",
+        "start": 3,
+        "end": 9,
+        "entity_type": "ALIEN_42",
+        "confidence": 0.9433460831642151_f64,
+        "recognizer": "BiomedBertRecognizer",
+        "origin": "automatic"
+    }))
+    .unwrap();
+    assert_eq!(detection.entity_type.as_str(), "ALIEN_42");
+    assert_eq!(detection.confidence, Some(0.9433460831642151));
+    let review: Decisions = serde_json::from_value(json!({
+        "dismissed_ids": [],
+        "manual": [{
+            "id": "manual-native-1",
+            "start": 3,
+            "end": 9,
+            "entity_type": "ALIEN_42",
+            "confidence": null,
+            "recognizer": "manual",
+            "origin": "manual"
+        }]
+    }))
+    .unwrap();
+    assert_eq!(review.manual[0].origin, DetectionOrigin::Manual);
+    assert_eq!(review.manual[0].entity_type.as_str(), "ALIEN_42");
 }
 
 #[test]
@@ -342,6 +420,7 @@ fn fingerprint() -> ProcessingFingerprint {
         extraction_version: "1".into(),
         model_name: "de_core_news_lg".into(),
         model_version: "test-1".into(),
+        model_entities: None,
     }
 }
 

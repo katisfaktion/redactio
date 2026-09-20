@@ -1,5 +1,8 @@
 # Redactio Initial Release Implementation Plan
 
+The detector/model defaults in this original plan are superseded by [model-owned labels](2026-09-20-model-owned-labels.md): BiomedBERT replaces core-news and exposes its native label set.
+
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Deliver the approved offline Windows application through five testable increments.

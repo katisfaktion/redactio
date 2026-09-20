@@ -24,8 +24,6 @@ MAX_MESSAGE_BYTES = 64 * 1024 * 1024
 INITIALIZATION_SECONDS = 180
 DOCUMENT_SECONDS = 120
 ENTITIES = [
-    "PERSON",
-    "LOCATION",
     "EMAIL_ADDRESS",
     "PHONE_NUMBER",
     "IBAN_CODE",
@@ -346,7 +344,21 @@ def run_benchmark(command, model_root, corpus):
         "invalid_model_manifest",
     )
     model = manifest["models"][0]
-    require(model.get("name") == "de_core_news_lg", "invalid_model_manifest")
+    require(
+        model.get("name") == "OpenMed-PII-German-BiomedBERT-Large-340M-v1"
+        and model.get("path") == "biomedbert-de",
+        "invalid_model_manifest",
+    )
+    metadata = json.loads((model_root / "biomedbert-de/config.json").read_text(encoding="utf-8"))
+    labels = metadata.get("id2label")
+    require(isinstance(labels, dict) and bool(labels), "invalid_model_manifest")
+    require(all(isinstance(label, str) for label in labels.values()), "invalid_model_manifest")
+    model_entities = sorted({re.sub(r"^[BI]-", "", label) for label in labels.values()} - {"O"})
+    require(
+        bool(model_entities)
+        and all(re.fullmatch(r"[A-Z][A-Z0-9_]{0,63}", label) for label in model_entities),
+        "invalid_model_manifest",
+    )
     env = {
         key: value
         for key, value in os.environ.items()
@@ -375,6 +387,7 @@ def run_benchmark(command, model_root, corpus):
                     "processing_revision": revision,
                     "config": {
                         "model": model["name"],
+                        "model_entities": model_entities,
                         "enabled_entities": ENTITIES,
                         "custom_rules": [],
                         "include_positions": True,

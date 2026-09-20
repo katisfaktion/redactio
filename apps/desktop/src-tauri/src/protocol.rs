@@ -36,6 +36,7 @@ pub struct ModelInfo {
     #[serde(deserialize_with = "nonempty")]
     pub version: String,
     pub compatible: bool,
+    pub entity_types: Vec<EntityType>,
 }
 
 #[derive(Debug, Clone, PartialEq, Copy, Serialize, Deserialize)]

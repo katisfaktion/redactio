@@ -17,6 +17,7 @@ import { usePairs } from "./composables/usePairs";
 import { useRun } from "./composables/useRun";
 import { runApi, safeError } from "./lib/ipc";
 import type { DocumentKey, SafeError, ScanReport, Settings } from "./lib/contracts";
+import { supplementaryEntities } from "./lib/entityLabels";
 
 const props = withDefaults(defineProps<{
   initialSettings: Settings | null;
@@ -32,6 +33,14 @@ const detection = useDetection(pairs.selectedPair, (settings) => { pairs.setting
 const view = ref<"documents" | "settings" | "review">("documents");
 const navigation = useTemplateRef("navigation");
 const review = useReview();
+const reviewEntityTypes = computed(() => {
+  const pair = pairs.selectedPair.value;
+  const model = pair && detection.models.value.find(item => item.name === pair.config.model);
+  return [...new Set([
+    ...(model?.entity_types ?? []), ...supplementaryEntities, "PERSON", "LOCATION", "CUSTOM",
+    ...(pair?.config.custom_rules.map(rule => rule.entity_type) ?? []),
+  ])].sort();
+});
 const reviewDocuments = ref<{ value: string; label: string }[]>([]);
 const selectedId = computed(() => pairs.selectedPair.value?.id ?? null);
 const run = useRun(selectedId);
@@ -178,7 +187,7 @@ const errorText: Record<string, string> = {
           <p v-if="closeError" role="alert">{{ closeError }}</p>
           <template v-if="view === 'review' && pairs.selectedPair.value">
             <p v-if="scanning" role="status">Dokumentliste wird aktualisiert …</p>
-            <ReviewView :key="`${review.key.value?.sync_pair_id}:${review.key.value?.doc_id}`" :review="review" :pair-name="pairs.selectedPair.value.name" :disabled="busy" @back="changeView('documents')" />
+            <ReviewView :key="`${review.key.value?.sync_pair_id}:${review.key.value?.doc_id}`" :review="review" :pair-name="pairs.selectedPair.value.name" :entity-types="reviewEntityTypes" :disabled="busy" @back="changeView('documents')" />
           </template>
           <p v-if="view === 'documents' && detection.error.value" role="alert">Die Erkennung ist derzeit nicht verfügbar. Prüfen Sie die Modelle und Regeln unter Einstellungen.</p>
           <OnyxCard v-if="pairs.selectedPair.value" v-show="view === 'documents'" data-testid="document-view" role="region" aria-labelledby="documents-heading">

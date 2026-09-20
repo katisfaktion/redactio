@@ -28,8 +28,11 @@ class ModelPreparationTests(unittest.TestCase):
     def test_verified_install_preserves_other_models_and_is_offline_when_repeated(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            previous = {"name": "de_core_news_lg", "version": "3.8.0", "path": "lg"}
-            (root / "manifest.json").write_text(json.dumps({"models": [previous]}))
+            previous = {"name": "another-supported-model", "version": "1", "path": "other"}
+            retired = {"name": "de_core_news_lg", "version": "3.8.0", "path": "lg"}
+            (root / "lg").mkdir()
+            (root / "lg/retained").write_bytes(b"previous model")
+            (root / "manifest.json").write_text(json.dumps({"models": [previous, retired]}))
             with patch.object(self.prepare, "urlopen", return_value=BytesIO(self.payload)):
                 self.prepare.prepare(root, self.inputs)
             manifest = json.loads((root / "manifest.json").read_text())
@@ -45,6 +48,7 @@ class ModelPreparationTests(unittest.TestCase):
                 ],
             )
             self.assertEqual((root / "biomedbert-de/model.safetensors").read_bytes(), self.payload)
+            self.assertEqual((root / "lg/retained").read_bytes(), b"previous model")
             self.assertEqual(
                 json.loads((root / "biomedbert-de/redactio-model.json").read_text()),
                 {

@@ -62,8 +62,15 @@ def prepare(root: Path, inputs: dict) -> None:
                     raise ValueError(f"download checksum mismatch: {name}")
             (staging / "redactio-model.json").write_text(json.dumps(identity, indent=2) + "\n")
             staging.rename(destination)
-    if entry not in manifest["models"]:
-        manifest["models"].append(entry)
+    active = [
+        model
+        for model in manifest["models"]
+        if model["name"] not in {"de_core_news_sm", "de_core_news_md", "de_core_news_lg"}
+    ]
+    if entry not in active:
+        active.append(entry)
+    if active != manifest["models"]:
+        manifest["models"] = active
         with tempfile.NamedTemporaryFile(
             mode="w", encoding="utf-8", dir=root, delete=False
         ) as output:

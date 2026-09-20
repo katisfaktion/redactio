@@ -14,6 +14,7 @@ need the MSVC Rust target and Microsoft C++ Build Tools with the **Desktop
 development with C++** workload. Development windows need WebView2; the portable
 release ships its own fixed runtime and does not require a user installation.
 Use a local Windows checkout for packaging, not a WSL UNC path.
+The sidecar supports Python 3.11–3.13, matching the required CPU Torch wheels.
 
 Linux/WSL is a development environment, not a release target. The Tauri/WebKitGTK
 4.1 prerequisites used here are `build-essential`, `curl`, `wget`, `file`,
@@ -60,100 +61,49 @@ does not receive documents. Validate UI changes using synthetic fixtures. Use
 Onyx navigation, cards, headings, status tags and form controls; retain the
 existing review-selection behavior and guards when composing those components.
 
-## Offline German models
+## Offline German model
 
-Install model wheels explicitly during setup. The default is `de_core_news_lg`;
-`de_core_news_sm` is optional for ordinary development but required by the full
-model-switch tests. Both are 3.8.0. The URL fragments below pin the model hashes
-used in verification. The portable package stages only the default large model
-from its separately verified build input.
-
-POSIX shell:
+BiomedBERT is the default detector. Core-news models are retired and are no longer
+listed or bundled. Prepare the pinned model explicitly from the repository root
+(the same commands work in PowerShell):
 
 ```sh
-mkdir -p apps/sidecar/models/vendor
-uv pip install --target apps/sidecar/models/vendor --no-deps \
-  'https://github.com/explosion/spacy-models/releases/download/de_core_news_lg-3.8.0/de_core_news_lg-3.8.0-py3-none-any.whl#sha256=36fda650e476b54d5e87803635e36dadd1e8e034c4b5962088586d684f4c9fed'
-uv pip install --target apps/sidecar/models/vendor --no-deps \
-  'https://github.com/explosion/spacy-models/releases/download/de_core_news_sm-3.8.0/de_core_news_sm-3.8.0-py3-none-any.whl#sha256=fec69fec52b1780f2d269d5af7582a5e28028738bd3190532459aeb473bfa3e7'
+uv --directory apps/sidecar sync --locked
+uv --directory apps/sidecar run --locked python ../../scripts/prepare-biomedbert.py
 ```
 
-PowerShell equivalent (each install is one line):
+Setup installs the CPU runtime and approximately 1.34 GB of model weights. The
+repository, revision and file hashes live in `packaging/biomedbert-inputs.json`.
+Preparation removes retired core-news entries from the model manifest while
+leaving their files untouched. Runtime processing loads local files only and
+fails if setup is incomplete. No `--extra` is needed.
 
-```powershell
-New-Item -ItemType Directory -Force 'apps/sidecar/models/vendor' | Out-Null
-uv pip install --target apps/sidecar/models/vendor --no-deps 'https://github.com/explosion/spacy-models/releases/download/de_core_news_lg-3.8.0/de_core_news_lg-3.8.0-py3-none-any.whl#sha256=36fda650e476b54d5e87803635e36dadd1e8e034c4b5962088586d684f4c9fed'
-uv pip install --target apps/sidecar/models/vendor --no-deps 'https://github.com/explosion/spacy-models/releases/download/de_core_news_sm-3.8.0/de_core_news_sm-3.8.0-py3-none-any.whl#sha256=fec69fec52b1780f2d269d5af7582a5e28028738bd3190532459aeb473bfa3e7'
-```
+Each model declares its own entity labels. BiomedBERT's installed `config.json`
+currently declares 54 types, including FIRSTNAME, LASTNAME, ZIPCODE, AGE and
+ORGANIZATION. Discovery reads this metadata without loading the weights. Native
+labels survive detection, review and Markdown placeholders. Email, phone, IBAN,
+IP, URL and date recognizers remain separately configurable supplements.
 
-Save the following UTF-8 JSON as `apps/sidecar/models/manifest.json`. If only the
-large model is installed, omit the second entry; do not advertise missing models.
+New pairs select all native model labels. Existing BiomedBERT pairs retain their
+previous behavior until settings are explicitly saved with native label choices.
+Open **Einstellungen**, check the model types and supplementary recognizers, save,
+and reprocess existing documents. Previously reviewed documents still require
+confirmation before reprocessing. Core-news pairs must explicitly select
+BiomedBERT; stored models and results are not silently rewritten.
 
-```json
-{
-  "models": [
-    {
-      "name": "de_core_news_lg",
-      "version": "3.8.0",
-      "path": "vendor/de_core_news_lg/de_core_news_lg-3.8.0"
-    },
-    {
-      "name": "de_core_news_sm",
-      "version": "3.8.0",
-      "path": "vendor/de_core_news_sm/de_core_news_sm-3.8.0"
-    }
-  ]
-}
-```
+The adapter uses overlapping 512-token windows and original Unicode offsets.
+Native labels remove the former name/address-only filter; they do not guarantee
+recall. In synthetic checks the raw model still misses some surnames and streets
+and can misclassify a house number as AGE. Evaluate your documents locally.
 
-The engine checks each model's `meta.json`, `config.cfg`, identity, language,
-version and spaCy compatibility. Models are ignored by Git. Missing/incompatible
-models are errors; neither the engine nor its tests fetch replacements.
-
-## Desktop development window
-
-### Optional BiomedBERT detector for local evaluation
-
-BiomedBERT can be selected independently for each pair after this explicit setup:
-
-```sh
-uv --directory apps/sidecar sync --locked --extra biomedbert
-uv --directory apps/sidecar run --locked --extra biomedbert python ../../scripts/prepare-biomedbert.py
-```
-
-These commands also work in PowerShell from the repository root. Setup downloads
-the CPU runtime and approximately 1.34 GB of model weights. The model repository,
-exact revision and every downloaded file checksum are pinned in
-`packaging/biomedbert-inputs.json`. Existing spaCy model entries are preserved.
-Preparation is separate from document processing; the detector loads only local
-files and never downloads a missing model. When using `uv` afterward, retain
-`--extra biomedbert` so the optional runtime stays installed.
-
-Start the desktop using the commands below, select a pair, open **Erkennung**, and
-choose **BiomedBERT – Deutsch, Namen und Adressen (340M)**. Leave **Personen** and
-**Orte und Adressen** enabled and save. The existing processing revision mechanism
-marks that pair's previous results stale. Reprocess the documents and explicitly
-confirm reprocessing for previously reviewed documents when prompted.
-
-This integration uses the model's name and address component labels with
-overlapping 512-token windows. Other enabled categories keep their existing
-recognizers. It does not enable all of OpenMed's categories or silently change an
-existing pair's selected model. First configuration loads the weights; later
-operations reuse them. Assess names and complete street/house-number/postcode/city
-coverage on your own documents locally; synthetic checks do not establish recall.
-
-Known limitation of this pinned model: in the synthetic sentence
-“Der Patient Jörg Müller wohnt in der Hauptstraße 12, 10115 Berlin.” it detects
-the name, postcode and city, but misses the street. Raw model
-predictions have the same omission. Do not assume an address-recall improvement
-over spaCy without evaluating your documents.
-
-For an opt-in synthetic model check after preparation (PowerShell):
+For the opt-in real-model synthetic check after preparation (PowerShell):
 
 ```powershell
 $env:REDACTIO_BIOMEDBERT_MODEL_DIR = (Resolve-Path 'apps/sidecar/models').Path
-uv --directory apps/sidecar run --locked --offline --extra biomedbert pytest -q tests/test_biomedbert.py
+uv --directory apps/sidecar run --locked --offline pytest -q tests/test_biomedbert.py
 ```
+
+## Desktop development window
 
 ### Launch commands
 
@@ -339,7 +289,7 @@ cores, 16 GB RAM and SSD: 400 representative documents in under 30 minutes,
 excluding human review, and ordinary UI responses within 200 ms. Independently
 inspect at least 10% plus every warning/failure locally; record page/character
 distribution, missed identifiers and false positives by category, corrections,
-retest results and remaining limits without document contents. A known repeated-name
-miss with `de_core_news_lg` 3.8.0 remains a quality limitation; successful synthetic
-processing does not establish recall. Unavailable private evaluation remains an
+retest results and remaining limits without document contents. The earlier core-news benchmark applies only to the retired model. BiomedBERT
+throughput and recall require separate evaluation; successful synthetic processing
+does not establish recall. Unavailable private evaluation remains an
 unverified acceptance condition.

@@ -20,19 +20,18 @@ from presidio_analyzer import (
     PatternRecognizer,
     RecognizerRegistry,
 )
-from presidio_analyzer.nlp_engine import NlpEngine, NlpEngineProvider, SpacyNlpEngine
+from presidio_analyzer.nlp_engine import NlpEngine, SpacyNlpEngine
 from presidio_analyzer.predefined_recognizers import (
     DateRecognizer,
     EmailRecognizer,
     IbanRecognizer,
     IpRecognizer,
     PhoneRecognizer,
-    SpacyRecognizer,
     UrlRecognizer,
 )
 from pydantic import ValidationError
 
-from .biomedbert import MODEL_NAME, BiomedBertRecognizer, compatible_model
+from .biomedbert import MODEL_NAME, BiomedBertRecognizer, compatible_model, model_entity_types
 from .extract import Extraction, extract_document
 from .frontmatter import normalize_body, render_document
 from .ipc import EngineError
@@ -41,7 +40,6 @@ from .schemas import (
     Decisions,
     Detection,
     EngineInfo,
-    EntityType,
     ModelInfo,
     OutputEntry,
     ProcessingConfig,
@@ -74,16 +72,31 @@ _AUTOMATIC_RECOGNIZERS: dict[str, tuple[str, Callable[..., EntityRecognizer]]] =
     "URL": ("UrlRecognizer", UrlRecognizer),
     "DATE_TIME": ("DateRecognizer", DateRecognizer),
 }
-_ENTITY_TYPES = {
+_LEGACY_MODEL_ENTITIES = {
     "PERSON",
     "LOCATION",
+}
+_SUPPLEMENTARY_ENTITIES = {
     "EMAIL_ADDRESS",
     "PHONE_NUMBER",
     "IBAN_CODE",
     "IP_ADDRESS",
     "URL",
     "DATE_TIME",
-    "CUSTOM",
+}
+_LEGACY_LABELS = {
+    "PERSON": {"FIRSTNAME", "MIDDLENAME", "LASTNAME"},
+    "LOCATION": {
+        "STREET",
+        "BUILDINGNUMBER",
+        "SECONDARYADDRESS",
+        "ZIPCODE",
+        "CITY",
+        "STATE",
+        "COUNTY",
+        "GPSCOORDINATES",
+        "ORDINALDIRECTION",
+    },
 }
 
 
@@ -93,6 +106,7 @@ class _Model:
     version: str
     path: Path
     compatible: bool
+    entity_types: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -103,6 +117,7 @@ class _Snapshot:
     entities: tuple[str, ...]
     custom_rule_ids: frozenset[str]
     recognizers: tuple[str, ...]
+    manual_entities: frozenset[str]
     include_positions: bool
     info: EngineInfo
 
@@ -116,7 +131,12 @@ class Engine:
 
     def available_models(self) -> list[ModelInfo]:
         return [
-            ModelInfo(name=model.name, version=model.version, compatible=model.compatible)
+            ModelInfo(
+                name=model.name,
+                version=model.version,
+                compatible=model.compatible,
+                entity_types=list(model.entity_types),
+            )
             for model in self._models()
         ]
 
@@ -138,29 +158,40 @@ class Engine:
             raise EngineError("model_not_found")
         if not model.compatible:
             raise EngineError("model_incompatible")
+        if not set(validated.enabled_entities) <= (
+            _SUPPLEMENTARY_ENTITIES
+            | (_LEGACY_MODEL_ENTITIES | {"CUSTOM"} if validated.model_entities is None else set())
+        ):
+            raise EngineError("invalid_configuration")
+        native_semantics = validated.model_entities is not None
+        native_entities = list(validated.model_entities or ())
+        if native_semantics:
+            if not set(native_entities) <= set(model.entity_types):
+                raise EngineError("invalid_configuration")
+        else:
+            native_entities = sorted(
+                label
+                for legacy_entity in validated.enabled_entities
+                for label in _LEGACY_LABELS.get(legacy_entity, set())
+                if label in model.entity_types
+            )
 
         nlp_engine = self._nlp_engine(model)
         registry = RecognizerRegistry(supported_languages=[LANGUAGE])
         recognizer_names: list[str] = []
 
-        nlp_entities: list[str] = [
-            entity for entity in ("PERSON", "LOCATION") if entity in validated.enabled_entities
-        ]
-        if nlp_entities:
-            recognizer = (
-                copy(self._bert_recognizers[(model.name, model.version)])
-                if model.name == MODEL_NAME
-                else SpacyRecognizer(
-                    supported_language=LANGUAGE,
-                    supported_entities=nlp_entities,
-                    name="SpacyRecognizer",
-                )
-            )
-            recognizer.supported_entities = nlp_entities
+        model_outputs = (
+            native_entities
+            if native_semantics
+            else [
+                entity for entity in _LEGACY_MODEL_ENTITIES if entity in validated.enabled_entities
+            ]
+        )
+        if model_outputs:
+            recognizer = copy(self._bert_recognizers[(model.name, model.version)])
+            recognizer.configure_labels(native_entities, legacy=not native_semantics)
             registry.add_recognizer(recognizer)
-            recognizer_names.append(
-                "BiomedBertRecognizer" if model.name == MODEL_NAME else "SpacyRecognizer"
-            )
+            recognizer_names.append("BiomedBertRecognizer")
 
         for entity_type, (recognizer_name, recognizer_type) in _AUTOMATIC_RECOGNIZERS.items():
             if entity_type not in validated.enabled_entities:
@@ -171,8 +202,9 @@ class Engine:
             recognizer_names.append(recognizer_name)
 
         custom_ids: set[str] = set()
-        entities: list[str] = [
-            entity for entity in validated.enabled_entities if entity != "CUSTOM"
+        entities = [
+            *model_outputs,
+            *(entity for entity in validated.enabled_entities if entity in _SUPPLEMENTARY_ENTITIES),
         ]
         for rule in validated.custom_rules:
             if not rule.enabled:
@@ -202,7 +234,10 @@ class Engine:
             else None
         )
         info = EngineInfo(
-            engine_version=_engine_version(model.name == MODEL_NAME),
+            engine_version=_engine_version(
+                biomedbert=True,
+                native_labels=native_entities if native_semantics else None,
+            ),
             model_name=model.name,
             model_version=model.version,
             recognizers=recognizer_names,
@@ -215,6 +250,10 @@ class Engine:
             entities=tuple(entities),
             custom_rule_ids=frozenset(custom_ids),
             recognizers=tuple(recognizer_names),
+            manual_entities=frozenset(
+                {*model.entity_types, *_LEGACY_MODEL_ENTITIES, *_SUPPLEMENTARY_ENTITIES, "CUSTOM"}
+                | {rule.entity_type for rule in validated.custom_rules}
+            ),
             include_positions=validated.include_positions,
             info=info,
         )
@@ -249,7 +288,7 @@ class Engine:
                 and recognizer not in snapshot.recognizers
             ):
                 raise EngineError("internal_error")
-            if result.entity_type not in _ENTITY_TYPES:
+            if result.entity_type not in snapshot.entities:
                 raise EngineError("internal_error")
             detection_id = _detection_id(
                 pair_id,
@@ -265,7 +304,7 @@ class Engine:
                     id=detection_id,
                     start=result.start,
                     end=result.end,
-                    entity_type=cast(EntityType, result.entity_type),
+                    entity_type=result.entity_type,
                     confidence=float(result.score),
                     recognizer=recognizer,
                     origin="automatic",
@@ -350,6 +389,12 @@ class Engine:
                 )
                 for index, detection in enumerate(request.detections)
             )
+            or any(
+                detection.origin != "manual"
+                or detection.recognizer != "manual"
+                or detection.entity_type not in snapshot.manual_entities
+                for detection in request.decisions.manual
+            )
         ):
             raise EngineError("invalid_review")
 
@@ -406,32 +451,12 @@ class Engine:
         cached = self._loaded_models.get(identity)
         if cached is not None:
             return cached
-        if model.name == MODEL_NAME:
-            recognizer = BiomedBertRecognizer(model.path)
-            blank_engine = SpacyNlpEngine()
-            cast(Any, blank_engine).nlp = {LANGUAGE: spacy.blank(LANGUAGE)}
-            self._bert_recognizers[identity] = recognizer
-            self._loaded_models[identity] = blank_engine
-            return blank_engine
-        provider = NlpEngineProvider(
-            nlp_configuration={
-                "nlp_engine_name": "spacy",
-                "models": [{"lang_code": LANGUAGE, "model_name": str(model.path)}],
-                "ner_model_configuration": {
-                    "model_to_presidio_entity_mapping": {
-                        "PER": "PERSON",
-                        "LOC": "LOCATION",
-                    },
-                    "labels_to_ignore": ["MISC", "ORG"],
-                },
-            }
-        )
-        try:
-            loaded = provider.create_engine()
-        except Exception as error:
-            raise EngineError("model_incompatible") from error
-        self._loaded_models[identity] = loaded
-        return loaded
+        recognizer = BiomedBertRecognizer(model.path, model.entity_types)
+        blank_engine = SpacyNlpEngine()
+        cast(Any, blank_engine).nlp = {LANGUAGE: spacy.blank(LANGUAGE)}
+        self._bert_recognizers[identity] = recognizer
+        self._loaded_models[identity] = blank_engine
+        return blank_engine
 
     def _models(self) -> list[_Model]:
         manifest_path = self._model_root / "manifest.json"
@@ -445,7 +470,7 @@ class Engine:
             raise EngineError("invalid_model_manifest") from error
         if len({model.name for model in models}) != len(models):
             raise EngineError("invalid_model_manifest")
-        return models
+        return [model for model in models if model.name == MODEL_NAME]
 
     def _model(self, entry: object) -> _Model:
         if not isinstance(entry, dict) or set(entry) != {"name", "version", "path"}:
@@ -454,28 +479,21 @@ class Engine:
         if not all(isinstance(value, str) and value for value in (name, model_version, relative)):
             raise TypeError
         path = (self._model_root / relative).resolve()
+        entity_types = model_entity_types(path) if name == MODEL_NAME else ()
         compatible = path.is_relative_to(self._model_root) and _compatible_model(
             path, name, model_version
         )
-        return _Model(name=name, version=model_version, path=path, compatible=compatible)
+        return _Model(
+            name=name,
+            version=model_version,
+            path=path,
+            compatible=compatible,
+            entity_types=entity_types if compatible else (),
+        )
 
 
 def _compatible_model(path: Path, name: str, model_version: str) -> bool:
-    if name == MODEL_NAME:
-        return compatible_model(path, name, model_version)
-    try:
-        metadata: dict[str, Any] = json.loads((path / "meta.json").read_text(encoding="utf-8"))
-        actual_name = f"{metadata['lang']}_{metadata['name']}"
-        return bool(
-            path.is_dir()
-            and (path / "config.cfg").is_file()
-            and actual_name == name
-            and metadata["version"] == model_version
-            and metadata["lang"] == LANGUAGE
-            and spacy.util.is_compatible_version(version("spacy"), metadata["spacy_version"])
-        )
-    except (KeyError, OSError, TypeError, ValueError, json.JSONDecodeError):
-        return False
+    return name == MODEL_NAME and compatible_model(path, name, model_version)
 
 
 def _rule_pattern(rule: RegexRule | WordRule) -> str:
@@ -509,7 +527,7 @@ def _recognizer_name(metadata: object) -> str:
     return "automatic"
 
 
-def _engine_version(biomedbert: bool = False) -> str:
+def _engine_version(biomedbert: bool = False, native_labels: list[str] | None = None) -> str:
     identities = [ENGINE_VERSION]
     dependencies: tuple[str, ...] = ("presidio-analyzer", "spacy")
     if biomedbert:
@@ -520,6 +538,8 @@ def _engine_version(biomedbert: bool = False) -> str:
             identities.append(f"{dependency} {dependency_version}")
         except PackageNotFoundError:
             identities.append(f"{dependency} unknown")
+    if native_labels is not None:
+        identities.append("native-labels " + ",".join(sorted(native_labels)))
     return " + ".join(identities)
 
 

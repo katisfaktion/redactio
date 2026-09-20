@@ -1260,7 +1260,10 @@ fn reviewed_cli_roundtrips_through_the_bundled_model() {
                 .unwrap();
             assert_eq!(configured.sync_pair_id, pair);
             assert_eq!(configured.processing_revision, revision);
-            assert_eq!(configured.engine.model_name, "de_core_news_lg");
+            assert_eq!(
+                configured.engine.model_name,
+                "OpenMed-PII-German-BiomedBERT-Large-340M-v1"
+            );
 
             let preview: PreviewRulesResult = child
                 .request(

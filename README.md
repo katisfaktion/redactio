@@ -13,8 +13,8 @@ not yet complete.
 
 ## Use on Windows
 
-The release target is Windows 11 x64. The portable ZIP includes the Python
-engine, German `de_core_news_lg` model and fixed WebView2 runtime; users do not
+The release target is Windows 11 x64. The portable ZIP targets the Python
+engine, German OpenMed BiomedBERT 340M model and fixed WebView2 runtime; users do not
 need administrator rights or development tools. Extract the complete archive
 before starting `redactio.exe`.
 
@@ -26,14 +26,15 @@ for subsequent use. Exports are snapshots and are not revoked by later edits.
 ## Development and package checks
 
 The app uses Tauri 2/Rust, Vue 3/TypeScript/Vite/sit-onyx and a Python
-Presidio/spaCy sidecar. See [development setup](docs/development.md) for pinned
+Presidio/Transformers sidecar. See [development setup](docs/development.md) for pinned
 tools, offline model preparation, PowerShell/POSIX commands and explicit sidecar
 configuration.
 
-For manual evaluation of names and addresses, the optional
-[BiomedBERT setup](docs/development.md#optional-biomedbert-detector-for-local-evaluation)
-adds the pinned German OpenMed 340M model to the per-pair selector. Its runtime and
-weights are installed explicitly during setup and run locally afterward.
+[Model setup](docs/development.md#offline-german-model) prepares the pinned
+BiomedBERT detector explicitly. Detection options come from the model's own label
+set, with native labels preserved through review and export. Core-news models
+are retired. The current BiomedBERT portable package still needs full acceptance
+checks; the earlier package measurements apply to the retired engine.
 
 From the repository root, after dependency setup:
 

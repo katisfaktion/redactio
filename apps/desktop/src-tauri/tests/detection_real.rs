@@ -12,10 +12,13 @@ use redactio_lib::{
 use std::{fs, process::Command};
 use uuid::Uuid;
 
+const BIOMEDBERT: &str = "OpenMed-PII-German-BiomedBERT-Large-340M-v1";
+
 fn rule(pattern: &str, model: &str) -> ProcessingConfig {
     ProcessingConfig {
         model: model.into(),
         enabled_entities: vec![],
+        model_entities: None,
         custom_rules: vec![CustomRule::Regex {
             id: Uuid::new_v4(),
             entity_type: EntityType::Custom,
@@ -27,7 +30,7 @@ fn rule(pattern: &str, model: &str) -> ProcessingConfig {
 }
 
 #[test]
-#[ignore = "requires reviewed Python and bundled lg/sm packages"]
+#[ignore = "requires reviewed Python and bundled BiomedBERT package"]
 fn real_two_pair_configuration_model_switch_and_catastrophic_preview_timeout() {
     tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
         let root=tempfile::tempdir().unwrap(); let config=root.path().join("config"); fs::create_dir(&config).unwrap();
@@ -43,9 +46,9 @@ fn real_two_pair_configuration_model_switch_and_catastrophic_preview_timeout() {
         let a=settings.sync_pairs[0].id;let b=settings.sync_pairs[1].id;
         let originals:Vec<_>=settings.sync_pairs.iter().map(|p|fs::read(p.source_folder.join("synthetic.docx")).unwrap()).collect();
         let path=config.join("settings.json");save_settings(&path,&settings).unwrap();let controller=RunController::new(path.clone());
-        let mut after=detection::save_processing_config(&controller,&sidecar,a,rule("CanaryAlpha","de_core_news_lg")).await.unwrap();
+        let mut after=detection::save_processing_config(&controller,&sidecar,a,rule("CanaryAlpha",BIOMEDBERT)).await.unwrap();
         assert_eq!(after.sync_pairs[1],settings.sync_pairs[1]);
-        after=detection::save_processing_config(&controller,&sidecar,b,rule("CanaryBeta","de_core_news_lg")).await.unwrap();
+        after=detection::save_processing_config(&controller,&sidecar,b,rule("CanaryBeta",BIOMEDBERT)).await.unwrap();
         for id in [a,b] {
             let run=controller.prepare(id,None,vec![]).unwrap();
             let summary=controller.execute(run,Ok(sidecar.clone()), |_|{}).await;
@@ -56,7 +59,7 @@ fn real_two_pair_configuration_model_switch_and_catastrophic_preview_timeout() {
         assert!(!output_a.contains("CanaryAlpha"));assert!(output_a.contains("CanaryBeta"));
         assert!(output_b.contains("CanaryAlpha"));assert!(!output_b.contains("CanaryBeta"));
         let b_saved=after.sync_pairs[1].clone();
-        let changed=detection::save_processing_config(&controller,&sidecar,a,rule("CanaryBeta","de_core_news_lg")).await.unwrap();
+        let changed=detection::save_processing_config(&controller,&sidecar,a,rule("CanaryBeta",BIOMEDBERT)).await.unwrap();
         assert_ne!(changed.sync_pairs[0].processing_revision,after.sync_pairs[0].processing_revision);
         assert_eq!(changed.sync_pairs[1],b_saved);
         assert_eq!(detection::scan_configured(&controller,&sidecar,a).await.unwrap().files[0].state,DocumentState::Stale);
@@ -65,20 +68,23 @@ fn real_two_pair_configuration_model_switch_and_catastrophic_preview_timeout() {
         let bytes=fs::read(&path).unwrap();
         detection::save_processing_config(&controller,&sidecar,a,changed.sync_pairs[0].config.clone()).await.unwrap();
         assert_eq!(fs::read(&path).unwrap(),bytes);
-        for invalid in [rule("[","de_core_news_lg"),rule("CanaryAlpha","missing_model")] {
+        for invalid in [rule("[",BIOMEDBERT),rule("CanaryAlpha","missing_model")] {
             assert!(detection::save_processing_config(&controller,&sidecar,a,invalid).await.is_err());
             assert_eq!(fs::read(&path).unwrap(),bytes);
         }
-        let selected=detection::save_processing_config(&controller,&sidecar,b,rule("CanaryAlpha","de_core_news_sm")).await.unwrap();
+        let mut native = rule("CanaryAlpha", BIOMEDBERT);
+        native.model_entities = Some(vec![]);
+        let selected=detection::save_processing_config(&controller,&sidecar,b,native).await.unwrap();
         assert_eq!(selected.sync_pairs[0],changed.sync_pairs[0]);
-        assert_eq!(selected.sync_pairs[1].processing_fingerprint.as_ref().unwrap().model_name,"de_core_news_sm");
+        assert_eq!(selected.sync_pairs[1].processing_fingerprint.as_ref().unwrap().model_name,BIOMEDBERT);
+        assert_eq!(selected.sync_pairs[1].config.model_entities, Some(vec![]));
         for (id,expected) in [(a,(12,22)),(b,(0,11))] {
             let pair=selected.sync_pairs.iter().find(|p|p.id==id).unwrap();
             let preview=detection::preview_rules(&controller,&sidecar,id,pair.config.clone(),"CanaryAlpha CanaryBeta".into()).await.unwrap();
             assert_eq!(preview.len(),1);assert_eq!((preview[0].start,preview[0].end),expected);
         }
         let bytes=fs::read(&path).unwrap();
-        let timeout=detection::preview_rules(&controller,&sidecar,a,rule("(?:(a|aa)+)+$","de_core_news_lg"),format!("{}!","a".repeat(200))).await.unwrap_err();
+        let timeout=detection::preview_rules(&controller,&sidecar,a,rule("(?:(a|aa)+)+$",BIOMEDBERT),format!("{}!","a".repeat(200))).await.unwrap_err();
         assert_eq!(timeout.code,"engine_timeout");assert_eq!(fs::read(&path).unwrap(),bytes);
         let restored=detection::preview_rules(&controller,&sidecar,a,selected.sync_pairs[0].config.clone(),"CanaryAlpha CanaryBeta".into()).await.unwrap();
         assert_eq!((restored[0].start,restored[0].end),(12,22));
@@ -102,7 +108,6 @@ fn real_producer_own_version_rotates_only_used_pair_once() {
             let target = root.path().join(format!("{name}-out"));
             fs::create_dir(&source).unwrap(); fs::create_dir(&target).unwrap();
             settings.add(name, &source, &target).unwrap();
-            settings.sync_pairs.last_mut().unwrap().config.model = "de_core_news_sm".into();
         }
         let path = config.join("settings.json"); save_settings(&path, &settings).unwrap();
         let controller = RunController::new(path.clone());

@@ -4,7 +4,7 @@ use super::{
     storage::ValidatedWrite,
 };
 use crate::error::AppError;
-use serde::{Deserialize, Serialize};
+use serde::{de::Error as _, Deserialize, Deserializer, Serialize, Serializer};
 use std::{
     collections::HashSet,
     fs,
@@ -14,8 +14,7 @@ use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use unicode_normalization::UnicodeNormalization;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum EntityType {
     Person,
     Location,
@@ -26,6 +25,91 @@ pub enum EntityType {
     Url,
     DateTime,
     Custom,
+    Model(String),
+}
+
+impl EntityType {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Person => "PERSON",
+            Self::Location => "LOCATION",
+            Self::EmailAddress => "EMAIL_ADDRESS",
+            Self::PhoneNumber => "PHONE_NUMBER",
+            Self::IbanCode => "IBAN_CODE",
+            Self::IpAddress => "IP_ADDRESS",
+            Self::Url => "URL",
+            Self::DateTime => "DATE_TIME",
+            Self::Custom => "CUSTOM",
+            Self::Model(label) => label,
+        }
+    }
+
+    pub fn is_supplementary(&self) -> bool {
+        matches!(
+            self,
+            Self::EmailAddress
+                | Self::PhoneNumber
+                | Self::IbanCode
+                | Self::IpAddress
+                | Self::Url
+                | Self::DateTime
+        )
+    }
+
+    pub fn parse(value: String) -> Result<Self, &'static str> {
+        if !Self::is_valid(&value) {
+            return Err("invalid entity type");
+        }
+        Ok(match value.as_str() {
+            "PERSON" => Self::Person,
+            "LOCATION" => Self::Location,
+            "EMAIL_ADDRESS" => Self::EmailAddress,
+            "PHONE_NUMBER" => Self::PhoneNumber,
+            "IBAN_CODE" => Self::IbanCode,
+            "IP_ADDRESS" => Self::IpAddress,
+            "URL" => Self::Url,
+            "DATE_TIME" => Self::DateTime,
+            "CUSTOM" => Self::Custom,
+            _ => Self::Model(value),
+        })
+    }
+
+    pub fn is_valid(value: &str) -> bool {
+        valid_entity_type(value)
+    }
+}
+
+fn valid_entity_type(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    (1..=64).contains(&bytes.len())
+        && bytes[0].is_ascii_uppercase()
+        && bytes[1..]
+            .iter()
+            .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || *byte == b'_')
+}
+
+impl Ord for EntityType {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.as_str().cmp(other.as_str())
+    }
+}
+
+impl PartialOrd for EntityType {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Serialize for EntityType {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for EntityType {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Self::parse(String::deserialize(deserializer)?).map_err(D::Error::custom)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -58,6 +142,8 @@ impl CustomRule {
 pub struct ProcessingConfig {
     pub model: String,
     pub enabled_entities: Vec<EntityType>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_entities: Option<Vec<EntityType>>,
     pub custom_rules: Vec<CustomRule>,
     pub include_positions: bool,
 }
@@ -65,7 +151,7 @@ pub struct ProcessingConfig {
 impl Default for ProcessingConfig {
     fn default() -> Self {
         Self {
-            model: "de_core_news_lg".into(),
+            model: "OpenMed-PII-German-BiomedBERT-Large-340M-v1".into(),
             enabled_entities: vec![
                 EntityType::Person,
                 EntityType::Location,
@@ -76,6 +162,7 @@ impl Default for ProcessingConfig {
                 EntityType::Url,
                 EntityType::DateTime,
             ],
+            model_entities: None,
             custom_rules: Vec::new(),
             include_positions: true,
         }
@@ -83,8 +170,49 @@ impl Default for ProcessingConfig {
 }
 
 impl ProcessingConfig {
-    fn normalized(mut self) -> Self {
+    pub fn validate(&self) -> Result<(), AppError> {
+        if self.model.trim().is_empty()
+            || self
+                .enabled_entities
+                .iter()
+                .any(|entity| !EntityType::is_valid(entity.as_str()))
+        {
+            return Err(AppError::new("invalid_settings"));
+        }
+        let mut enabled = HashSet::new();
+        if self
+            .enabled_entities
+            .iter()
+            .any(|entity| entity == &EntityType::Custom || !enabled.insert(entity))
+        {
+            return Err(AppError::new("invalid_settings"));
+        }
+        if let Some(model_entities) = &self.model_entities {
+            let mut selected = HashSet::new();
+            if model_entities
+                .iter()
+                .any(|entity| !EntityType::is_valid(entity.as_str()) || !selected.insert(entity))
+                || self
+                    .enabled_entities
+                    .iter()
+                    .any(|entity| !entity.is_supplementary())
+            {
+                return Err(AppError::new("invalid_settings"));
+            }
+        } else if self.enabled_entities.iter().any(|entity| {
+            !matches!(entity, EntityType::Person | EntityType::Location)
+                && !entity.is_supplementary()
+        }) {
+            return Err(AppError::new("invalid_settings"));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn normalized(mut self) -> Self {
         self.enabled_entities.sort_unstable();
+        if let Some(entities) = &mut self.model_entities {
+            entities.sort_unstable();
+        }
         for rule in &mut self.custom_rules {
             if let CustomRule::Words { words, .. } = rule {
                 let mut seen = HashSet::new();
@@ -103,6 +231,8 @@ pub struct ProcessingFingerprint {
     pub extraction_version: String,
     pub model_name: String,
     pub model_version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_entities: Option<Vec<EntityType>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -283,18 +413,7 @@ impl Settings {
             {
                 return Err(AppError::new("invalid_settings"));
             }
-            if pair.config.model.trim().is_empty() {
-                return Err(AppError::new("invalid_settings"));
-            }
-            let mut entities = HashSet::new();
-            if pair
-                .config
-                .enabled_entities
-                .iter()
-                .any(|entity| *entity == EntityType::Custom || !entities.insert(*entity))
-            {
-                return Err(AppError::new("invalid_settings"));
-            }
+            pair.config.validate()?;
             let mut rule_ids = HashSet::new();
             for rule in &pair.config.custom_rules {
                 if rule.id().is_nil() || !rule_ids.insert(rule.id()) {

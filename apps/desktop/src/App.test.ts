@@ -172,7 +172,7 @@ test("saving detection settings retains the pair and clears documents from the o
   expect(wrapper.find('[data-testid="document-view"]').isVisible()).toBe(false);
   await wrapper.get('[data-testid="include-positions"]').setValue(false);
   await wrapper.get('.detection-settings form').trigger("submit"); await flushPromises();
-  expect(save).toHaveBeenCalledWith(pairId,{...initial.sync_pairs[0]!.config,include_positions:false});
+  expect(save).toHaveBeenCalledWith(pairId,{...initial.sync_pairs[0]!.config, model_entities: null, include_positions:false});
   expect(wrapper.text()).toContain("Erkennung gespeichert");
   await wrapper.get('[data-testid="documents-nav"]').trigger("click");
   expect(wrapper.get('[data-testid="active-pair-select"]').isVisible()).toBe(true);

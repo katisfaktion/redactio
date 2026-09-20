@@ -2,22 +2,17 @@
 import { OnyxButton, OnyxCard, OnyxCheckbox, OnyxHeadline, OnyxSelect, OnyxTag, OnyxTextarea } from "sit-onyx";
 import { computed, nextTick, ref, watch } from "vue";
 import type { useReview } from "../composables/useReview";
-import { EntityTypeSchema, type EntityType } from "../lib/contracts";
+import { entityLabel, entityOption } from "../lib/entityLabels";
 import { codePointOffset, selectionOffsets } from "../lib/selection";
 import { projectReview, previewSelection, type ReviewSegment } from "../lib/reviewProjection";
 
-const props = withDefaults(defineProps<{ review: ReturnType<typeof useReview>; pairName: string; disabled?: boolean }>(), { disabled: false });
+const props = withDefaults(defineProps<{ review: ReturnType<typeof useReview>; pairName: string; entityTypes?: string[]; disabled?: boolean }>(), { disabled: false, entityTypes: () => [] });
 const emit = defineEmits<{ back: [] }>();
-const entity = ref<EntityType>("PERSON"), keyboard = ref(false), page = ref(0);
+const entity = ref("PERSON"), keyboard = ref(false), page = ref(0);
 const selected = ref<{ start: number; end: number } | null>(null);
 const original = ref<HTMLElement>(), output = ref<HTMLElement>(), textarea = ref<HTMLTextAreaElement>();
 const details = ref<HTMLDetailsElement>(), focused = ref<string | null>(null);
 const controlsBusy = computed(() => props.disabled || props.review.busy.value);
-const labels: Record<EntityType, string> = {
-  PERSON: "Person", LOCATION: "Ort", EMAIL_ADDRESS: "E-Mail-Adresse", PHONE_NUMBER: "Telefonnummer",
-  IBAN_CODE: "IBAN", IP_ADDRESS: "IP-Adresse", URL: "Internetadresse", DATE_TIME: "Datum / Uhrzeit", CUSTOM: "Benutzerdefiniert",
-};
-const entities = EntityTypeSchema.options.map(value => ({ value, label: labels[value] }));
 const statuses = { pending: "Ausstehend", approved: "Freigegeben", rejected: "Abgelehnt", "needs-rework": "Nacharbeit erforderlich" };
 const errors: Record<string, string> = {
   review_conflict: "Das gespeicherte Ergebnis wurde geändert. Ihre Änderungen bleiben erhalten. Verwerfen Sie sie nur, wenn Sie den aktuellen Stand neu öffnen möchten.",
@@ -31,6 +26,8 @@ const warnings: Record<string, string> = {
   headers_footers: "Kopf- oder Fußzeilen wurden nicht übernommen.",
 };
 const detections = computed(() => [...props.review.active.value].sort((a, b) => a.start - b.start || a.end - b.end || a.id.localeCompare(b.id)));
+const entities = computed(() => [...new Set([...props.entityTypes, ...detections.value.map(item => item.entity_type), "CUSTOM"])]
+  .sort().map(entityOption));
 const visibleDetections = computed(() => detections.value.slice(page.value * 20, (page.value + 1) * 20));
 const sourcePoints = computed(() => Array.from(props.review.data.value?.original_text ?? ""));
 const projection = computed(() => projectReview(props.review.data.value?.original_text ?? "", props.review.active.value));
@@ -168,9 +165,9 @@ function restorePreview(event: Event) {
           <p>Konfidenz ist eine Einschätzung des Detektors und keine Datenschutzgarantie.</p>
           <ul class="detections">
             <li v-for="(item, index) in visibleDetections" :key="item.id" :data-testid="`detection-${item.id}`" :data-row="index" :class="{ 'focused-redaction': focused === item.id }" tabindex="-1">
-              <div class="detection-text"><q>{{ excerpt(item.start, item.end) }}</q><small>{{ labels[item.entity_type] }} · {{ item.origin === 'manual' ? 'Manuell' : `Konfidenz ${item.confidence === null ? 'unbekannt' : Math.round(item.confidence * 100) + ' %'}` }}</small></div>
+              <div class="detection-text"><q>{{ excerpt(item.start, item.end) }}</q><small>{{ entityLabel(item.entity_type) }} ({{ item.entity_type }}) · {{ item.origin === 'manual' ? 'Manuell' : `Konfidenz ${item.confidence === null ? 'unbekannt' : Math.round(item.confidence * 100) + ' %'}` }}</small></div>
               <OnyxButton :data-testid="`jump-${item.id}`" label="Im Text anzeigen" type="button" mode="outline" :disabled="controlsBusy" @click="showDetection(item.id)" />
-              <OnyxSelect :model-value="item.entity_type" :label="`Typ für ${excerpt(item.start, item.end)}`" list-label="Entitätstypen" :options="entities" :hide-clear-icon="true" :disabled="controlsBusy" @update:model-value="value => value && review.changeType(item.id, value as EntityType)" />
+              <OnyxSelect :model-value="item.entity_type" :label="`Typ für ${excerpt(item.start, item.end)}`" list-label="Entitätstypen" :options="entities" :hide-clear-icon="true" :disabled="controlsBusy" @update:model-value="value => value && review.changeType(item.id, value as string)" />
               <OnyxButton :label="`Schwärzung entfernen: ${excerpt(item.start, item.end)}`" type="button" mode="outline" :disabled="controlsBusy" @click="review.dismiss(item.id)" />
             </li>
           </ul>

@@ -250,3 +250,36 @@ fn preview_timeout_and_aborted_future_release_all_locks_without_saving() {
         }
     });
 }
+
+#[test]
+fn native_selection_order_is_normalized_before_the_second_configuration() {
+    runtime().block_on(async {
+        let f = Fixture::new();
+        let sidecar = f.sidecar();
+        let mut config = rules("Anna");
+        config.model_entities = Some(vec![
+            EntityType::parse("ZIPCODE".into()).unwrap(),
+            EntityType::parse("FIRSTNAME".into()).unwrap(),
+        ]);
+        let saved = detection::save_processing_config(
+            &f.controller,
+            &sidecar,
+            f.settings.sync_pairs[0].id,
+            config,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            saved.sync_pairs[0]
+                .config
+                .model_entities
+                .as_ref()
+                .unwrap()
+                .iter()
+                .map(EntityType::as_str)
+                .collect::<Vec<_>>(),
+            ["FIRSTNAME", "ZIPCODE"]
+        );
+        sidecar.shutdown().await;
+    });
+}

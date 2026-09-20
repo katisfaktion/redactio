@@ -25,14 +25,15 @@ try {
     Expect-Failure 'Package resource missing: redactio.exe'
     # Inert negative-test files; these never serve as executable package evidence.
     $files = @('redactio.exe', 'sidecar/redactio-sidecar.exe', 'models/manifest.json',
-               'models/de_core_news_lg/config.cfg', 'models/de_core_news_lg/meta.json',
+               'models/biomedbert-de/config.json', 'models/biomedbert-de/model.safetensors',
+               'models/biomedbert-de/redactio-model.json',
                'webview2/msedgewebview2.exe', 'THIRD-PARTY-NOTICES.txt', 'quick-start.de.md')
     foreach ($relative in $files) {
         $path = Join-Path $temporary $relative
         New-Item -ItemType Directory -Force (Split-Path $path -Parent) | Out-Null
         [IO.File]::WriteAllText($path, 'negative-test-input')
     }
-    foreach ($relative in @('webview2/msedgewebview2.exe', 'models/de_core_news_lg/config.cfg')) {
+    foreach ($relative in @('webview2/msedgewebview2.exe', 'models/biomedbert-de/config.json')) {
         $resource = Join-Path $temporary $relative
         Remove-Item -LiteralPath $resource
         Expect-Failure "Package resource missing: $relative"

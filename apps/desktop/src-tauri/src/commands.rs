@@ -14,6 +14,7 @@ use crate::{
 };
 use serde::Serialize;
 use std::{
+    collections::HashSet,
     fs,
     path::{Path, PathBuf},
     sync::Mutex,
@@ -145,6 +146,11 @@ pub fn add_pair(
     target_folder: String,
     create_target: bool,
 ) -> Result<UiSettings, AppError> {
+    let resources = crate::resources::resolve()?;
+    let model = crate::resources::list_models(&resources.model_root)?
+        .into_iter()
+        .find(|model| model.compatible)
+        .ok_or_else(|| AppError::new("setup_incomplete"))?;
     mutate(&state, |settings| {
         let source = Path::new(&source_folder);
         let target = Path::new(&target_folder);
@@ -159,7 +165,13 @@ pub fn add_pair(
             }
             Err(error) => return Err(error.into()),
         }
-        settings.add(&name, source, target)?;
+        let pair_id = settings.add(&name, source, target)?;
+        let pair = settings
+            .sync_pairs
+            .iter_mut()
+            .find(|pair| pair.id == pair_id)
+            .unwrap();
+        pair.config = native_default_config(&model);
         Ok(())
     })
 }
@@ -194,6 +206,7 @@ pub async fn save_processing_config(
     pair_id: Uuid,
     config: ProcessingConfig,
 ) -> Result<UiSettings, AppError> {
+    validate_model_config(&config)?;
     Ok(
         detection::save_processing_config(&state.runs, &state.sidecar()?, pair_id, config)
             .await?
@@ -220,6 +233,7 @@ pub async fn preview_rules(
     config: ProcessingConfig,
     text: String,
 ) -> Result<Vec<crate::protocol::Detection>, AppError> {
+    validate_model_config(&config)?;
     detection::preview_rules(&state.runs, &state.sidecar()?, pair_id, config, text).await
 }
 
@@ -278,10 +292,63 @@ fn mutate(
     }
 }
 
+fn validate_model_config(config: &ProcessingConfig) -> Result<(), AppError> {
+    config.validate()?;
+    let resources = crate::resources::resolve()?;
+    let model = crate::resources::list_models(&resources.model_root)?
+        .into_iter()
+        .find(|model| model.compatible && model.name == config.model)
+        .ok_or_else(|| AppError::new("model_not_found"))?;
+    if let Some(selected) = &config.model_entities {
+        let supported = model.entity_types.into_iter().collect::<HashSet<_>>();
+        if selected.iter().any(|entity| !supported.contains(entity)) {
+            return Err(AppError::new("invalid_settings"));
+        }
+    }
+    Ok(())
+}
+
+fn native_default_config(model: &crate::protocol::ModelInfo) -> ProcessingConfig {
+    let mut config = ProcessingConfig {
+        model: model.name.clone(),
+        ..ProcessingConfig::default()
+    };
+    config
+        .enabled_entities
+        .retain(|entity| entity.is_supplementary());
+    config.model_entities = Some(model.entity_types.clone());
+    config
+}
+
 fn load_registry(state: &State<'_, AppState>) -> Result<Settings, AppError> {
     let settings = load_settings(&state.settings_path)?;
     settings.validate_registry(std::slice::from_ref(&state.app_config_root))?;
     Ok(settings)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_pair_defaults_to_all_native_labels_and_only_supplementary_recognizers() {
+        let model = crate::protocol::ModelInfo {
+            name: "OpenMed-PII-German-BiomedBERT-Large-340M-v1".into(),
+            version: "synthetic".into(),
+            compatible: true,
+            entity_types: vec![
+                crate::domain::settings::EntityType::parse("ALIEN_42".into()).unwrap(),
+            ],
+        };
+        let config = native_default_config(&model);
+        assert_eq!(config.model_entities, Some(model.entity_types));
+        assert_eq!(config.enabled_entities.len(), 6);
+        assert!(config
+            .enabled_entities
+            .iter()
+            .all(crate::domain::settings::EntityType::is_supplementary));
+        assert!(config.validate().is_ok());
+    }
 }
 
 #[tauri::command]

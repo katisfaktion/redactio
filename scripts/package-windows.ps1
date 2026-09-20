@@ -5,6 +5,7 @@ $ErrorActionPreference = 'Stop'
 if (-not $IsWindows -or -not [Environment]::Is64BitOperatingSystem) { throw 'Windows x64 build host required' }
 $root = Split-Path $PSScriptRoot -Parent
 $inputs = Get-Content -Raw -LiteralPath (Join-Path $root 'packaging/build-inputs.json') | ConvertFrom-Json
+$inputs.model = Get-Content -Raw -LiteralPath (Join-Path $root ('packaging/' + $inputs.model.inputs)) | ConvertFrom-Json
 $work = Join-Path $root 'dist/windows'
 $package = Join-Path $work 'redactio'
 $desktopSupplied = [bool]$DesktopExecutable
@@ -78,14 +79,13 @@ try {
     }
     if (-not $DesktopNotices -or -not (Test-Path -LiteralPath $DesktopExecutable -PathType Leaf) -or
         -not (Test-Path -LiteralPath $DesktopNotices -PathType Leaf)) { throw 'Desktop executable and complete desktop notices required' }
-    $wheel = Get-VerifiedArtifact $inputs.model
     $cab = Get-VerifiedArtifact $inputs.webview2
     Invoke-Checked $python @('-m', 'PyInstaller', '--noconfirm', '--clean', '--distpath', (Join-Path $work 'frozen'),
         '--workpath', (Join-Path $work 'freeze-work'), 'packaging/sidecar.spec')
     New-Item -ItemType Directory -Path $package | Out-Null
     Copy-Item -LiteralPath $DesktopExecutable -Destination (Join-Path $package 'redactio.exe')
     Copy-Item -LiteralPath (Join-Path $work 'frozen/redactio-sidecar') -Destination (Join-Path $package 'sidecar') -Recurse
-    Invoke-Checked $python @('packaging/stage.py', '--wheel', $wheel, '--destination', (Join-Path $package 'models'))
+    Invoke-Checked $python @('scripts/prepare-biomedbert.py', '--model-dir', (Join-Path $package 'models'))
     $runtimeStage = Join-Path $work 'runtime'
     New-Item -ItemType Directory -Path $runtimeStage | Out-Null
     Invoke-Checked "$env:SystemRoot\System32\expand.exe" @($cab, '-F:*', $runtimeStage)
@@ -97,6 +97,7 @@ try {
     Copy-Item -LiteralPath (Join-Path $root 'docs/quick-start.de.md') -Destination $package
     Invoke-Checked $python @('packaging/notices.py', '--output', (Join-Path $work 'python-notices.txt'))
     $notices = (Get-Content -Raw -LiteralPath $DesktopNotices) + (Get-Content -Raw -LiteralPath (Join-Path $work 'python-notices.txt'))
+    $notices += "`nOpenMed German BiomedBERT 340M ($($inputs.model.revision)), Apache-2.0.`nhttps://huggingface.co/$($inputs.model.repository)`n"
     foreach ($file in Get-ChildItem -LiteralPath (Join-Path $package 'models') -File -Recurse |
              Where-Object Name -Like 'LICENSE*') { $notices += "`n" + (Get-Content -Raw -LiteralPath $file.FullName) }
     Copy-Item -LiteralPath (Join-Path $root 'packaging/licenses/webview2-fixed-LICENSE.html') -Destination (Join-Path $package 'webview2/LICENSE.html')

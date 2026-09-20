@@ -16,12 +16,7 @@
     "tldextract": "5.3.2"
   },
   "model": {
-    "name": "de_core_news_lg",
-    "version": "3.8.0",
-    "url": "https://github.com/explosion/spacy-models/releases/download/de_core_news_lg-3.8.0/de_core_news_lg-3.8.0-py3-none-any.whl",
-    "sha256": "36fda650e476b54d5e87803635e36dadd1e8e034c4b5962088586d684f4c9fed",
-    "license": "MIT",
-    "source": "https://github.com/explosion/spacy-models/releases/tag/de_core_news_lg-3.8.0"
+    "inputs": "biomedbert-inputs.json"
   },
   "webview2": {
     "version": "153.0.4234.48",

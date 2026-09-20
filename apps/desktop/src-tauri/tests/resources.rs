@@ -18,7 +18,7 @@ fn biomedbert(root: &Path) {
     }
     fs::write(
         model.join("config.json"),
-        r#"{"architectures":["BertForTokenClassification"],"model_type":"bert","max_position_embeddings":512}"#,
+        r#"{"architectures":["BertForTokenClassification"],"model_type":"bert","max_position_embeddings":512,"id2label":{"0":"O","1":"B-FIRSTNAME","2":"I-FIRSTNAME","3":"B-LASTNAME","4":"B-ZIPCODE"}}"#,
     )
     .unwrap();
     fs::write(
@@ -55,6 +55,17 @@ fn package(root: &Path) {
         b"fixture",
     )
     .unwrap();
+    biomedbert(&root.join("models"));
+    fs::write(
+        root.join("models/manifest.json"),
+        serde_json::to_vec(&serde_json::json!({"models":[{
+            "name": BIOMEDBERT,
+            "version": BIOMEDBERT_VERSION,
+            "path": "biomedbert-de",
+        }]}))
+        .unwrap(),
+    )
+    .unwrap();
 }
 
 #[test]
@@ -76,10 +87,7 @@ fn model_listing_uses_only_local_manifest_packages_and_rejects_unsafe_entries() 
     )
     .unwrap();
     let models = resources::list_models(root.path()).unwrap();
-    assert_eq!(models.len(), 2);
-    assert!(models[0].compatible);
-    assert!(!models[1].compatible);
-    assert_eq!(models[0].name, "de_core_news_lg");
+    assert!(models.is_empty());
     for models in [
         serde_json::json!([entry, entry]),
         serde_json::json!([{ "name":"de_core_news_lg","version":"3.8.0","path":"../outside" }]),
@@ -113,6 +121,24 @@ fn model_listing_accepts_only_the_complete_pinned_biomedbert_package() {
 
     let listed = || resources::list_models(root.path()).unwrap()[0].compatible;
     assert!(listed());
+    assert_eq!(
+        resources::list_models(root.path()).unwrap()[0].entity_types,
+        ["FIRSTNAME", "LASTNAME", "ZIPCODE"]
+            .into_iter()
+            .map(|label| redactio_lib::domain::settings::EntityType::parse(label.into()).unwrap())
+            .collect::<Vec<_>>()
+    );
+    let valid_config = fs::read(root.path().join("biomedbert-de/config.json")).unwrap();
+    fs::write(
+        root.path().join("biomedbert-de/config.json"),
+        r#"{"architectures":["BertForTokenClassification"],"model_type":"bert","max_position_embeddings":512}"#,
+    )
+    .unwrap();
+    assert!(
+        !listed(),
+        "a BiomedBERT package without native label metadata is incompatible"
+    );
+    fs::write(root.path().join("biomedbert-de/config.json"), valid_config).unwrap();
 
     fs::remove_file(root.path().join("biomedbert-de/model.safetensors")).unwrap();
     assert!(!listed());
@@ -155,7 +181,7 @@ fn packaged_resources_are_absolute_and_missing_runtime_or_model_fails_closed() {
         resources::webview_directory(&executable).unwrap_err().code,
         "setup_incomplete"
     );
-    fs::remove_file(root.join("models/de_core_news_lg/config.cfg")).unwrap();
+    fs::remove_file(root.join("models/biomedbert-de/config.json")).unwrap();
     assert!(resources::resolve_packaged(&executable).is_err());
     assert!(resources::resolve_packaged(Path::new("redactio.exe")).is_err());
 }

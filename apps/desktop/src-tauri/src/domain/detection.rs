@@ -54,13 +54,14 @@ pub(crate) async fn apply_configuration(
             return Err(AppError::new("configuration_changed"));
         }
         let mut proposed = pair.clone();
-        proposed.config = config;
+        proposed.config = config.normalized();
         proposed.processing_revision = Uuid::new_v4();
         let validated = configure_pair(&proposed, sidecar).await?;
+        let proposed_fingerprint = fingerprint(&validated.engine, &proposed.config);
         let changed = settings.apply_validated_config(
             pair.id,
             proposed.config,
-            fingerprint(&validated.engine),
+            proposed_fingerprint.clone(),
         )?;
         let resolved = settings
             .sync_pairs
@@ -69,7 +70,7 @@ pub(crate) async fn apply_configuration(
             .unwrap()
             .clone();
         let configured = configure_pair(&resolved, sidecar).await?;
-        if fingerprint(&configured.engine) != fingerprint(&validated.engine) {
+        if fingerprint(&configured.engine, &resolved.config) != proposed_fingerprint {
             return Err(AppError::new("processing_version_changed"));
         }
         if changed {

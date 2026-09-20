@@ -7,6 +7,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from pydantic import ValidationError
 
 from redactio_sidecar.engine import Engine
 from redactio_sidecar.ipc import EngineError
@@ -32,14 +33,64 @@ def bert_root(tmp_path: Path) -> Path:
             }
         )
     )
-    (model / "config.json").write_text(json.dumps({"model_type": "bert"}))
+    (model / "config.json").write_text(
+        json.dumps(
+            {
+                "model_type": "bert",
+                "id2label": {
+                    "0": "O",
+                    "1": "B-FIRSTNAME",
+                    "2": "I-FIRSTNAME",
+                    "3": "B-LASTNAME",
+                    "4": "B-ZIPCODE",
+                    "5": "B-AGE",
+                    "6": "B-ORGANIZATION",
+                },
+            }
+        )
+    )
     for name in ("model.safetensors", "tokenizer.json", "tokenizer_config.json"):
         (model / name).write_text("{}")
     return tmp_path
 
 
 def test_pinned_bert_is_available_without_loading_weights(bert_root: Path) -> None:
-    assert Engine(bert_root).available_models()[0].compatible
+    assert Engine(bert_root).available_models()[0].model_dump() == {
+        "name": NAME,
+        "version": SHA,
+        "compatible": True,
+        "entity_types": ["AGE", "FIRSTNAME", "LASTNAME", "ORGANIZATION", "ZIPCODE"],
+    }
+
+
+def test_model_rejects_missing_or_malformed_native_labels(bert_root: Path) -> None:
+    model = bert_root / "biomedbert-de"
+    for labels in (
+        None,
+        {"0": "O", "1": "B-bad"},
+        {"not-an-id": "B-FIRSTNAME"},
+        ["B-FIRSTNAME"],
+    ):
+        config = {"model_type": "bert"}
+        if labels is not None:
+            config["id2label"] = labels
+        (model / "config.json").write_text(json.dumps(config))
+        assert not Engine(bert_root).available_models()[0].compatible
+
+
+def test_native_config_rejects_invalid_and_unsupported_label_ids(bert_root: Path) -> None:
+    with pytest.raises(ValidationError):
+        ProcessingConfig(model_entities=["not_valid"])
+    with pytest.raises(EngineError, match="^invalid_configuration$"):
+        Engine(bert_root).configure(
+            str(uuid4()), str(uuid4()), ProcessingConfig(model=NAME, model_entities=["PERSON"])
+        )
+    with pytest.raises(EngineError, match="^invalid_configuration$"):
+        Engine(bert_root).configure(
+            str(uuid4()),
+            str(uuid4()),
+            ProcessingConfig(model=NAME, enabled_entities=["CUSTOM"], model_entities=["FIRSTNAME"]),
+        )
 
 
 @pytest.mark.parametrize(
@@ -98,6 +149,10 @@ def test_native_offsets_merge_only_predicted_components_and_deduplicate(monkeypa
     ]
     monkeypatch.setattr(biomedbert, "_load_pipeline", lambda _: lambda _: output)
     recognizer = biomedbert.BiomedBertRecognizer(Path("unused"))
+    recognizer.configure_labels(
+        ["FIRSTNAME", "LASTNAME", "STREET", "BUILDINGNUMBER", "ZIPCODE", "CITY"],
+        legacy=True,
+    )
 
     results = recognizer.analyze(text, ["PERSON", "LOCATION"], None)
 
@@ -109,6 +164,74 @@ def test_native_offsets_merge_only_predicted_components_and_deduplicate(monkeypa
     assert [text[r.start : r.end] for r in recognizer.analyze(text, ["LOCATION"], None)] == [
         "Hauptstraße 12, 10115 Berlin"
     ]
+
+
+def test_native_labels_keep_model_codes_and_merge_only_matching_labels(monkeypatch) -> None:
+    from redactio_sidecar import biomedbert
+
+    text = "Anna Muster, 10115 Berlin, 42 Jahre, Klinik Mitte"
+
+    def span(label: str, value: str, score: float) -> dict[str, object]:
+        start = text.index(value)
+        return {"entity_group": label, "start": start, "end": start + len(value), "score": score}
+
+    output = [
+        span("FIRSTNAME", "Anna", 0.91),
+        span("LASTNAME", "Muster", 0.92),
+        span("ZIPCODE", "10115", 0.93),
+        span("AGE", "42", 0.94),
+        span("ORGANIZATION", "Klinik", 0.95),
+        span("ORGANIZATION", "Mitte", 0.96),
+    ]
+    monkeypatch.setattr(biomedbert, "_load_pipeline", lambda _: lambda _: output)
+
+    recognizer = biomedbert.BiomedBertRecognizer(
+        Path("unused"), ("FIRSTNAME", "LASTNAME", "ZIPCODE", "AGE", "ORGANIZATION")
+    )
+    results = recognizer.analyze(
+        text, ["FIRSTNAME", "LASTNAME", "ZIPCODE", "AGE", "ORGANIZATION"], None
+    )
+
+    assert [(result.entity_type, text[result.start : result.end]) for result in results] == [
+        ("FIRSTNAME", "Anna"),
+        ("LASTNAME", "Muster"),
+        ("ZIPCODE", "10115"),
+        ("AGE", "42"),
+        ("ORGANIZATION", "Klinik Mitte"),
+    ]
+
+
+def test_native_selection_filters_model_labels_without_disabling_supplementary_recognizers(
+    bert_root: Path, monkeypatch
+) -> None:
+    from redactio_sidecar import biomedbert
+
+    monkeypatch.setattr(
+        biomedbert,
+        "_load_pipeline",
+        lambda _: (
+            lambda _: [
+                {"entity_group": "FIRSTNAME", "start": 0, "end": 4, "score": 0.99},
+                {"entity_group": "ZIPCODE", "start": 5, "end": 10, "score": 0.99},
+            ]
+        ),
+    )
+    engine = Engine(bert_root)
+    pair, revision = str(uuid4()), str(uuid4())
+    engine.configure(
+        pair,
+        revision,
+        ProcessingConfig(
+            model=NAME,
+            model_entities=["ZIPCODE"],
+            enabled_entities=["EMAIL_ADDRESS"],
+        ),
+    )
+
+    assert {item.entity_type for item in engine.analyze(pair, revision, "Anna 10115 a@b.de")} == {
+        "ZIPCODE",
+        "EMAIL_ADDRESS",
+    }
 
 
 def test_inference_failure_is_not_an_empty_success(monkeypatch) -> None:
@@ -135,7 +258,7 @@ def test_invalid_inference_offsets_and_scores_fail_closed(monkeypatch, start, en
         ),
     )
     with pytest.raises(EngineError, match="^internal_error$"):
-        biomedbert.BiomedBertRecognizer(Path("unused")).analyze("Anna", ["PERSON"], None)
+        biomedbert.BiomedBertRecognizer(Path("unused")).analyze("Anna", ["FIRSTNAME"], None)
 
 
 def test_model_load_failure_does_not_activate_pair(bert_root, monkeypatch) -> None:
@@ -187,8 +310,9 @@ def test_real_pipeline_bounds_sentinel_tokenizer_and_covers_chunk_boundaries(tmp
 
     monkeypatch.setattr(socket.socket, "connect", deny_network)
     recognizer = BiomedBertRecognizer(tmp_path)
+    recognizer.configure_labels(["FIRSTNAME"], legacy=False)
     text = "😀 Müller " + "Anna " * 1200 + "Müller"
-    results = recognizer.analyze(text, ["PERSON"], None)
+    results = recognizer.analyze(text, ["FIRSTNAME"], None)
     for index, char in enumerate(text):
         if not char.isspace():
             assert any(r.start <= index < r.end for r in results), index
@@ -259,7 +383,8 @@ def test_custom_person_rule_does_not_reenable_disabled_automatic_person(bert_roo
         revision,
         ProcessingConfig(
             model=NAME,
-            enabled_entities=["LOCATION"],
+            enabled_entities=[],
+            model_entities=["ZIPCODE"],
             custom_rules=[rule],
         ),
     )
@@ -269,16 +394,18 @@ def test_custom_person_rule_does_not_reenable_disabled_automatic_person(bert_roo
     # Reusing weights for another pair must retain its independently enabled types.
     second, second_revision = str(uuid4()), str(uuid4())
     engine.configure(
-        second, second_revision, ProcessingConfig(model=NAME, enabled_entities=["PERSON"])
+        second,
+        second_revision,
+        ProcessingConfig(model=NAME, enabled_entities=[], model_entities=["FIRSTNAME"]),
     )
-    assert [d.entity_type for d in engine.analyze(second, second_revision, "Anna")] == ["PERSON"]
+    assert [d.entity_type for d in engine.analyze(second, second_revision, "Anna")] == ["FIRSTNAME"]
 
 
 @pytest.mark.skipif(
     not os.environ.get("REDACTIO_BIOMEDBERT_MODEL_DIR"),
     reason="requires explicitly prepared pinned BiomedBERT weights",
 )
-def test_real_bert_offline_unicode_long_document_and_pair_switch(monkeypatch) -> None:
+def test_real_bert_offline_unicode_long_document(monkeypatch) -> None:
     def deny_network(*_args, **_kwargs):
         raise AssertionError("runtime network access attempted")
 
@@ -307,10 +434,6 @@ def test_real_bert_offline_unicode_long_document_and_pair_switch(monkeypatch) ->
         assert not any(d.start <= start and d.end >= start + len(component) for d in detections)
     assert all(0 <= d.start < d.end <= len(text) for d in detections)
     assert len({(d.start, d.end, d.entity_type) for d in detections}) == len(detections)
-    second, second_revision = str(uuid4()), str(uuid4())
-    info = engine.configure(second, second_revision, ProcessingConfig(model="de_core_news_sm"))
-    assert "SpacyRecognizer" in info.recognizers
-    assert "BiomedBertRecognizer" not in info.recognizers
-    assert engine.analyze(second, second_revision, "Max Mustermann wohnt in Berlin.")
-    with pytest.raises(EngineError, match="configuration_mismatch"):
-        engine.analyze(pair, revision, text)
+    with pytest.raises(EngineError, match="model_not_found"):
+        engine.configure(str(uuid4()), str(uuid4()), ProcessingConfig(model="de_core_news_sm"))
+    assert engine.info(pair, revision).model_name == NAME

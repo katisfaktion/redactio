@@ -13,14 +13,36 @@ from redactio_sidecar.engine import Engine
 from redactio_sidecar.ipc import EngineError
 from redactio_sidecar.schemas import ProcessingConfig, RegexRule, WordRule
 
+NAME = "OpenMed-PII-German-BiomedBERT-Large-340M-v1"
+
 
 @pytest.fixture(scope="session")
 def model_root() -> Path:
-    value = os.environ.get("REDACTIO_MODEL_DIR")
-    assert value, "REDACTIO_MODEL_DIR must point to a prepared offline model directory"
-    root = Path(value)
+    root = Path(os.environ.get("REDACTIO_MODEL_DIR", Path(__file__).parents[1] / "models"))
     assert (root / "manifest.json").is_file()
     return root
+
+
+@pytest.fixture(autouse=True)
+def synthetic_bert_pipeline(monkeypatch: pytest.MonkeyPatch) -> None:
+    from redactio_sidecar import biomedbert
+
+    def pipeline(text: str) -> list[dict[str, object]]:
+        results: list[dict[str, object]] = []
+        for label, term in (
+            ("FIRSTNAME", "Max"),
+            ("LASTNAME", "Mustermann"),
+            ("FIRSTNAME", "Anna"),
+            ("CITY", "Berlin"),
+        ):
+            start = text.find(term)
+            if start >= 0:
+                results.append(
+                    {"entity_group": label, "start": start, "end": start + len(term), "score": 0.99}
+                )
+        return results
+
+    monkeypatch.setattr(biomedbert, "_load_pipeline", lambda _: pipeline)
 
 
 @pytest.fixture(scope="session")
@@ -95,7 +117,7 @@ def test_default_categories_have_effective_german_recognizers(
 
     assert entity_type in {detection.entity_type for detection in detections}
     assert engine.info(pair_id, revision).recognizers == [
-        "SpacyRecognizer",
+        "BiomedBertRecognizer",
         "EmailRecognizer",
         "PhoneRecognizer",
         "IbanRecognizer",
@@ -213,8 +235,9 @@ def test_invalid_rule_is_transactional_and_identifies_attempted_pair(
     attempted_pair, attempted_revision = str(uuid4()), str(uuid4())
     engine.configure(active_pair, active_revision, ProcessingConfig(enabled_entities=[]))
     invalid = ProcessingConfig.model_construct(
-        model="de_core_news_lg",
+        model=NAME,
         enabled_entities=[],
+        model_entities=None,
         custom_rules=[invalid_rule],
         include_positions=True,
     )
@@ -245,29 +268,16 @@ def test_missing_model_switch_keeps_previous_snapshot(model_root: Path) -> None:
         engine.analyze(attempted_pair, attempted_revision, "KUNSTWORTXYZ")
 
 
-def test_switching_model_name_reloads_model_and_replaces_snapshot(model_root: Path) -> None:
+def test_retired_model_name_is_not_silently_reinterpreted(model_root: Path) -> None:
     engine = Engine(model_root)
     first_pair, first_revision = str(uuid4()), str(uuid4())
     second_pair, second_revision = str(uuid4()), str(uuid4())
-    assert engine.configure(first_pair, first_revision, ProcessingConfig()).model_name == (
-        "de_core_news_lg"
-    )
-
-    info = engine.configure(
-        second_pair,
-        second_revision,
-        ProcessingConfig(model="de_core_news_sm"),
-    )
-
-    assert info.model_name == "de_core_news_sm"
-    assert {
-        detection.entity_type
-        for detection in engine.analyze(
-            second_pair, second_revision, "Max Mustermann wohnt in Berlin."
-        )
-    } >= {"PERSON", "LOCATION"}
+    assert engine.configure(first_pair, first_revision, ProcessingConfig()).model_name == NAME
+    with pytest.raises(EngineError, match="model_not_found"):
+        engine.configure(second_pair, second_revision, ProcessingConfig(model="de_core_news_sm"))
+    assert engine.info(first_pair, first_revision).model_name == NAME
     with pytest.raises(EngineError, match="configuration_mismatch"):
-        engine.info(first_pair, first_revision)
+        engine.info(second_pair, second_revision)
 
 
 def test_available_models_validates_missing_incompatible_and_escaped_directories(
@@ -307,12 +317,8 @@ def test_available_models_validates_missing_incompatible_and_escaped_directories
 
     models = Engine(tmp_path).available_models()
 
-    assert [(model.name, model.version, model.compatible) for model in models] == [
-        ("missing", "1", False),
-        ("de_core_news_lg", "3.8.0", False),
-        ("escaped", "1", False),
-    ]
-    with pytest.raises(EngineError, match="model_incompatible"):
+    assert models == []
+    with pytest.raises(EngineError, match="model_not_found"):
         Engine(tmp_path).configure(
             str(uuid4()),
             str(uuid4()),
@@ -322,11 +328,8 @@ def test_available_models_validates_missing_incompatible_and_escaped_directories
 
 def test_packaged_model_is_reported_compatible(model_root: Path) -> None:
     models = Engine(model_root).available_models()
-    assert [model.model_dump() for model in models if model.name.startswith("de_core_news_")] == [
-        {"name": "de_core_news_lg", "version": "3.8.0", "compatible": True},
-        {"name": "de_core_news_sm", "version": "3.8.0", "compatible": True},
-    ]
-    assert all(model.compatible for model in models)
+    assert [model.name for model in models] == [NAME]
+    assert models[0].compatible and models[0].entity_types
 
 
 def test_model_manifest_must_not_repeat_names(tmp_path: Path) -> None:

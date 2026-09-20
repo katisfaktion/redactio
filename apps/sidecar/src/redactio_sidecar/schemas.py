@@ -64,16 +64,9 @@ Confidence = Annotated[
 ]
 Timestamp = Annotated[AwareDatetime, BeforeValidator(_parse_rfc3339)]
 
-EntityType: TypeAlias = Literal[
-    "PERSON",
-    "LOCATION",
-    "EMAIL_ADDRESS",
-    "PHONE_NUMBER",
-    "IBAN_CODE",
-    "IP_ADDRESS",
-    "URL",
-    "DATE_TIME",
-    "CUSTOM",
+EntityType = Annotated[
+    str,
+    StringConstraints(min_length=1, max_length=64, pattern=r"^[A-Z][A-Z0-9_]{0,63}$"),
 ]
 ReviewStatus: TypeAlias = Literal["pending", "approved", "rejected", "needs-rework"]
 
@@ -126,8 +119,9 @@ CustomRule: TypeAlias = Annotated[RegexRule | WordRule, Field(discriminator="kin
 
 
 class ProcessingConfig(StrictModel):
-    model: NonEmptyString = "de_core_news_lg"
+    model: NonEmptyString = "OpenMed-PII-German-BiomedBERT-Large-340M-v1"
     enabled_entities: list[EntityType] = Field(default_factory=lambda: list(DEFAULT_ENTITIES))
+    model_entities: list[EntityType] | None = None
     custom_rules: list[CustomRule] = Field(default_factory=list)
     include_positions: bool = True
 
@@ -135,6 +129,10 @@ class ProcessingConfig(StrictModel):
     def values_are_unique(self) -> ProcessingConfig:
         if len(set(self.enabled_entities)) != len(self.enabled_entities):
             raise ValueError("enabled entities must be unique")
+        if self.model_entities is not None and len(set(self.model_entities)) != len(
+            self.model_entities
+        ):
+            raise ValueError("model entities must be unique")
         rule_ids = [rule.id for rule in self.custom_rules]
         if len(set(rule_ids)) != len(rule_ids):
             raise ValueError("custom rule IDs must be unique")
@@ -190,6 +188,7 @@ class ModelInfo(StrictModel):
     name: NonEmptyString
     version: NonEmptyString
     compatible: bool
+    entity_types: list[EntityType]
 
 
 class DocumentKey(StrictModel):

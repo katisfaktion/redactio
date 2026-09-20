@@ -51,8 +51,13 @@ pub fn resolve_packaged(executable: &Path) -> Result<ResourcePaths, AppError> {
     let model_root = resource(root.join("models"), true)?;
     for required in [
         "manifest.json",
-        "de_core_news_lg/config.cfg",
-        "de_core_news_lg/meta.json",
+        "biomedbert-de/config.json",
+        "biomedbert-de/redactio-model.json",
+        "biomedbert-de/model.safetensors",
+        "biomedbert-de/tokenizer.json",
+        "biomedbert-de/tokenizer_config.json",
+        "biomedbert-de/special_tokens_map.json",
+        "biomedbert-de/vocab.txt",
     ] {
         resource(model_root.join(required), false)?;
     }
@@ -111,8 +116,7 @@ fn setup_error() -> AppError {
     AppError::new("setup_incomplete")
 }
 
-/// Metadata-only local availability. The engine verifies actual spaCy package
-/// compatibility when configured; this never imports or downloads a model.
+/// Metadata-only local availability. This never imports or downloads a model.
 pub fn list_models(root: &Path) -> Result<Vec<crate::protocol::ModelInfo>, AppError> {
     const BIOMEDBERT: &str = "OpenMed-PII-German-BiomedBERT-Large-340M-v1";
     const BIOMEDBERT_VERSION: &str = "ce797d58600cc20bba9a2500dafc0b7f5c3270c1";
@@ -141,73 +145,100 @@ pub fn list_models(root: &Path) -> Result<Vec<crate::protocol::ModelInfo>, AppEr
         architectures: Vec<String>,
         model_type: String,
         max_position_embeddings: u64,
+        id2label: serde_json::Value,
     }
     let invalid = || AppError::new("invalid_model_manifest");
     let manifest = resource(root.join("manifest.json"), false).map_err(|_| invalid())?;
     let manifest: Manifest = serde_json::from_slice(&fs::read(manifest).map_err(|_| invalid())?)
         .map_err(|_| invalid())?;
     let mut names = std::collections::HashSet::new();
-    manifest
-        .models
+    let mut biomedbert = None;
+    for entry in manifest.models {
+        if entry.name.is_empty()
+            || entry.version.is_empty()
+            || !names.insert(entry.name.clone())
+            || entry.path.as_os_str().is_empty()
+            || entry
+                .path
+                .components()
+                .any(|part| !matches!(part, std::path::Component::Normal(_)))
+        {
+            return Err(invalid());
+        }
+        if entry.name == BIOMEDBERT {
+            biomedbert = Some(entry);
+        }
+    }
+    let Some(entry) = biomedbert else {
+        return Ok(Vec::new());
+    };
+    let model = root.join(&entry.path);
+    let labels = (|| {
+        if entry.version != BIOMEDBERT_VERSION || model != root.join("biomedbert-de") {
+            return Err(invalid());
+        }
+        for required in [
+            "model.safetensors",
+            "tokenizer.json",
+            "tokenizer_config.json",
+            "special_tokens_map.json",
+            "vocab.txt",
+        ] {
+            resource(model.join(required), false)?;
+        }
+        let config = resource(model.join("config.json"), false)?;
+        let config: BertConfig =
+            serde_json::from_slice(&fs::read(config)?).map_err(|_| invalid())?;
+        let metadata = resource(model.join("redactio-model.json"), false)?;
+        let metadata: ModelMetadata =
+            serde_json::from_slice(&fs::read(metadata)?).map_err(|_| invalid())?;
+        if metadata.name != BIOMEDBERT
+            || metadata.version != BIOMEDBERT_VERSION
+            || metadata.repository != format!("OpenMed/{BIOMEDBERT}")
+            || config.architectures != ["BertForTokenClassification"]
+            || config.model_type != "bert"
+            || config.max_position_embeddings != 512
+        {
+            return Err(invalid());
+        }
+        model_entity_types(config.id2label).ok_or_else(invalid)
+    })();
+    let (compatible, entity_types) = match labels {
+        Ok(entity_types) => (true, entity_types),
+        Err(_) => (false, Vec::new()),
+    };
+    Ok(vec![crate::protocol::ModelInfo {
+        name: entry.name,
+        version: entry.version,
+        compatible,
+        entity_types,
+    }])
+}
+
+fn model_entity_types(
+    id2label: serde_json::Value,
+) -> Option<Vec<crate::domain::settings::EntityType>> {
+    let labels = id2label.as_object()?;
+    if labels.is_empty() || labels.keys().any(|key| key.parse::<u64>().is_err()) {
+        return None;
+    }
+    let mut entity_types = labels
+        .values()
+        .map(serde_json::Value::as_str)
+        .collect::<Option<Vec<_>>>()?
         .into_iter()
-        .map(|entry| {
-            if entry.name.is_empty()
-                || entry.version.is_empty()
-                || !names.insert(entry.name.clone())
-                || entry.path.as_os_str().is_empty()
-                || entry
-                    .path
-                    .components()
-                    .any(|part| !matches!(part, std::path::Component::Normal(_)))
-            {
-                return Err(invalid());
-            }
-            let model = root.join(entry.path);
-            let compatible = (|| {
-                if entry.name == BIOMEDBERT {
-                    if entry.version != BIOMEDBERT_VERSION || model != root.join("biomedbert-de") {
-                        return Ok(false);
-                    }
-                    for required in [
-                        "model.safetensors",
-                        "tokenizer.json",
-                        "tokenizer_config.json",
-                        "special_tokens_map.json",
-                        "vocab.txt",
-                    ] {
-                        resource(model.join(required), false)?;
-                    }
-                    let config = resource(model.join("config.json"), false)?;
-                    let config: BertConfig =
-                        serde_json::from_slice(&fs::read(config)?).map_err(|_| invalid())?;
-                    let metadata = resource(model.join("redactio-model.json"), false)?;
-                    let metadata: ModelMetadata =
-                        serde_json::from_slice(&fs::read(metadata)?).map_err(|_| invalid())?;
-                    return Ok(metadata.name == BIOMEDBERT
-                        && metadata.version == BIOMEDBERT_VERSION
-                        && metadata.repository == format!("OpenMed/{BIOMEDBERT}")
-                        && config.architectures == ["BertForTokenClassification"]
-                        && config.model_type == "bert"
-                        && config.max_position_embeddings == 512);
-                }
-                resource(model.join("config.cfg"), false)?;
-                let meta = resource(model.join("meta.json"), false)?;
-                let meta: serde_json::Value =
-                    serde_json::from_slice(&fs::read(meta)?).map_err(|_| invalid())?;
-                Ok::<_, AppError>(
-                    meta["lang"] == "de"
-                        && meta["version"] == entry.version
-                        && meta["name"]
-                            .as_str()
-                            .is_some_and(|name| format!("de_{name}") == entry.name),
-                )
-            })()
-            .unwrap_or(false);
-            Ok(crate::protocol::ModelInfo {
-                name: entry.name,
-                version: entry.version,
-                compatible,
-            })
+        .filter_map(|label| match label {
+            "O" => None,
+            label => Some(
+                label
+                    .strip_prefix("B-")
+                    .or_else(|| label.strip_prefix("I-"))
+                    .unwrap_or(label),
+            ),
         })
-        .collect()
+        .map(|label| crate::domain::settings::EntityType::parse(label.into()).ok())
+        .collect::<Option<Vec<_>>>()?;
+    entity_types.sort_unstable();
+    entity_types.dedup();
+    (!entity_types.is_empty()).then_some(entity_types)
 }

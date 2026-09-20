@@ -52,16 +52,20 @@ deshalb nicht stillschweigend ersetzt.
 
 ## 3. Erkennung einstellen
 
-Die Einstellungen gehören jeweils zum ausgewählten Paar. Standardmäßig werden
-Personen, Orte, E-Mail-Adressen, Telefonnummern, IBANs, IP-Adressen, URLs und
-Datums-/Zeitangaben mit dem mitgelieferten deutschen Modell `de_core_news_lg`
-gesucht. Nur lokal vorhandene kompatible Modelle stehen zur Auswahl.
+Die Einstellungen gehören jeweils zum ausgewählten Paar. Standardmodell ist
+**BiomedBERT**. Seine Modelltypen werden aus dem installierten Modell geladen,
+zurzeit 54 Typen wie Vorname (FIRSTNAME), Nachname (LASTNAME) und Postleitzahl
+(ZIPCODE). Neue Paare aktivieren alle Modelltypen. Zusätzliche Erkennung für
+E-Mail-Adressen, Telefonnummern, IBANs, IP-Adressen, URLs und Datum/Zeit lässt
+sich getrennt einstellen. Die ursprünglichen Modelltypen bleiben in Prüfung und
+Platzhaltern erhalten.
 
-Nach der optionalen [BiomedBERT-Einrichtung](development.md#optional-biomedbert-detector-for-local-evaluation)
-steht **BiomedBERT – Deutsch, Namen und Adressen (340M)** zur Auswahl. Dafür
-**Personen** und **Orte und Adressen** aktivieren, speichern und die Dokumente
-erneut verarbeiten. Auch dieses Modell kann Namen und Adressbestandteile übersehen;
-die Ergebnisse müssen weiterhin geprüft werden.
+Bei bestehenden BiomedBERT-Paaren die Modelltypen prüfen, speichern und Dokumente
+erneut verarbeiten. Bis zum Speichern bleibt die bisherige Erkennung aktiv.
+Core-news-Modelle stehen nicht mehr zur Auswahl; betroffene Paare auf BiomedBERT
+umstellen. Frühere Ergebnisse werden dabei nicht stillschweigend überschrieben.
+Für eine Entwicklungsinstallation zuerst die [Modelleinrichtung](development.md#offline-german-model)
+durchführen. Auch BiomedBERT kann Namen und Adressbestandteile übersehen.
 
 Benötigte Kategorien aktivieren und bei Bedarf eigene Wortlisten oder reguläre
 Ausdrücke ergänzen. Wortlisten suchen wörtlich und unterscheiden Groß-/Kleinschreibung;

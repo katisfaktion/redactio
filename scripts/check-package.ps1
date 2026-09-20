@@ -4,8 +4,9 @@ param([Parameter(Mandatory)][string]$PackageRoot,
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 foreach ($relative in @('redactio.exe', 'sidecar/redactio-sidecar.exe',
-                       'models/manifest.json', 'models/de_core_news_lg/config.cfg',
-                       'models/de_core_news_lg/meta.json', 'webview2/msedgewebview2.exe',
+                       'models/manifest.json', 'models/biomedbert-de/config.json',
+                       'models/biomedbert-de/model.safetensors', 'models/biomedbert-de/redactio-model.json',
+                       'webview2/msedgewebview2.exe',
                        'THIRD-PARTY-NOTICES.txt', 'quick-start.de.md')) {
     if (-not (Test-Path -LiteralPath (Join-Path $PackageRoot $relative) -PathType Leaf)) {
         throw "Package resource missing: $relative"
@@ -79,8 +80,17 @@ if (@(Get-ChildItem -LiteralPath $PackageRoot -Recurse -Force |
     throw 'redirected_package_resource'
 }
 $modelManifest = Get-Content -Raw -LiteralPath (Join-Path $PackageRoot 'models/manifest.json') | ConvertFrom-Json
-if ($modelManifest.models.Count -ne 1 -or $modelManifest.models[0].name -cne 'de_core_news_lg' -or
-    $modelManifest.models[0].version -cne $manifest.inputs.model.version) { throw 'invalid_model_manifest' }
+if ($modelManifest.models.Count -ne 1 -or $modelManifest.models[0].name -cne $manifest.inputs.model.name -or
+    $modelManifest.models[0].version -cne $manifest.inputs.model.revision -or
+    $modelManifest.models[0].path -cne 'biomedbert-de') { throw 'invalid_model_manifest' }
+foreach ($file in $manifest.inputs.model.files.PSObject.Properties) {
+    if ((Get-FileHash -LiteralPath (Join-Path $PackageRoot ('models/biomedbert-de/' + $file.Name))).Hash.ToLowerInvariant() -cne $file.Value) {
+        throw 'model_checksum_mismatch'
+    }
+}
+$modelConfig = Get-Content -Raw -LiteralPath (Join-Path $PackageRoot 'models/biomedbert-de/config.json') | ConvertFrom-Json
+$modelEntities = @($modelConfig.id2label.PSObject.Properties.Value | Where-Object { $_ -cne 'O' } |
+    ForEach-Object { $_ -creplace '^[BI]-', '' } | Sort-Object -Unique)
 $runtime = Get-Item -LiteralPath (Join-Path $PackageRoot 'webview2/msedgewebview2.exe')
 if ($runtime.VersionInfo.ProductVersion -cne $manifest.inputs.webview2.version) {
     throw 'webview_version_mismatch'
@@ -131,6 +141,8 @@ foreach ($variable in @('PYTHONPATH', 'PYTHONHOME', 'REDACTIO_MODEL_DIR', 'REDAC
 }
 $process.StartInfo.Environment['PATH'] = "$env:SystemRoot\System32;$env:SystemRoot"
 $process.StartInfo.Environment['PYTHONUTF8'] = '1'
+$process.StartInfo.Environment['HF_HUB_OFFLINE'] = '1'
+$process.StartInfo.Environment['TRANSFORMERS_OFFLINE'] = '1'
 function Send-Request([string]$Type, [hashtable]$Payload, [int]$Seconds, [string]$ExpectedError = '') {
     $id = [guid]::NewGuid().ToString()
     $message = @{ id = $id; type = $Type; payload = $Payload } | ConvertTo-Json -Depth 20 -Compress
@@ -156,8 +168,9 @@ try {
     if ($ping.protocol_version -ne 1) { throw 'sidecar_protocol_version' }
     $pair = [guid]::NewGuid().ToString()
     $revision = [guid]::NewGuid().ToString()
-    $entities = @('PERSON', 'LOCATION', 'EMAIL_ADDRESS', 'PHONE_NUMBER', 'IBAN_CODE', 'IP_ADDRESS', 'URL', 'DATE_TIME')
-    $config = @{ model = 'de_core_news_lg'; enabled_entities = $entities; include_positions = $true }
+    $entities = @('EMAIL_ADDRESS', 'PHONE_NUMBER', 'IBAN_CODE', 'IP_ADDRESS', 'URL', 'DATE_TIME')
+    $config = @{ model = $modelManifest.models[0].name; model_entities = $modelEntities;
+        enabled_entities = $entities; include_positions = $true }
     $baseRule = @{ id = [guid]::NewGuid().ToString(); entity_type = 'CUSTOM';
         enabled = $true; kind = 'words'; words = @('anna.beispiel@example.invalid') }
     function Configure-Engine {
@@ -165,8 +178,8 @@ try {
             sync_pair_id = $pair; processing_revision = $revision; config = $config
         } 180
         if ($configured.sync_pair_id -cne $pair -or $configured.processing_revision -cne $revision -or
-            $configured.engine.model_name -cne 'de_core_news_lg' -or
-            $configured.engine.model_version -cne $manifest.inputs.model.version) { throw 'sidecar_model_identity' }
+            $configured.engine.model_name -cne $modelManifest.models[0].name -or
+            $configured.engine.model_version -cne $manifest.inputs.model.revision) { throw 'sidecar_model_identity' }
     }
     $config.custom_rules = @($baseRule)
     Configure-Engine
@@ -217,10 +230,9 @@ try {
             if (-not $result.body.Contains($redaction.placeholder)) { throw 'smoke_missing_placeholder' }
         }
         if ($entry.profile -eq 'repeated') {
-            # The first name belongs to a larger merged canary span; these two
-            # standalone equal values must reuse one PERSON placeholder.
+            # The canary and both repeated names must reuse one PERSON placeholder.
             $names = @($result.redactions | Where-Object entity_type -CEQ 'PERSON')
-            if ($names.Count -ne 2 -or @($names.placeholder | Select-Object -Unique).Count -ne 1) {
+            if ($names.Count -ne 3 -or @($names.placeholder | Select-Object -Unique).Count -ne 1) {
                 throw 'repeated_placeholder_mismatch'
             }
         }

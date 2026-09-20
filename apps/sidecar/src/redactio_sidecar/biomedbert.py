@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from pathlib import Path
 from typing import Any, cast
 
@@ -11,7 +12,7 @@ from .ipc import EngineError
 
 MODEL_NAME = "OpenMed-PII-German-BiomedBERT-Large-340M-v1"
 MODEL_VERSION = "ce797d58600cc20bba9a2500dafc0b7f5c3270c1"
-_LABELS = {
+_LEGACY_LABELS = {
     **dict.fromkeys(("FIRSTNAME", "MIDDLENAME", "LASTNAME"), "PERSON"),
     **dict.fromkeys(
         (
@@ -28,6 +29,31 @@ _LABELS = {
         "LOCATION",
     ),
 }
+_LABEL_ID = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
+
+
+def model_entity_types(path: Path) -> tuple[str, ...]:
+    try:
+        config = json.loads((path / "config.json").read_text(encoding="utf-8"))
+        labels = config["id2label"]
+        if not isinstance(labels, dict):
+            raise TypeError
+        if not all(isinstance(index, str) and index.isdecimal() for index in labels):
+            raise ValueError
+        if not all(isinstance(label, str) for label in labels.values()):
+            raise ValueError
+        entity_types = {_strip_bio_prefix(label) for label in labels.values()} - {"O"}
+        if any(not _LABEL_ID.fullmatch(label) for label in entity_types) or any(
+            not isinstance(label, str) for label in labels.values()
+        ):
+            raise ValueError
+        return tuple(sorted(entity_types))
+    except (KeyError, OSError, TypeError, ValueError, json.JSONDecodeError):
+        return ()
+
+
+def _strip_bio_prefix(label: str) -> str:
+    return label[2:] if label.startswith(("B-", "I-")) else label
 
 
 def compatible_model(path: Path, name: str, model_version: str) -> bool:
@@ -44,6 +70,7 @@ def compatible_model(path: Path, name: str, model_version: str) -> bool:
                 "repository": "OpenMed/" + MODEL_NAME,
             }
             and config["model_type"] == "bert"
+            and bool(model_entity_types(path))
             and all(
                 (path / file).is_file()
                 for file in (
@@ -90,13 +117,28 @@ def _load_pipeline(path: Path) -> Any:
 class BiomedBertRecognizer(EntityRecognizer):
     name: str
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, native_labels: tuple[str, ...] = ()) -> None:
         self._path = path
+        self._native_labels = frozenset(native_labels or _LEGACY_LABELS)
+        self._label_mapping = {label: label for label in self._native_labels}
+        self._legacy = False
         super().__init__(
-            supported_entities=["PERSON", "LOCATION"],
+            supported_entities=sorted(self._native_labels),
             supported_language="de",
             name="BiomedBertRecognizer",
         )
+
+    def configure_labels(self, labels: list[str], legacy: bool) -> None:
+        selected = set(labels)
+        if not selected <= self._native_labels:
+            raise ValueError("unsupported model label")
+        self._label_mapping = {
+            label: _LEGACY_LABELS[label] if legacy else label
+            for label in selected
+            if not legacy or label in _LEGACY_LABELS
+        }
+        self._legacy = legacy
+        self.supported_entities = sorted(set(self._label_mapping.values()))
 
     def load(self) -> None:
         try:
@@ -115,7 +157,10 @@ class BiomedBertRecognizer(EntityRecognizer):
         try:
             results = []
             for item in self._pipeline(text):
-                entity = _LABELS.get(item["entity_group"])
+                raw_label = item.get("entity_group")
+                entity = self._label_mapping.get(
+                    _strip_bio_prefix(raw_label) if isinstance(raw_label, str) else ""
+                )
                 if entity not in entities or entity not in self.supported_entities:
                     continue
                 start, end, score = int(item["start"]), int(item["end"]), float(item["score"])
@@ -129,7 +174,11 @@ class BiomedBertRecognizer(EntityRecognizer):
                 if merged and result.entity_type == merged[-1].entity_type:
                     previous = merged[-1]
                     gap = text[previous.end : result.start]
-                    separators = " \t\r\n,-" if result.entity_type == "LOCATION" else " \t-"
+                    separators = (
+                        " \t\r\n,-"
+                        if not self._legacy or result.entity_type == "LOCATION"
+                        else " \t-"
+                    )
                     if result.start <= previous.end or (gap and all(c in separators for c in gap)):
                         previous.end = max(previous.end, result.end)
                         previous.score = min(previous.score, result.score)

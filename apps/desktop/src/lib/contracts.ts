@@ -1,16 +1,7 @@
 import { z } from "zod";
 
-export const EntityTypeSchema = z.enum([
-  "PERSON",
-  "LOCATION",
-  "EMAIL_ADDRESS",
-  "PHONE_NUMBER",
-  "IBAN_CODE",
-  "IP_ADDRESS",
-  "URL",
-  "DATE_TIME",
-  "CUSTOM",
-]);
+export const EntityTypeSchema = z.string().regex(/^[A-Z][A-Z0-9_]{0,63}$/);
+export const EntityTypesSchema = z.array(EntityTypeSchema).refine(types => new Set(types).size === types.length);
 
 const CustomRuleBaseSchema = z.object({
   id: z.uuid(),
@@ -25,7 +16,8 @@ export const CustomRuleSchema = z.discriminatedUnion("kind", [
 
 export const ProcessingConfigSchema = z.object({
   model: z.string(),
-  enabled_entities: z.array(EntityTypeSchema),
+  model_entities: EntityTypesSchema.nullable().optional().default(null),
+  enabled_entities: EntityTypesSchema,
   custom_rules: z.array(CustomRuleSchema),
   include_positions: z.boolean(),
 }).strict();
@@ -94,7 +86,10 @@ export type ScannedFile = z.infer<typeof ScannedFileSchema>;
 export type ScanFailure = z.infer<typeof ScanFailureSchema>;
 export type ScanReport = z.infer<typeof ScanReportSchema>;
 
-export const ModelInfoSchema = z.object({ name: z.string().min(1), version: z.string().min(1), compatible: z.boolean() }).strict();
+export const ModelInfoSchema = z.object({
+  name: z.string().min(1), version: z.string().min(1), compatible: z.boolean(),
+  entity_types: EntityTypesSchema,
+}).strict();
 export const DetectionSchema = z.object({
   id: z.string().min(1).max(128), start: z.number().int().nonnegative(), end: z.number().int().positive(),
   entity_type: EntityTypeSchema, confidence: z.number().min(0).max(1).nullable(),

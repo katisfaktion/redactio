@@ -28,6 +28,8 @@ from redactio_sidecar.schemas import (
     ReviewRequest,
 )
 
+MODEL_NAME = "OpenMed-PII-German-BiomedBERT-Large-340M-v1"
+
 PAIR_ID = "11111111-1111-4111-8111-111111111111"
 REVISION = "22222222-2222-4222-8222-222222222222"
 RULE_ID = "33333333-3333-4333-8333-333333333333"
@@ -39,7 +41,7 @@ RESPONSE_ADAPTER = TypeAdapter(Response)
 def engine_info() -> dict[str, Any]:
     return {
         "engine_version": "synthetic-engine",
-        "model_name": "de_core_news_lg",
+        "model_name": MODEL_NAME,
         "model_version": "synthetic-model",
         "recognizers": ["synthetic-recognizer"],
         "extraction_version": "synthetic-extractor",
@@ -95,7 +97,7 @@ def process_result_payload() -> dict[str, Any]:
 
 def synthetic_messages() -> list[dict[str, Any]]:
     config = {
-        "model": "de_core_news_lg",
+        "model": MODEL_NAME,
         "enabled_entities": [
             "PERSON",
             "LOCATION",
@@ -202,7 +204,7 @@ def synthetic_messages() -> list[dict[str, Any]]:
 
 def test_processing_defaults_and_empty_decisions_match_shared_contract():
     config = ProcessingConfig()
-    assert config.model == "de_core_news_lg"
+    assert config.model == MODEL_NAME
     assert config.enabled_entities == [
         "PERSON",
         "LOCATION",
@@ -213,6 +215,7 @@ def test_processing_defaults_and_empty_decisions_match_shared_contract():
         "URL",
         "DATE_TIME",
     ]
+    assert config.model_entities is None
     assert config.custom_rules == []
     assert config.include_positions is True
     assert Decisions().model_dump() == {"dismissed_ids": [], "manual": []}
@@ -246,7 +249,7 @@ def test_document_metadata_rejects_invalid_fields(mutation):
     [
         lambda value: value.update(start=-1),
         lambda value: value.update(end=0),
-        lambda value: value.update(entity_type="UNKNOWN"),
+        lambda value: value.update(entity_type="not_valid"),
         lambda value: value.update(confidence=-0.1),
         lambda value: value.update(confidence=1.1),
         lambda value: value.update(confidence=math.nan),
@@ -404,14 +407,14 @@ def write_document(path: Path, text: str, *, header: str | None = None) -> str:
 
 
 def model_root() -> Path:
-    root = Path(os.environ["REDACTIO_MODEL_DIR"])
+    root = Path(os.environ.get("REDACTIO_MODEL_DIR", Path(__file__).parents[1] / "models"))
     assert (root / "manifest.json").is_file()
     return root
 
 
 def processing_config(*, include_positions: bool = False) -> dict[str, Any]:
     return {
-        "model": "de_core_news_lg",
+        "model": MODEL_NAME,
         "enabled_entities": [],
         "custom_rules": [
             {
@@ -577,6 +580,60 @@ def test_review_uses_stored_spans_and_enforces_warning_approval(tmp_path):
                 update={
                     "detections": [generated[0].model_copy(update={"id": "tampered"})],
                     "review_status": "rejected",
+                }
+            )
+        )
+
+
+def test_review_allows_disabled_native_labels_for_manual_detections(tmp_path):
+    engine = Engine(model_root())
+    engine.configure(
+        PAIR_ID,
+        REVISION,
+        ProcessingConfig(model=MODEL_NAME, enabled_entities=[], model_entities=[]),
+    )
+    path = tmp_path / "native-manual.docx"
+    source_hash = write_document(path, "42")
+    request = ReviewRequest.model_validate(
+        {
+            **document_meta(),
+            "source_hash_sha256": source_hash,
+            "source_path": str(path),
+            "detections": [],
+            "decisions": {
+                "dismissed_ids": [],
+                "manual": [
+                    {
+                        "id": "manual-age",
+                        "start": 0,
+                        "end": 2,
+                        "entity_type": "AGE",
+                        "confidence": None,
+                        "recognizer": "manual",
+                        "origin": "manual",
+                    }
+                ],
+            },
+            "review_status": "pending",
+            "reviewed_at": None,
+            "acknowledged_warnings": [],
+        }
+    )
+
+    assert engine.render_review(request).body == "<AGE_1>\n"
+    with pytest.raises(EngineError, match="invalid_review"):
+        engine.render_review(
+            request.model_copy(
+                update={
+                    "decisions": request.decisions.model_copy(
+                        update={
+                            "manual": [
+                                request.decisions.manual[0].model_copy(
+                                    update={"entity_type": "NOT_A_MODEL_LABEL"}
+                                )
+                            ]
+                        }
+                    )
                 }
             )
         )

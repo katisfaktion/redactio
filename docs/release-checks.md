@@ -137,7 +137,7 @@ Record the loaded WebView executable path and version, plus app settings, WebVie
 and OS cache locations separately; do not claim Windows performs zero unrelated writes.
 
 For missing-resource cases use a disposable copy of the ZIP, remove `webview2/` or
-`models/de_core_news_lg/`, and confirm setup fails without falling back to installed
+`models/biomedbert-de/`, and confirm setup fails without falling back to installed
 runtimes/models. Preserve expected errors, screenshots and command exit codes. Never
 change host firewall/network settings, delete existing settings/pairs, or use private
 documents to produce repository or CI evidence.

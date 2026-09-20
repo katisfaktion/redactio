@@ -61,13 +61,12 @@ jobs:
           "REDACTIO_TEST_PYTHON=$((Resolve-Path $python).Path)" >> $env:GITHUB_ENV
           $modelRoot = Join-Path $env:RUNNER_TEMP 'redactio-models'
           New-Item -ItemType Directory -Path $modelRoot | Out-Null
-          uv pip install --python $python --target "$modelRoot/vendor" --no-deps 'https://github.com/explosion/spacy-models/releases/download/de_core_news_lg-3.8.0/de_core_news_lg-3.8.0-py3-none-any.whl#sha256=36fda650e476b54d5e87803635e36dadd1e8e034c4b5962088586d684f4c9fed'
-          uv pip install --python $python --target "$modelRoot/vendor" --no-deps 'https://github.com/explosion/spacy-models/releases/download/de_core_news_sm-3.8.0/de_core_news_sm-3.8.0-py3-none-any.whl#sha256=fec69fec52b1780f2d269d5af7582a5e28028738bd3190532459aeb473bfa3e7'
-          @{ models = @(
-            @{ name = 'de_core_news_lg'; version = '3.8.0'; path = 'vendor/de_core_news_lg/de_core_news_lg-3.8.0' },
-            @{ name = 'de_core_news_sm'; version = '3.8.0'; path = 'vendor/de_core_news_sm/de_core_news_sm-3.8.0' }
-          ) } | ConvertTo-Json -Depth 5 | Set-Content "$modelRoot/manifest.json"
+          & $python scripts/prepare-biomedbert.py --model-dir $modelRoot
           "REDACTIO_MODEL_DIR=$modelRoot" >> $env:GITHUB_ENV
+          "REDACTIO_BIOMEDBERT_MODEL_DIR=$modelRoot" >> $env:GITHUB_ENV
+          "HF_HUB_OFFLINE=1" >> $env:GITHUB_ENV
+          "TRANSFORMERS_OFFLINE=1" >> $env:GITHUB_ENV
+          "TOKENIZERS_PARALLELISM=false" >> $env:GITHUB_ENV
           "UV_OFFLINE=true" >> $env:GITHUB_ENV
           "CARGO_NET_OFFLINE=true" >> $env:GITHUB_ENV
       - name: Frontend, engine, corpus and native host checks

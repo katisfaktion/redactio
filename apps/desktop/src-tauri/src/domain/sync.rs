@@ -5,7 +5,7 @@ use super::{
         Mapping, ReviewRecord,
     },
     scan::{hash_output, scan_collection, ScanFailureOrigin, ScanReport, ScannedFile},
-    settings::{load_settings, ProcessingFingerprint, SyncPair},
+    settings::{load_settings, ProcessingConfig, ProcessingFingerprint, SyncPair},
     storage::ValidatedWrite,
 };
 use crate::{
@@ -405,7 +405,7 @@ impl RunController {
             &sidecar,
         )
         .await?;
-        run.engine = Some(fingerprint(&configured.engine));
+        run.engine = Some(fingerprint(&configured.engine, &run.pair.config));
         cancelled(run)?;
         summary.progress.stage = RunStage::Scanning;
         publish(&summary.progress, emit)?;
@@ -747,6 +747,10 @@ async fn process_file(
             .redactions
             .iter()
             .any(|span| span.end_offset > result.body.chars().count() as u64)
+        || result.detections.iter().any(|span| {
+            span.origin != crate::protocol::DetectionOrigin::Automatic
+                || !super::review::automatic_entity_allowed(&run.pair.config, &span.entity_type)
+        })
     {
         return Err(AppError::new("invalid_sidecar_response"));
     }
@@ -854,12 +858,13 @@ pub async fn configure_pair(
     }
     Ok(configured)
 }
-pub(crate) fn fingerprint(engine: &EngineInfo) -> ProcessingFingerprint {
+pub(crate) fn fingerprint(engine: &EngineInfo, config: &ProcessingConfig) -> ProcessingFingerprint {
     ProcessingFingerprint {
         engine_version: engine.engine_version.clone(),
         extraction_version: engine.extraction_version.clone(),
         model_name: engine.model_name.clone(),
         model_version: engine.model_version.clone(),
+        model_entities: config.model_entities.clone(),
     }
 }
 

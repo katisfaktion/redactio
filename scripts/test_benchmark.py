@@ -12,8 +12,8 @@ from pathlib import Path
 
 ENGINE = {
     "engine_version": "redactio-sidecar 0.1.0",
-    "model_name": "de_core_news_lg",
-    "model_version": "3.8.0",
+    "model_name": "OpenMed-PII-German-BiomedBERT-Large-340M-v1",
+    "model_version": "ce797d58600cc20bba9a2500dafc0b7f5c3270c1",
     "extraction_version": "1",
     "recognizers": ["SyntheticRecognizer"],
 }
@@ -43,7 +43,8 @@ def fake(mode):
             result = {"protocol_version": 1}
         elif kind == "configure":
             assert payload["config"]["custom_rules"] == []
-            assert payload["config"]["model"] == "de_core_news_lg"
+            assert payload["config"]["model"] == ENGINE["model_name"]
+            assert payload["config"]["model_entities"] == ["FIRSTNAME", "FUTURE_TYPE", "ZIPCODE"]
             result = {key: payload[key] for key in ("sync_pair_id", "processing_revision")}
             result["engine"] = ENGINE
         else:
@@ -104,8 +105,26 @@ class BenchmarkTests(unittest.TestCase):
             json.dumps(
                 {
                     "models": [
-                        {"name": "de_core_news_lg", "version": "3.8.0", "path": "de_core_news_lg"}
+                        {
+                            "name": ENGINE["model_name"],
+                            "version": ENGINE["model_version"],
+                            "path": "biomedbert-de",
+                        }
                     ]
+                }
+            )
+        )
+        (self.models / "biomedbert-de").mkdir()
+        (self.models / "biomedbert-de/config.json").write_text(
+            json.dumps(
+                {
+                    "id2label": {
+                        "0": "O",
+                        "1": "B-FIRSTNAME",
+                        "2": "I-FIRSTNAME",
+                        "3": "B-ZIPCODE",
+                        "4": "B-FUTURE_TYPE",
+                    }
                 }
             )
         )
