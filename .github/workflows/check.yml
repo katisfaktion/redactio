@@ -87,6 +87,11 @@ jobs:
           & $env:REDACTIO_TEST_PYTHON -m ruff format --check --config apps/sidecar/pyproject.toml scripts packaging
           cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check
           cargo clippy --locked --offline --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
+          # Avoid overlapping large Linux test links after a rust-lld SIGBUS crash.
+          if ($IsLinux) {
+            $env:CARGO_BUILD_JOBS = '1'
+            df -h . $env:RUNNER_TEMP
+          }
           cargo test --locked --offline --manifest-path apps/desktop/src-tauri/Cargo.toml
           $env:REDACTIO_REAL_SIDECAR_PYTHON = $env:REDACTIO_TEST_PYTHON
           $env:REDACTIO_REAL_MODEL_DIR = $env:REDACTIO_MODEL_DIR
