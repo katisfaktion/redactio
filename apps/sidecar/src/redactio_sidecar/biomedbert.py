@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
@@ -12,6 +13,8 @@ from .ipc import EngineError
 
 MODEL_NAME = "OpenMed-PII-German-BiomedBERT-Large-340M-v1"
 MODEL_VERSION = "ce797d58600cc20bba9a2500dafc0b7f5c3270c1"
+HUGGINGLIL_MODEL_NAME = "pii-sensitive-ner-german"
+HUGGINGLIL_MODEL_VERSION = "6af88facbb75da7be737da55d2c411c7ce79e5a1"
 _LEGACY_LABELS = {
     **dict.fromkeys(("FIRSTNAME", "MIDDLENAME", "LASTNAME"), "PERSON"),
     **dict.fromkeys(
@@ -30,6 +33,35 @@ _LEGACY_LABELS = {
     ),
 }
 _LABEL_ID = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
+
+
+@dataclass(frozen=True)
+class ModelSpec:
+    name: str
+    version: str
+    repository: str
+    model_type: str
+    architecture: str
+    recognizer_name: str
+
+
+BIOMEDBERT = ModelSpec(
+    MODEL_NAME,
+    MODEL_VERSION,
+    "OpenMed/" + MODEL_NAME,
+    "bert",
+    "BertForTokenClassification",
+    "BiomedBertRecognizer",
+)
+HUGGINGLIL = ModelSpec(
+    HUGGINGLIL_MODEL_NAME,
+    HUGGINGLIL_MODEL_VERSION,
+    "HuggingLil/pii-sensitive-ner-german",
+    "deberta-v2",
+    "DebertaV2ForTokenClassification",
+    "HuggingLilRecognizer",
+)
+MODEL_SPECS = {spec.name: spec for spec in (BIOMEDBERT, HUGGINGLIL)}
 
 
 def model_entity_types(path: Path) -> tuple[str, ...]:
@@ -58,19 +90,27 @@ def _strip_bio_prefix(label: str) -> str:
 
 def compatible_model(path: Path, name: str, model_version: str) -> bool:
     try:
+        spec = MODEL_SPECS[name]
         metadata = json.loads((path / "redactio-model.json").read_text(encoding="utf-8"))
         config = json.loads((path / "config.json").read_text(encoding="utf-8"))
+        labels = model_entity_types(path)
         return bool(
-            name == MODEL_NAME
-            and model_version == MODEL_VERSION
+            model_version == spec.version
             and metadata
             == {
-                "name": MODEL_NAME,
-                "version": MODEL_VERSION,
-                "repository": "OpenMed/" + MODEL_NAME,
+                "name": spec.name,
+                "version": spec.version,
+                "repository": spec.repository,
             }
-            and config["model_type"] == "bert"
-            and bool(model_entity_types(path))
+            and config["model_type"] == spec.model_type
+            and (
+                spec is BIOMEDBERT
+                or (
+                    config.get("architectures") == [spec.architecture]
+                    and config["max_position_embeddings"] == 512
+                )
+            )
+            and bool(labels)
             and all(
                 (path / file).is_file()
                 for file in (
@@ -80,11 +120,15 @@ def compatible_model(path: Path, name: str, model_version: str) -> bool:
                 )
             )
         )
-    except (KeyError, OSError, TypeError, ValueError):
+    except (KeyError, OSError, TypeError, ValueError, json.JSONDecodeError):
         return False
 
 
-def _load_pipeline(path: Path) -> Any:
+def _load_pipeline(
+    path: Path,
+    model_type: str = "bert",
+    architecture: str = "BertForTokenClassification",
+) -> Any:
     from transformers import AutoModelForTokenClassification, AutoTokenizer, pipeline
 
     tokenizer = cast(Any, AutoTokenizer).from_pretrained(
@@ -102,7 +146,11 @@ def _load_pipeline(path: Path) -> Any:
         trust_remote_code=False,
         use_safetensors=True,
     )
-    if model.config.model_type != "bert" or model.config.max_position_embeddings != 512:
+    if (
+        model.config.model_type != model_type
+        or model.config.max_position_embeddings != 512
+        or model.config.architectures != [architecture]
+    ):
         raise ValueError("incompatible model architecture")
     return pipeline(
         "token-classification",
@@ -114,18 +162,19 @@ def _load_pipeline(path: Path) -> Any:
     )
 
 
-class BiomedBertRecognizer(EntityRecognizer):
+class _TokenClassificationRecognizer(EntityRecognizer):
     name: str
 
-    def __init__(self, path: Path, native_labels: tuple[str, ...] = ()) -> None:
+    def __init__(self, path: Path, spec: ModelSpec, native_labels: tuple[str, ...] = ()) -> None:
         self._path = path
+        self._spec = spec
         self._native_labels = frozenset(native_labels or _LEGACY_LABELS)
         self._label_mapping = {label: label for label in self._native_labels}
         self._legacy = False
         super().__init__(
             supported_entities=sorted(self._native_labels),
             supported_language="de",
-            name="BiomedBertRecognizer",
+            name=spec.recognizer_name,
         )
 
     def configure_labels(self, labels: list[str], legacy: bool) -> None:
@@ -142,7 +191,12 @@ class BiomedBertRecognizer(EntityRecognizer):
 
     def load(self) -> None:
         try:
-            self._pipeline = _load_pipeline(self._path)
+            if self._spec is BIOMEDBERT:
+                self._pipeline = _load_pipeline(self._path)
+            else:
+                self._pipeline = _load_pipeline(
+                    self._path, self._spec.model_type, self._spec.architecture
+                )
         except Exception as error:
             raise EngineError("model_incompatible") from error
 
@@ -187,3 +241,13 @@ class BiomedBertRecognizer(EntityRecognizer):
             return merged
         except Exception as error:
             raise EngineError("internal_error") from error
+
+
+class BiomedBertRecognizer(_TokenClassificationRecognizer):
+    def __init__(self, path: Path, native_labels: tuple[str, ...] = ()) -> None:
+        super().__init__(path, BIOMEDBERT, native_labels)
+
+
+class HuggingLilRecognizer(_TokenClassificationRecognizer):
+    def __init__(self, path: Path, native_labels: tuple[str, ...] = ()) -> None:
+        super().__init__(path, HUGGINGLIL, native_labels)

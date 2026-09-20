@@ -31,7 +31,15 @@ from presidio_analyzer.predefined_recognizers import (
 )
 from pydantic import ValidationError
 
-from .biomedbert import MODEL_NAME, BiomedBertRecognizer, compatible_model, model_entity_types
+from .biomedbert import (
+    MODEL_NAME,
+    MODEL_SPECS,
+    BiomedBertRecognizer,
+    HuggingLilRecognizer,
+    ModelSpec,
+    compatible_model,
+    model_entity_types,
+)
 from .extract import Extraction, extract_document
 from .frontmatter import normalize_body, render_document
 from .ipc import EngineError
@@ -107,6 +115,7 @@ class _Model:
     path: Path
     compatible: bool
     entity_types: tuple[str, ...]
+    spec: ModelSpec | None
 
 
 @dataclass(frozen=True)
@@ -126,7 +135,7 @@ class Engine:
     def __init__(self, model_root: Path) -> None:
         self._model_root = model_root.resolve()
         self._loaded_models: dict[tuple[str, str], NlpEngine] = {}
-        self._bert_recognizers: dict[tuple[str, str], BiomedBertRecognizer] = {}
+        self._recognizers: dict[tuple[str, str], BiomedBertRecognizer | HuggingLilRecognizer] = {}
         self._snapshot: _Snapshot | None = None
 
     def available_models(self) -> list[ModelInfo]:
@@ -158,6 +167,8 @@ class Engine:
             raise EngineError("model_not_found")
         if not model.compatible:
             raise EngineError("model_incompatible")
+        if model.name != MODEL_NAME and validated.model_entities is None:
+            raise EngineError("invalid_configuration")
         if not set(validated.enabled_entities) <= (
             _SUPPLEMENTARY_ENTITIES
             | (_LEGACY_MODEL_ENTITIES | {"CUSTOM"} if validated.model_entities is None else set())
@@ -188,10 +199,10 @@ class Engine:
             ]
         )
         if model_outputs:
-            recognizer = copy(self._bert_recognizers[(model.name, model.version)])
+            recognizer = copy(self._recognizers[(model.name, model.version)])
             recognizer.configure_labels(native_entities, legacy=not native_semantics)
             registry.add_recognizer(recognizer)
-            recognizer_names.append("BiomedBertRecognizer")
+            recognizer_names.append(recognizer.name)
 
         for entity_type, (recognizer_name, recognizer_type) in _AUTOMATIC_RECOGNIZERS.items():
             if entity_type not in validated.enabled_entities:
@@ -451,10 +462,14 @@ class Engine:
         cached = self._loaded_models.get(identity)
         if cached is not None:
             return cached
-        recognizer = BiomedBertRecognizer(model.path, model.entity_types)
+        recognizer = (
+            BiomedBertRecognizer(model.path, model.entity_types)
+            if model.name == MODEL_NAME
+            else HuggingLilRecognizer(model.path, model.entity_types)
+        )
         blank_engine = SpacyNlpEngine()
         cast(Any, blank_engine).nlp = {LANGUAGE: spacy.blank(LANGUAGE)}
-        self._bert_recognizers[identity] = recognizer
+        self._recognizers[identity] = recognizer
         self._loaded_models[identity] = blank_engine
         return blank_engine
 
@@ -470,7 +485,7 @@ class Engine:
             raise EngineError("invalid_model_manifest") from error
         if len({model.name for model in models}) != len(models):
             raise EngineError("invalid_model_manifest")
-        return [model for model in models if model.name == MODEL_NAME]
+        return [model for model in models if model.spec is not None]
 
     def _model(self, entry: object) -> _Model:
         if not isinstance(entry, dict) or set(entry) != {"name", "version", "path"}:
@@ -479,7 +494,8 @@ class Engine:
         if not all(isinstance(value, str) and value for value in (name, model_version, relative)):
             raise TypeError
         path = (self._model_root / relative).resolve()
-        entity_types = model_entity_types(path) if name == MODEL_NAME else ()
+        spec = MODEL_SPECS.get(name)
+        entity_types = model_entity_types(path) if spec is not None else ()
         compatible = path.is_relative_to(self._model_root) and _compatible_model(
             path, name, model_version
         )
@@ -489,11 +505,12 @@ class Engine:
             path=path,
             compatible=compatible,
             entity_types=entity_types if compatible else (),
+            spec=spec,
         )
 
 
 def _compatible_model(path: Path, name: str, model_version: str) -> bool:
-    return name == MODEL_NAME and compatible_model(path, name, model_version)
+    return name in MODEL_SPECS and compatible_model(path, name, model_version)
 
 
 def _rule_pattern(rule: RegexRule | WordRule) -> str:

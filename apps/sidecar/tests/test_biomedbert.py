@@ -15,6 +15,30 @@ from redactio_sidecar.schemas import ProcessingConfig, WordRule
 
 NAME = "OpenMed-PII-German-BiomedBERT-Large-340M-v1"
 SHA = "ce797d58600cc20bba9a2500dafc0b7f5c3270c1"
+HUGGINGLIL_NAME = "pii-sensitive-ner-german"
+HUGGINGLIL_SHA = "6af88facbb75da7be737da55d2c411c7ce79e5a1"
+HUGGINGLIL_LABELS = (
+    "ACCOUNTNUM",
+    "BUILDINGNUM",
+    "CITY",
+    "CREDITCARDNUMBER",
+    "DATEOFBIRTH",
+    "DRIVERLICENSENUM",
+    "EMAIL",
+    "GIVENNAME",
+    "IDCARDNUM",
+    "PASSWORD",
+    "SOCIALNUM",
+    "STREET",
+    "SURNAME",
+    "TAXNUM",
+    "TELEPHONENUM",
+    "USERNAME",
+    "ZIPCODE",
+    "REL",
+    "ETHN",
+    "SOR",
+)
 
 
 @pytest.fixture
@@ -54,6 +78,50 @@ def bert_root(tmp_path: Path) -> Path:
     return tmp_path
 
 
+@pytest.fixture
+def dual_model_root(bert_root: Path) -> Path:
+    model = bert_root / HUGGINGLIL_NAME
+    model.mkdir()
+    (bert_root / "manifest.json").write_text(
+        json.dumps(
+            {
+                "models": [
+                    {"name": NAME, "version": SHA, "path": "biomedbert-de"},
+                    {"name": HUGGINGLIL_NAME, "version": HUGGINGLIL_SHA, "path": model.name},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (model / "redactio-model.json").write_text(
+        json.dumps(
+            {
+                "name": HUGGINGLIL_NAME,
+                "version": HUGGINGLIL_SHA,
+                "repository": "HuggingLil/pii-sensitive-ner-german",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (model / "config.json").write_text(
+        json.dumps(
+            {
+                "model_type": "deberta-v2",
+                "architectures": ["DebertaV2ForTokenClassification"],
+                "max_position_embeddings": 512,
+                "id2label": {
+                    **{str(index): f"I-{label}" for index, label in enumerate(HUGGINGLIL_LABELS)},
+                    "20": "O",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    for name in ("model.safetensors", "tokenizer.json", "tokenizer_config.json"):
+        (model / name).write_text("{}", encoding="utf-8")
+    return bert_root
+
+
 def test_pinned_bert_is_available_without_loading_weights(bert_root: Path) -> None:
     assert Engine(bert_root).available_models()[0].model_dump() == {
         "name": NAME,
@@ -61,6 +129,108 @@ def test_pinned_bert_is_available_without_loading_weights(bert_root: Path) -> No
         "compatible": True,
         "entity_types": ["AGE", "FIRSTNAME", "LASTNAME", "ORGANIZATION", "ZIPCODE"],
     }
+
+
+def test_hugginglil_discovery_requires_its_pinned_deberta_metadata(dual_model_root: Path) -> None:
+    models = {model.name: model for model in Engine(dual_model_root).available_models()}
+
+    assert models[HUGGINGLIL_NAME].model_dump() == {
+        "name": HUGGINGLIL_NAME,
+        "version": HUGGINGLIL_SHA,
+        "compatible": True,
+        "entity_types": sorted(HUGGINGLIL_LABELS),
+    }
+
+    model = dual_model_root / HUGGINGLIL_NAME
+    metadata = json.loads((model / "redactio-model.json").read_text(encoding="utf-8"))
+    metadata["version"] = "wrong"
+    (model / "redactio-model.json").write_text(json.dumps(metadata), encoding="utf-8")
+    assert not {entry.name: entry for entry in Engine(dual_model_root).available_models()}[
+        HUGGINGLIL_NAME
+    ].compatible
+    metadata["version"] = HUGGINGLIL_SHA
+    (model / "redactio-model.json").write_text(json.dumps(metadata), encoding="utf-8")
+    base_config = json.loads((model / "config.json").read_text(encoding="utf-8"))
+    for changed in (
+        {"model_type": "bert", "architectures": ["DebertaV2ForTokenClassification"]},
+        {"model_type": "deberta-v2", "architectures": ["BertForTokenClassification"]},
+        {
+            "model_type": "deberta-v2",
+            "architectures": ["DebertaV2ForTokenClassification"],
+            "id2label": {"0": "I-bad"},
+        },
+    ):
+        config = base_config.copy()
+        config.update(changed)
+        (model / "config.json").write_text(json.dumps(config), encoding="utf-8")
+        assert not {entry.name: entry for entry in Engine(dual_model_root).available_models()}[
+            HUGGINGLIL_NAME
+        ].compatible
+
+
+def test_hugginglil_requires_native_selection_and_preserves_native_labels(
+    dual_model_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from redactio_sidecar import biomedbert
+
+    def pipeline(text: str) -> list[dict[str, object]]:
+        return [
+            {"entity_group": "GIVENNAME", "start": 0, "end": 4, "score": 0.99},
+            {"entity_group": "REL", "start": 5, "end": 12, "score": 0.99},
+        ]
+
+    monkeypatch.setattr(biomedbert, "_load_pipeline", lambda *_: pipeline)
+    engine = Engine(dual_model_root)
+    pair, revision = str(uuid4()), str(uuid4())
+
+    with pytest.raises(EngineError, match="^invalid_configuration$"):
+        engine.configure(pair, revision, ProcessingConfig(model=HUGGINGLIL_NAME))
+
+    info = engine.configure(
+        pair,
+        revision,
+        ProcessingConfig(
+            model=HUGGINGLIL_NAME,
+            enabled_entities=["EMAIL_ADDRESS"],
+            model_entities=["GIVENNAME", "REL"],
+        ),
+    )
+    detections = engine.analyze(pair, revision, "Anna Kirche anna@example.com")
+
+    assert info.recognizers == ["HuggingLilRecognizer", "EmailRecognizer"]
+    assert {(item.entity_type, item.recognizer) for item in detections} >= {
+        ("GIVENNAME", "HuggingLilRecognizer"),
+        ("REL", "HuggingLilRecognizer"),
+    }
+    assert engine.info(pair, revision).model_name == HUGGINGLIL_NAME
+
+
+def test_switching_from_hugginglil_to_bert_preserves_bert_legacy_output(
+    dual_model_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from redactio_sidecar import biomedbert
+
+    def pipeline(path: Path, *_: object):
+        if path.name == HUGGINGLIL_NAME:
+            return lambda _: [{"entity_group": "GIVENNAME", "start": 0, "end": 4, "score": 0.99}]
+        return lambda _: [{"entity_group": "FIRSTNAME", "start": 0, "end": 4, "score": 0.99}]
+
+    monkeypatch.setattr(biomedbert, "_load_pipeline", pipeline)
+    engine = Engine(dual_model_root)
+    pair, revision = str(uuid4()), str(uuid4())
+    engine.configure(
+        pair,
+        revision,
+        ProcessingConfig(model=HUGGINGLIL_NAME, enabled_entities=[], model_entities=["GIVENNAME"]),
+    )
+    assert [item.entity_type for item in engine.analyze(pair, revision, "Anna")] == ["GIVENNAME"]
+
+    next_pair, next_revision = str(uuid4()), str(uuid4())
+    info = engine.configure(next_pair, next_revision, ProcessingConfig(model=NAME))
+    assert info.recognizers[0] == "BiomedBertRecognizer"
+    assert [item.entity_type for item in engine.analyze(next_pair, next_revision, "Anna")] == [
+        "PERSON"
+    ]
 
 
 def test_model_rejects_missing_or_malformed_native_labels(bert_root: Path) -> None:
@@ -283,7 +453,9 @@ def test_real_pipeline_bounds_sentinel_tokenizer_and_covers_chunk_boundaries(tmp
 
     # A tiny local model predicts PERSON for every token, so lost windows or bad
     # Unicode offsets leave an observable gap without requiring production weights.
-    (tmp_path / "vocab.txt").write_text("[PAD]\n[UNK]\n[CLS]\n[SEP]\n[MASK]\nanna\nmüller\n")
+    (tmp_path / "vocab.txt").write_text(
+        "[PAD]\n[UNK]\n[CLS]\n[SEP]\n[MASK]\nanna\nmüller\n", encoding="utf-8"
+    )
     tokenizer = transformers.BertTokenizerFast(
         vocab_file=str(tmp_path / "vocab.txt"),
         model_max_length=10**30,
@@ -437,3 +609,38 @@ def test_real_bert_offline_unicode_long_document(monkeypatch) -> None:
     with pytest.raises(EngineError, match="model_not_found"):
         engine.configure(str(uuid4()), str(uuid4()), ProcessingConfig(model="de_core_news_sm"))
     assert engine.info(pair, revision).model_name == NAME
+
+
+@pytest.mark.skipif(
+    not os.environ.get("REDACTIO_HUGGINGLIL_MODEL_DIR"),
+    reason="requires explicitly prepared pinned HuggingLil weights",
+)
+def test_real_hugginglil_offline_long_document(monkeypatch) -> None:
+    def deny_network(*_args, **_kwargs):
+        raise AssertionError("runtime network access attempted")
+
+    monkeypatch.setattr(socket.socket, "connect", deny_network)
+    engine = Engine(Path(os.environ["REDACTIO_HUGGINGLIL_MODEL_DIR"]))
+    pair, revision = str(uuid4()), str(uuid4())
+    engine.configure(
+        pair,
+        revision,
+        ProcessingConfig(
+            model=HUGGINGLIL_NAME,
+            enabled_entities=[],
+            model_entities=["GIVENNAME", "SURNAME", "CITY", "REL", "ETHN"],
+        ),
+    )
+    prefix = "Befund unauffällig. " * 300
+    tail = "Elena Petrov ist Kosovarin und lebt in Berlin. Weihnachten."
+    text = prefix + tail
+    detections = engine.analyze(pair, revision, text)
+
+    # The model's rare labels are context-sensitive beyond a window boundary;
+    # keep the canary about stride coverage using labels it recalls there.
+    for entity, term in (("SURNAME", "Petrov"), ("ETHN", "Kosovarin")):
+        start = text.rindex(term)
+        assert any(
+            detection.entity_type == entity and detection.start <= start < detection.end
+            for detection in detections
+        ), (entity, term)

@@ -3,6 +3,8 @@ use std::{fs, path::Path};
 
 const BIOMEDBERT: &str = "OpenMed-PII-German-BiomedBERT-Large-340M-v1";
 const BIOMEDBERT_VERSION: &str = "ce797d58600cc20bba9a2500dafc0b7f5c3270c1";
+const HUGGINGLIL: &str = "pii-sensitive-ner-german";
+const HUGGINGLIL_VERSION: &str = "6af88facbb75da7be737da55d2c411c7ce79e5a1";
 
 fn biomedbert(root: &Path) {
     let model = root.join("biomedbert-de");
@@ -33,6 +35,43 @@ fn biomedbert(root: &Path) {
     .unwrap();
 }
 
+fn hugginglil(root: &Path) {
+    let model = root.join(HUGGINGLIL);
+    fs::create_dir(&model).unwrap();
+    for name in [
+        "model.safetensors",
+        "tokenizer.json",
+        "tokenizer_config.json",
+        "special_tokens_map.json",
+        "added_tokens.json",
+        "spm.model",
+    ] {
+        fs::write(model.join(name), b"fixture").unwrap();
+    }
+    fs::write(
+        model.join("config.json"),
+        r#"{"architectures":["DebertaV2ForTokenClassification"],"model_type":"deberta-v2","max_position_embeddings":512,"id2label":{"0":"I-ACCOUNTNUM","1":"I-BUILDINGNUM","2":"I-CITY","3":"I-CREDITCARDNUMBER","4":"I-DATEOFBIRTH","5":"I-DRIVERLICENSENUM","6":"I-EMAIL","7":"I-GIVENNAME","8":"I-IDCARDNUM","9":"I-PASSWORD","10":"I-SOCIALNUM","11":"I-STREET","12":"I-SURNAME","13":"I-TAXNUM","14":"I-TELEPHONENUM","15":"I-USERNAME","16":"I-ZIPCODE","17":"O","18":"I-REL","19":"I-ETHN","20":"I-SOR"}}"#,
+    )
+    .unwrap();
+    fs::write(
+        model.join("redactio-model.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "name": HUGGINGLIL,
+            "version": HUGGINGLIL_VERSION,
+            "repository": format!("HuggingLil/{HUGGINGLIL}"),
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+}
+
+fn manifest_models() -> serde_json::Value {
+    serde_json::json!([
+        {"name": HUGGINGLIL, "version": HUGGINGLIL_VERSION, "path": HUGGINGLIL},
+        {"name": BIOMEDBERT, "version": BIOMEDBERT_VERSION, "path": "biomedbert-de"},
+    ])
+}
+
 fn package(root: &Path) {
     fs::create_dir_all(root.join("sidecar/_internal")).unwrap();
     fs::create_dir_all(root.join("models/de_core_news_lg")).unwrap();
@@ -56,16 +95,60 @@ fn package(root: &Path) {
     )
     .unwrap();
     biomedbert(&root.join("models"));
+    hugginglil(&root.join("models"));
     fs::write(
         root.join("models/manifest.json"),
-        serde_json::to_vec(&serde_json::json!({"models":[{
-            "name": BIOMEDBERT,
-            "version": BIOMEDBERT_VERSION,
-            "path": "biomedbert-de",
-        }]}))
+        serde_json::to_vec(&serde_json::json!({"models": manifest_models()})).unwrap(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn model_listing_supports_both_pinned_native_packages_in_preferred_order() {
+    let root = tempfile::tempdir().unwrap();
+    biomedbert(root.path());
+    hugginglil(root.path());
+    fs::write(
+        root.path().join("manifest.json"),
+        serde_json::to_vec(&serde_json::json!({"models": manifest_models()})).unwrap(),
+    )
+    .unwrap();
+
+    let listed = resources::list_models(root.path()).unwrap();
+    assert_eq!(
+        listed
+            .iter()
+            .map(|model| model.name.as_str())
+            .collect::<Vec<_>>(),
+        [BIOMEDBERT, HUGGINGLIL]
+    );
+    assert!(listed.iter().all(|model| model.compatible));
+    assert_eq!(listed[1].entity_types.len(), 20);
+    assert!(listed[1]
+        .entity_types
+        .iter()
+        .any(|label| label.as_str() == "SOR"));
+
+    let config = root.path().join(HUGGINGLIL).join("config.json");
+    let valid_config = fs::read(&config).unwrap();
+    fs::write(&config, r#"{"architectures":["BertForTokenClassification"],"model_type":"deberta-v2","max_position_embeddings":512,"id2label":{"0":"I-ACCOUNTNUM","1":"O"}}"#).unwrap();
+    assert!(!resources::list_models(root.path()).unwrap()[1].compatible);
+    fs::write(&config, r#"{"architectures":["DebertaV2ForTokenClassification"],"model_type":"deberta-v2","max_position_embeddings":512,"id2label":{"0":"I-FUTURE_LABEL","1":"O"}}"#).unwrap();
+    let listed = resources::list_models(root.path()).unwrap();
+    assert!(listed[1].compatible);
+    assert_eq!(listed[1].entity_types[0].as_str(), "FUTURE_LABEL");
+    fs::write(&config, valid_config).unwrap();
+    fs::write(
+        root.path().join(HUGGINGLIL).join("redactio-model.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "name": HUGGINGLIL,
+            "version": "different-revision",
+            "repository": format!("HuggingLil/{HUGGINGLIL}"),
+        }))
         .unwrap(),
     )
     .unwrap();
+    assert!(!resources::list_models(root.path()).unwrap()[1].compatible);
 }
 
 #[test]
@@ -176,6 +259,8 @@ fn packaged_resources_are_absolute_and_missing_runtime_or_model_fails_closed() {
         resources::webview_directory(&executable).unwrap(),
         root.join("webview2")
     );
+    fs::remove_file(root.join("models/pii-sensitive-ner-german/config.json")).unwrap();
+    assert!(resources::resolve_packaged(&executable).is_ok());
     fs::remove_file(root.join("webview2/msedgewebview2.exe")).unwrap();
     assert_eq!(
         resources::webview_directory(&executable).unwrap_err().code,

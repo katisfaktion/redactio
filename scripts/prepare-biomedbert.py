@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import tempfile
 from pathlib import Path
 from urllib.request import urlopen
@@ -19,6 +20,9 @@ def verified(path: Path, expected: str) -> bool:
 
 
 def prepare(root: Path, inputs: dict) -> None:
+    directory = inputs.get("directory", "biomedbert-de")
+    if not isinstance(directory, str) or not re.fullmatch(r"[a-z0-9][a-z0-9-]*", directory):
+        raise ValueError("invalid model directory")
     root.mkdir(parents=True, exist_ok=True)
     manifest_path = root / "manifest.json"
     if manifest_path.is_symlink():
@@ -26,7 +30,7 @@ def prepare(root: Path, inputs: dict) -> None:
     manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {"models": []}
     if set(manifest) != {"models"} or not isinstance(manifest["models"], list):
         raise ValueError("invalid model manifest")
-    entry = {"name": inputs["name"], "version": inputs["revision"], "path": "biomedbert-de"}
+    entry = {"name": inputs["name"], "version": inputs["revision"], "path": directory}
     for previous in manifest["models"]:
         if not isinstance(previous, dict) or set(previous) != {"name", "version", "path"}:
             raise ValueError("invalid model manifest entry")
@@ -48,7 +52,7 @@ def prepare(root: Path, inputs: dict) -> None:
         if json.loads((destination / "redactio-model.json").read_text()) != identity:
             raise ValueError("existing model identity mismatch")
     else:
-        with tempfile.TemporaryDirectory(prefix=".biomedbert-", dir=root) as temporary:
+        with tempfile.TemporaryDirectory(prefix=".model-", dir=root) as temporary:
             staging = Path(temporary) / "model"
             staging.mkdir()
             for name, digest in inputs["files"].items():
@@ -85,7 +89,9 @@ def prepare(root: Path, inputs: dict) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--model", choices=("biomedbert", "hugginglil"), default="biomedbert")
     parser.add_argument("--model-dir", type=Path, default=ROOT / "apps/sidecar/models")
     args = parser.parse_args()
-    prepare(args.model_dir, json.loads((ROOT / "packaging/biomedbert-inputs.json").read_text()))
-    print("BiomedBERT is prepared for offline use.")
+    inputs = json.loads((ROOT / f"packaging/{args.model}-inputs.json").read_text())
+    prepare(args.model_dir, inputs)
+    print(f"{inputs['name']} is prepared for offline use.")

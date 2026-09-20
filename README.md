@@ -31,7 +31,8 @@ tools, offline model preparation, PowerShell/POSIX commands and explicit sidecar
 configuration.
 
 [Model setup](docs/development.md#offline-german-model) prepares the pinned
-BiomedBERT detector explicitly. Detection options come from the model's own label
+BiomedBERT detector explicitly, with [HuggingLil as an optional local alternative](docs/development.md#hugginglil-alternative).
+Detection options come from the model's own label
 set, with native labels preserved through review and export. Core-news models
 are retired. The current BiomedBERT portable package still needs full acceptance
 checks; the earlier package measurements apply to the retired engine.

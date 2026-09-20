@@ -62,8 +62,10 @@ jobs:
           $modelRoot = Join-Path $env:RUNNER_TEMP 'redactio-models'
           New-Item -ItemType Directory -Path $modelRoot | Out-Null
           & $python scripts/prepare-biomedbert.py --model-dir $modelRoot
+          & $python scripts/prepare-biomedbert.py --model hugginglil --model-dir $modelRoot
           "REDACTIO_MODEL_DIR=$modelRoot" >> $env:GITHUB_ENV
           "REDACTIO_BIOMEDBERT_MODEL_DIR=$modelRoot" >> $env:GITHUB_ENV
+          "REDACTIO_HUGGINGLIL_MODEL_DIR=$modelRoot" >> $env:GITHUB_ENV
           "HF_HUB_OFFLINE=1" >> $env:GITHUB_ENV
           "TRANSFORMERS_OFFLINE=1" >> $env:GITHUB_ENV
           "TOKENIZERS_PARALLELISM=false" >> $env:GITHUB_ENV

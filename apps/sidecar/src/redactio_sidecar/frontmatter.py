@@ -22,6 +22,7 @@ PUBLIC_RECOGNIZERS = frozenset(
     {
         "SpacyRecognizer",
         "BiomedBertRecognizer",
+        "HuggingLilRecognizer",
         "EmailRecognizer",
         "PhoneRecognizer",
         "IbanRecognizer",

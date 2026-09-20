@@ -72,6 +72,30 @@ class ModelPreparationTests(unittest.TestCase):
             self.assertEqual((root / "manifest.json").read_bytes(), before)
             self.assertFalse((root / "biomedbert-de").exists())
 
+    def test_alternative_install_keeps_both_models_and_is_repeatable_offline(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            alternative = {**self.inputs, "name": "alternative", "directory": "alternative-de"}
+            with patch.object(
+                self.prepare, "urlopen", side_effect=lambda *a, **k: BytesIO(self.payload)
+            ):
+                self.prepare.prepare(root, self.inputs)
+                self.prepare.prepare(root, alternative)
+            entries = json.loads((root / "manifest.json").read_text())["models"]
+            self.assertEqual(
+                [entry["path"] for entry in entries], ["biomedbert-de", "alternative-de"]
+            )
+            with patch.object(self.prepare, "urlopen", side_effect=AssertionError("network")):
+                self.prepare.prepare(root, alternative)
+                self.prepare.prepare(root, self.inputs)
+            self.assertEqual(json.loads((root / "manifest.json").read_text())["models"], entries)
+
+    def test_model_directory_cannot_escape_setup_root(self):
+        with tempfile.TemporaryDirectory() as directory:
+            for name in ("../escape", "/absolute", "..\\escape", "C:\\outside"):
+                with self.subTest(name=name), self.assertRaisesRegex(ValueError, "directory"):
+                    self.prepare.prepare(Path(directory), {**self.inputs, "directory": name})
+
 
 if __name__ == "__main__":
     unittest.main()

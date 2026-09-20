@@ -328,8 +328,8 @@ def test_available_models_validates_missing_incompatible_and_escaped_directories
 
 def test_packaged_model_is_reported_compatible(model_root: Path) -> None:
     models = Engine(model_root).available_models()
-    assert [model.name for model in models] == [NAME]
-    assert models[0].compatible and models[0].entity_types
+    assert [model.name for model in models] == [NAME, "pii-sensitive-ner-german"]
+    assert all(model.compatible and model.entity_types for model in models)
 
 
 def test_model_manifest_must_not_repeat_names(tmp_path: Path) -> None:

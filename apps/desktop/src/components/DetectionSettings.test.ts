@@ -16,6 +16,8 @@ const models = [
   { name: "OpenMed-PII-German-BiomedBERT-Large-340M-v1", version: "ce797d58600cc20bba9a2500dafc0b7f5c3270c1", compatible: true, entity_types: ["LOCATION", "PERSON"] },
   { name: "unavailable", version: "3.8.0", compatible: false, entity_types: [] },
 ];
+const hugginglil = { name: "pii-sensitive-ner-german", version: "6af88facbb75da7be737da55d2c411c7ce79e5a1", compatible: true,
+  entity_types: ["ACCOUNTNUM", "BUILDINGNUM", "CITY", "CREDITCARDNUMBER", "DATEOFBIRTH", "DRIVERLICENSENUM", "EMAIL", "ETHN", "GIVENNAME", "IDCARDNUM", "PASSWORD", "REL", "SOCIALNUM", "SOR", "STREET", "SURNAME", "TAXNUM", "TELEPHONENUM", "USERNAME", "ZIPCODE"] };
 
 function setup(selected = pair) {
   return mount(DetectionSettings, {
@@ -79,6 +81,37 @@ test("model controls use each model's metadata and preserve a draft per model", 
   });
 });
 
+test("switches from 54 labels to HuggingLil's native 20 labels and restores its draft", async () => {
+  const wrapper = setup();
+  await wrapper.setProps({ models: [...models, { name: "synthetic-54", version: "1", compatible: true,
+    entity_types: Array.from({ length: 54 }, (_, index) => `LABEL_${index}`) }, hugginglil] });
+  await wrapper.get('[role="option"][aria-label="synthetic-54 (1)"]').trigger("click");
+  expect(wrapper.findAll('[data-testid^="model-entity-"]')).toHaveLength(54);
+  await wrapper.get('[role="option"][aria-label="HuggingLil – Deutsch, PII (6af88fa)"]').trigger("click");
+  expect(wrapper.findAll('[data-testid^="model-entity-"]')).toHaveLength(20);
+  expect(wrapper.text()).toContain("Vorname (GIVENNAME)");
+  expect(wrapper.text()).toContain("Sexuelle Orientierung (SOR)");
+  await wrapper.get('[data-testid="model-entity-GIVENNAME"]').setValue(false);
+  await wrapper.get('[role="option"][aria-label="synthetic-54 (1)"]').trigger("click");
+  await wrapper.get('[role="option"][aria-label="HuggingLil – Deutsch, PII (6af88fa)"]').trigger("click");
+  expect(wrapper.get('[data-testid="model-entity-GIVENNAME"]').attributes("checked")).toBeUndefined();
+  await wrapper.get('[data-testid="preview-text"]').setValue("Elena Petrov");
+  await wrapper.get('[data-testid="preview"]').trigger("click");
+  await wrapper.get("form").trigger("submit");
+  const config = wrapper.emitted("save")![0]![1] as SyncPair["config"];
+  expect(config).toMatchObject({ model: "pii-sensitive-ner-german", model_entities: expect.not.arrayContaining(["GIVENNAME"]) });
+  expect(config.model_entities).toContain("SOR");
+  expect(wrapper.emitted("preview")![0]).toEqual([pair.id, config, "Elena Petrov"]);
+});
+
+test("requires an explicit native label selection for HuggingLil", async () => {
+  const wrapper = setup({ ...pair, config: { ...pair.config, model: hugginglil.name, model_entities: null, enabled_entities: [] } });
+  await wrapper.setProps({ models: [...models, hugginglil] });
+  expect(wrapper.text()).toContain("Eine explizite Auswahl der Modell-Labels ist erforderlich");
+  await wrapper.get("form").trigger("submit");
+  expect(wrapper.emitted("save")).toBeUndefined();
+});
+
 test("selects BiomedBERT by its exact local model identity", async () => {
   const name = "OpenMed-PII-German-BiomedBERT-Large-340M-v1";
   const wrapper = setup();
@@ -93,9 +126,9 @@ test("selects BiomedBERT by its exact local model identity", async () => {
 });
 
 test("legacy drafts disable every native name and address label with its legacy group", async () => {
-  const model = { name: "native", version: "1", compatible: true,
+  const model = { name: "OpenMed-PII-German-BiomedBERT-Large-340M-v1", version: "1", compatible: true,
     entity_types: ["AGE", "FIRSTNAME", "MIDDLENAME", "LASTNAME", "STREET", "BUILDINGNUMBER", "SECONDARYADDRESS", "ZIPCODE", "CITY", "STATE", "COUNTY", "GPSCOORDINATES", "ORDINALDIRECTION"] };
-  const legacy = { ...pair, config: { ...pair.config, model: "native", model_entities: null, enabled_entities: [] } };
+  const legacy = { ...pair, config: { ...pair.config, model: model.name, model_entities: null, enabled_entities: [] } };
   const wrapper = mount(DetectionSettings, {
     props: { pair: legacy, models: [model], busy: false },
     global: { plugins: [createOnyx({ i18n: { locale: ref("de-DE"), messages: { "de-DE": onyxDeDE } } })] },

@@ -18,9 +18,11 @@ const emit = defineEmits<{
 }>();
 function clone(config: ProcessingConfig): ProcessingConfig { return ProcessingConfigSchema.parse(JSON.parse(JSON.stringify(config))); }
 function selectedModel(name: string) { return props.models.find(model => model.name === name); }
+const biomedbert = "OpenMed-PII-German-BiomedBERT-Large-340M-v1";
+const hugginglil = "pii-sensitive-ner-german";
 function nativeDraft(config: ProcessingConfig): ProcessingConfig {
   const model = selectedModel(config.model);
-  if (!model?.entity_types || config.model_entities !== null) return clone(config);
+  if (!model?.entity_types || config.model_entities !== null || config.model !== biomedbert) return clone(config);
   const disabledLegacy = new Set(["PERSON", "LOCATION"].filter(type => !config.enabled_entities.includes(type)));
   return { ...clone(config), model_entities: (model.entity_types ?? []).filter(type => !disabledLegacy.has(legacyNativeGroup(type) ?? type)),
     enabled_entities: config.enabled_entities.filter(type => supplementaryEntities.includes(type as typeof supplementaryEntities[number])) };
@@ -48,10 +50,11 @@ watch(() => [props.pair.id, props.pair.config, props.models], () => {
   previewText.value = "";
 });
 
-const biomedbert = "OpenMed-PII-German-BiomedBERT-Large-340M-v1";
 const modelOptions = computed(() => props.models.map(model => ({
   value: model.name,
-  label: `${model.name === biomedbert ? `BiomedBERT – Deutsch, PII (340M, ${model.version.slice(0, 7)})` : `${model.name} (${model.version})`}${model.compatible ? "" : " – nicht verfügbar"}`,
+  label: `${model.name === biomedbert ? `BiomedBERT – Deutsch, PII (340M, ${model.version.slice(0, 7)})`
+    : model.name === hugginglil ? `HuggingLil – Deutsch, PII (${model.version.slice(0, 7)})`
+      : `${model.name} (${model.version})`}${model.compatible ? "" : " – nicht verfügbar"}`,
   disabled: !model.compatible,
 })));
 const currentModel = computed(() => selectedModel(draft.value.model));
@@ -64,6 +67,9 @@ const supplementaryOptions = supplementaryEntities.map(entityOption);
 const validation = computed(() => {
   if (!props.models.some(model => model.name === draft.value.model && model.compatible)) {
     return "Das gewählte Modell ist lokal nicht verfügbar oder nicht kompatibel. Wählen Sie ein verfügbares Modell aus.";
+  }
+  if (draft.value.model === hugginglil && draft.value.model_entities === null) {
+    return "Eine explizite Auswahl der Modell-Labels ist erforderlich.";
   }
   if (draft.value.custom_rules.some(rule => rule.kind === "regex" ? !rule.pattern.length : !rule.words.length || rule.words.some(word => !word.length))) {
     return "Regeln benötigen ein Muster oder eine Wortliste ohne leere Einträge.";

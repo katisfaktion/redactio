@@ -118,8 +118,48 @@ fn setup_error() -> AppError {
 
 /// Metadata-only local availability. This never imports or downloads a model.
 pub fn list_models(root: &Path) -> Result<Vec<crate::protocol::ModelInfo>, AppError> {
-    const BIOMEDBERT: &str = "OpenMed-PII-German-BiomedBERT-Large-340M-v1";
-    const BIOMEDBERT_VERSION: &str = "ce797d58600cc20bba9a2500dafc0b7f5c3270c1";
+    struct SupportedModel {
+        name: &'static str,
+        version: &'static str,
+        directory: &'static str,
+        repository: &'static str,
+        architecture: &'static str,
+        model_type: &'static str,
+        files: &'static [&'static str],
+    }
+    const SUPPORTED: &[SupportedModel] = &[
+        SupportedModel {
+            name: "OpenMed-PII-German-BiomedBERT-Large-340M-v1",
+            version: "ce797d58600cc20bba9a2500dafc0b7f5c3270c1",
+            directory: "biomedbert-de",
+            repository: "OpenMed/OpenMed-PII-German-BiomedBERT-Large-340M-v1",
+            architecture: "BertForTokenClassification",
+            model_type: "bert",
+            files: &[
+                "model.safetensors",
+                "tokenizer.json",
+                "tokenizer_config.json",
+                "special_tokens_map.json",
+                "vocab.txt",
+            ],
+        },
+        SupportedModel {
+            name: "pii-sensitive-ner-german",
+            version: "6af88facbb75da7be737da55d2c411c7ce79e5a1",
+            directory: "pii-sensitive-ner-german",
+            repository: "HuggingLil/pii-sensitive-ner-german",
+            architecture: "DebertaV2ForTokenClassification",
+            model_type: "deberta-v2",
+            files: &[
+                "model.safetensors",
+                "tokenizer.json",
+                "tokenizer_config.json",
+                "special_tokens_map.json",
+                "added_tokens.json",
+                "spm.model",
+            ],
+        },
+    ];
 
     #[derive(serde::Deserialize)]
     #[serde(deny_unknown_fields)]
@@ -152,7 +192,7 @@ pub fn list_models(root: &Path) -> Result<Vec<crate::protocol::ModelInfo>, AppEr
     let manifest: Manifest = serde_json::from_slice(&fs::read(manifest).map_err(|_| invalid())?)
         .map_err(|_| invalid())?;
     let mut names = std::collections::HashSet::new();
-    let mut biomedbert = None;
+    let mut entries = std::collections::HashMap::new();
     for entry in manifest.models {
         if entry.name.is_empty()
             || entry.version.is_empty()
@@ -165,54 +205,53 @@ pub fn list_models(root: &Path) -> Result<Vec<crate::protocol::ModelInfo>, AppEr
         {
             return Err(invalid());
         }
-        if entry.name == BIOMEDBERT {
-            biomedbert = Some(entry);
-        }
+        entries.insert(entry.name.clone(), entry);
     }
-    let Some(entry) = biomedbert else {
-        return Ok(Vec::new());
-    };
-    let model = root.join(&entry.path);
-    let labels = (|| {
-        if entry.version != BIOMEDBERT_VERSION || model != root.join("biomedbert-de") {
-            return Err(invalid());
-        }
-        for required in [
-            "model.safetensors",
-            "tokenizer.json",
-            "tokenizer_config.json",
-            "special_tokens_map.json",
-            "vocab.txt",
-        ] {
-            resource(model.join(required), false)?;
-        }
-        let config = resource(model.join("config.json"), false)?;
-        let config: BertConfig =
-            serde_json::from_slice(&fs::read(config)?).map_err(|_| invalid())?;
-        let metadata = resource(model.join("redactio-model.json"), false)?;
-        let metadata: ModelMetadata =
-            serde_json::from_slice(&fs::read(metadata)?).map_err(|_| invalid())?;
-        if metadata.name != BIOMEDBERT
-            || metadata.version != BIOMEDBERT_VERSION
-            || metadata.repository != format!("OpenMed/{BIOMEDBERT}")
-            || config.architectures != ["BertForTokenClassification"]
-            || config.model_type != "bert"
-            || config.max_position_embeddings != 512
-        {
-            return Err(invalid());
-        }
-        model_entity_types(config.id2label).ok_or_else(invalid)
-    })();
-    let (compatible, entity_types) = match labels {
-        Ok(entity_types) => (true, entity_types),
-        Err(_) => (false, Vec::new()),
-    };
-    Ok(vec![crate::protocol::ModelInfo {
-        name: entry.name,
-        version: entry.version,
-        compatible,
-        entity_types,
-    }])
+    Ok(SUPPORTED
+        .iter()
+        .filter_map(|supported| {
+            entries
+                .remove(supported.name)
+                .map(|entry| (entry, supported))
+        })
+        .map(|(entry, supported)| {
+            let model = root.join(&entry.path);
+            let labels = (|| {
+                if entry.version != supported.version || model != root.join(supported.directory) {
+                    return Err(invalid());
+                }
+                for required in supported.files {
+                    resource(model.join(required), false)?;
+                }
+                let config = resource(model.join("config.json"), false)?;
+                let config: BertConfig =
+                    serde_json::from_slice(&fs::read(config)?).map_err(|_| invalid())?;
+                let metadata = resource(model.join("redactio-model.json"), false)?;
+                let metadata: ModelMetadata =
+                    serde_json::from_slice(&fs::read(metadata)?).map_err(|_| invalid())?;
+                if metadata.name != supported.name
+                    || metadata.version != supported.version
+                    || metadata.repository != supported.repository
+                    || config.architectures != [supported.architecture]
+                    || config.model_type != supported.model_type
+                    || config.max_position_embeddings != 512
+                {
+                    return Err(invalid());
+                }
+                model_entity_types(config.id2label).ok_or_else(invalid)
+            })();
+            let (compatible, entity_types) = match labels {
+                Ok(entity_types) => (true, entity_types),
+                Err(_) => (false, Vec::new()),
+            };
+            crate::protocol::ModelInfo {
+                name: entry.name,
+                version: entry.version,
+                compatible,
+                entity_types,
+            }
+        })
+        .collect())
 }
 
 fn model_entity_types(

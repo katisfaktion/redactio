@@ -67,6 +67,13 @@ umstellen. Frühere Ergebnisse werden dabei nicht stillschweigend überschrieben
 Für eine Entwicklungsinstallation zuerst die [Modelleinrichtung](development.md#offline-german-model)
 durchführen. Auch BiomedBERT kann Namen und Adressbestandteile übersehen.
 
+Wenn zusätzlich eingerichtet, steht **HuggingLil – Deutsch, PII** als zweites
+Modell zur Auswahl. Es verwendet eigene Typen wie GIVENNAME, SURNAME und CITY.
+Das Modell pro Ordnerpaar auswählen, die gewünschten Typen prüfen, speichern und
+vorhandene Dokumente erneut verarbeiten. Die bisherigen Ergebnisse werden nicht
+automatisch umgeschrieben. Die [Einrichtung der Alternative](development.md#hugginglil-alternative)
+erfolgt ausdrücklich vor der lokalen Nutzung.
+
 Benötigte Kategorien aktivieren und bei Bedarf eigene Wortlisten oder reguläre
 Ausdrücke ergänzen. Wortlisten suchen wörtlich und unterscheiden Groß-/Kleinschreibung;
 reguläre Ausdrücke verwenden Python-Syntax. Regeln zuerst mit erfundenem

@@ -103,6 +103,35 @@ $env:REDACTIO_BIOMEDBERT_MODEL_DIR = (Resolve-Path 'apps/sidecar/models').Path
 uv --directory apps/sidecar run --locked --offline pytest -q tests/test_biomedbert.py
 ```
 
+### HuggingLil alternative
+
+Install [HuggingLil/pii-sensitive-ner-german](https://huggingface.co/HuggingLil/pii-sensitive-ner-german)
+alongside BiomedBERT for local comparison:
+
+```sh
+uv --directory apps/sidecar run --locked python ../../scripts/prepare-biomedbert.py --model hugginglil
+```
+
+This downloads approximately 1.11 GB of DeBERTa weights plus tokenizer files.
+`packaging/hugginglil-inputs.json` pins the revision and SHA-256 checksums. The
+existing CPU runtime loads its fast tokenizer without extra dependencies or
+remote model code. The optional alternative is not added to the default portable
+package.
+
+In **Einstellungen**, choose **HuggingLil – Deutsch, PII**, review its native label
+selection, and save before reprocessing documents. Its metadata declares 20 types,
+including GIVENNAME, SURNAME, CITY, STREET and ZIPCODE; names stay as those native
+codes in reviews and exports. Supplementary recognizers remain separate. Model
+switching affects only the selected pair and requires explicit reprocessing of
+existing results. BiomedBERT remains the default for new pairs when installed.
+
+For the opt-in offline alternative-model checks (PowerShell):
+
+```powershell
+$env:REDACTIO_HUGGINGLIL_MODEL_DIR = (Resolve-Path 'apps/sidecar/models').Path
+uv --directory apps/sidecar run --locked --offline pytest -q
+```
+
 ## Desktop development window
 
 ### Launch commands
@@ -138,7 +167,8 @@ resource overrides and resolve the sidecar, models and WebView2 beside the app.
 ## Engine and host checks
 
 Set the offline model root and explicit test interpreter in the current shell.
-The model directory must contain both test models for the full engine suite.
+The regular engine suite uses synthetic fixtures; real-model tests run only when
+their explicit model-directory variables are set.
 
 POSIX shell:
 

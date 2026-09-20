@@ -294,6 +294,9 @@ fn mutate(
 
 fn validate_model_config(config: &ProcessingConfig) -> Result<(), AppError> {
     config.validate()?;
+    if config.model == "pii-sensitive-ner-german" && config.model_entities.is_none() {
+        return Err(AppError::new("invalid_settings"));
+    }
     let resources = crate::resources::resolve()?;
     let model = crate::resources::list_models(&resources.model_root)?
         .into_iter()
@@ -348,6 +351,18 @@ mod tests {
             .iter()
             .all(crate::domain::settings::EntityType::is_supplementary));
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn hugginglil_requires_an_explicit_native_label_selection() {
+        let config = ProcessingConfig {
+            model: "pii-sensitive-ner-german".into(),
+            ..ProcessingConfig::default()
+        };
+        assert_eq!(
+            validate_model_config(&config).unwrap_err().code,
+            "invalid_settings"
+        );
     }
 }
 

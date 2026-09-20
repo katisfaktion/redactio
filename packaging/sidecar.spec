@@ -18,6 +18,8 @@ for distribution in ('redactio-sidecar', 'spacy', 'presidio-analyzer', 'tldextra
 hiddenimports += [
     'transformers.models.bert.modeling_bert',
     'transformers.models.bert.tokenization_bert_fast',
+    'transformers.models.deberta_v2.modeling_deberta_v2',
+    'transformers.models.deberta_v2.tokenization_deberta_v2_fast',
     'safetensors.torch',
 ]
 analysis = Analysis(

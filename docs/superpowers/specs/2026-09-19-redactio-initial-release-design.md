@@ -263,6 +263,10 @@ error. Custom terms, names, patterns, and preview text are sensitive local data;
 do not include them in logs or output metadata.
 
 Bundle the pinned German OpenMed BiomedBERT 340M as the standard model.
+Support the pinned HuggingLil/pii-sensitive-ner-german DeBERTa checkpoint as an
+optional locally prepared alternative, selectable per pair with its own native
+label set. Switching models requires explicit saving and reprocessing; preserve
+existing pair choices and stored reviews. The standard bundle remains BiomedBERT.
 Core-news models are retired from selection, setup and packaging. Missing or
 incompatible models produce a setup error, never an automatic download. Model,
 recognizer, rule, or output-option changes issue a new processing revision for
