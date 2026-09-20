@@ -296,7 +296,7 @@ function restoreText(event: Event, value: string) {
 .review-status > span, small, .edit-status { color: var(--onyx-color-text-icons-neutral-medium); }
 .workspace { display: grid; grid-template-columns: minmax(0, 1fr) 20rem; gap: var(--onyx-spacing-md); min-width: 0; align-items: start; }
 .comparison { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--onyx-spacing-md); min-width: 0; }
-.comparison section { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: var(--onyx-spacing-sm); min-width: 0; }
+.comparison section { min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); gap: var(--onyx-spacing-sm); min-width: 0; }
 .document-text { display: block; white-space: pre-wrap; overflow-wrap: anywhere; width: 100%; height: clamp(22rem, 52vh, 50rem); overflow: auto; overflow-anchor: none; padding: var(--onyx-spacing-sm); border: 1px solid var(--onyx-color-component-border-neutral); border-radius: var(--onyx-radius-sm); background: var(--onyx-color-base-background-blank); color: inherit; font: inherit; box-sizing: border-box; scrollbar-gutter: stable; }
 textarea.document-text { resize: none; }
 .document-text:focus-visible, summary:focus-visible, .detections button:focus-visible { outline: 3px solid var(--onyx-color-text-icons-primary-intense); outline-offset: 2px; }
@@ -323,12 +323,12 @@ summary { cursor: pointer; font-weight: var(--onyx-font-weight-semibold); }
 h1, h2, h3, p { margin: 0; }
 @media (max-width: 1100px) {
   .workspace { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(10rem, 1fr) 15rem; height: max(28rem, calc(100dvh - 26rem)); align-items: stretch; }
-  .comparison { min-height: 0; }
+  .comparison { min-height: 0; grid-template-rows: minmax(0, 1fr); }
   .inspector { height: 100%; }
   .document-text { height: 100%; min-height: 0; }
 }
 @media (max-width: 600px) {
-  .comparison { grid-template-columns: 1fr; }
+  .comparison { grid-template-columns: 1fr; grid-template-rows: repeat(2, minmax(0, 1fr)); }
   .review-header { align-items: flex-start; }
 }
 </style>
