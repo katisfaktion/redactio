@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { confirm, open, save } from "@tauri-apps/plugin-dialog";
-import { OnyxButton, OnyxInput, OnyxSelect } from "sit-onyx";
+import { OnyxButton, OnyxCard, OnyxHeadline, OnyxInput, OnyxSelect } from "sit-onyx";
 import { computed, reactive, ref } from "vue";
 import type { Settings } from "../lib/contracts";
 
@@ -65,8 +65,8 @@ async function remove(pairId: string) {
 </script>
 
 <template>
-  <section class="pair-manager" aria-labelledby="pairs-heading">
-    <div><h2 id="pairs-heading">Ordnerpaare</h2><slot name="context" /></div>
+  <OnyxCard class="pair-manager" role="region" aria-labelledby="pairs-heading">
+    <div><OnyxHeadline id="pairs-heading" is="h2" show-as="h3">Ordnerpaare</OnyxHeadline><slot name="context" /></div>
 
     <OnyxSelect
       v-if="settings.sync_pairs.length"
@@ -131,7 +131,7 @@ async function remove(pairId: string) {
         <OnyxButton label="Ordnerpaar hinzufügen" type="submit" :disabled="busy || !name.trim() || !source || !target" />
       </form>
     </component>
-  </section>
+  </OnyxCard>
 </template>
 
 <style scoped>
@@ -150,7 +150,6 @@ async function remove(pairId: string) {
 h2, h3, p { margin: 0; }
 @media (min-width: 700px) {
   .pair-manager { grid-template-columns: auto minmax(12rem, 28rem) 1fr; align-items: end; gap: var(--onyx-spacing-lg); }
-  .pair-manager h2 { font-size: var(--onyx-font-size-lg); }
   .management { justify-self: end; }
   .management[open], .management:not(details) { grid-column: 1 / -1; justify-self: stretch; }
 }

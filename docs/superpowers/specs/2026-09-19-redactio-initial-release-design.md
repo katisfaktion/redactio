@@ -94,6 +94,9 @@ The German-language UI has three main views: documents/run status, document
 review, and settings. This retains the prototype's simple folder-based desktop
 workflow. Screens show product language rather than implementation milestones.
 Use consistent Onyx spacing, aligned form actions, and responsive content sections.
+Use Onyx's navigation bar for the document/settings views, cards and headings for
+content hierarchy, and labeled status tags and checkboxes in the document list.
+Navigation must preserve the active-work lock and unsaved-review guard.
 Provide the native Onyx dark appearance by default with a remembered light/dark/
 system appearance choice.
 An always-visible pair selector identifies the active collection. Document

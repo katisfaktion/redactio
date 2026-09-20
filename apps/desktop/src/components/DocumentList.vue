@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { OnyxButton, OnyxTable } from "sit-onyx";
+import { OnyxButton, OnyxCheckbox, OnyxTable, OnyxTag } from "sit-onyx";
 import { computed, onUnmounted, ref, watch } from "vue";
-import type { DocumentKey, SafeError, ScanReport, ScanState } from "../lib/contracts";
+import type { DocumentKey, ReviewStatus, SafeError, ScanReport, ScanState } from "../lib/contracts";
 import { pairApi, safeError } from "../lib/ipc";
 
 const props = defineProps<{
@@ -36,7 +36,18 @@ const stateLabels: Record<ScanState, string> = {
   "recovery-pending": "Wiederherstellung ausstehend",
 };
 
+const stateColors: Record<ScanState, "neutral" | "success" | "warning" | "danger"> = {
+  new: "neutral", current: "success", stale: "warning", "missing-output": "danger",
+  conflict: "danger", "missing-source": "danger", "recovery-pending": "warning",
+};
 const reviewLabels = { pending: "Ausstehend", approved: "Freigegeben", rejected: "Abgelehnt", "needs-rework": "Nacharbeit erforderlich" };
+const reviewColors: Record<ReviewStatus, "neutral" | "success" | "warning" | "danger"> = {
+  pending: "neutral", approved: "success", rejected: "danger", "needs-rework": "warning",
+};
+const reviewableCount = computed(() => report.value?.files.filter(file => file.state === "current" && file.doc_id).length ?? 0);
+function toggleSelected(docId: string, checked: boolean) {
+  selected.value = checked ? [...new Set([...selected.value, docId])] : selected.value.filter(id => id !== docId);
+}
 function refreshIfReady() {
   if (!refreshPending || props.disabled || busy.value) return;
   refreshPending = false;
@@ -106,7 +117,10 @@ function formatMtime(value: string | null): string {
         @click="scan"
       />
       <p v-if="busy" role="status">Dokumentliste wird aktualisiert …</p>
-      <p v-else-if="report">{{ report.files.length }} Dokumente gefunden · {{ report.errors.length }} Lesefehler</p>
+      <div v-else-if="report" class="scan-summary">
+        <span>{{ report.files.length }} Dokumente gefunden · {{ report.errors.length }} Lesefehler</span>
+        <OnyxTag v-if="reviewableCount" :label="`${reviewableCount} prüfbar`" color="success" density="compact" />
+      </div>
     </div>
     <slot />
 
@@ -115,7 +129,6 @@ function formatMtime(value: string | null): string {
     </p>
 
     <template v-if="report">
-      <p v-if="report.files.some(file => file.state === 'current' && file.doc_id)" class="review-hint">Bereit zur Prüfung: Öffnen Sie ein verarbeitetes Dokument über „doc-… prüfen“.</p>
       <OnyxTable v-if="report.files.length" striped with-page-scrolling>
         <template #head>
           <tr>
@@ -127,11 +140,11 @@ function formatMtime(value: string | null): string {
           </tr>
         </template>
         <tr v-for="file in report.files" :key="file.relative_path">
-          <td><input v-if="file.doc_id" v-model="selected" type="checkbox" :value="file.doc_id" :aria-label="`${file.relative_path} auswählen`" :disabled="busy || disabled" /></td>
+          <td><OnyxCheckbox v-if="file.doc_id" :model-value="selected.includes(file.doc_id)" :value="file.doc_id" :label="`${file.relative_path} auswählen`" hide-label :disabled="busy || disabled" @update:model-value="checked => toggleSelected(file.doc_id!, checked)" /></td>
           <td>{{ file.relative_path }}</td>
-          <td>{{ stateLabels[file.state] }}</td>
+          <td><OnyxTag :label="stateLabels[file.state]" :color="stateColors[file.state]" density="compact" /></td>
           <td>{{ formatMtime(file.mtime) }}</td>
-          <td><div class="review-cell"><span>{{ file.review_status ? reviewLabels[file.review_status] : "—" }}</span> <OnyxButton v-if="file.doc_id" :data-testid="`review-${file.doc_id}`" :label="`${file.doc_id} prüfen`" type="button" mode="outline" :disabled="busy || disabled || file.state !== 'current'" @click="emit('review', file.doc_id)" /></div></td>
+          <td><div class="review-cell"><OnyxTag v-if="file.review_status" :label="reviewLabels[file.review_status]" :color="reviewColors[file.review_status]" density="compact" /><span v-else>—</span> <OnyxButton v-if="file.doc_id" :data-testid="`review-${file.doc_id}`" :label="`${file.doc_id} prüfen`" type="button" mode="outline" :disabled="busy || disabled || file.state !== 'current'" @click="emit('review', file.doc_id)" /></div></td>
         </tr>
       </OnyxTable>
       <div v-if="report.files.some(file => file.doc_id)" class="selection-actions">
@@ -155,11 +168,10 @@ function formatMtime(value: string | null): string {
 
 <style scoped>
 .document-list { display: grid; gap: var(--onyx-spacing-lg); }
-.list-header, .selection-actions, .review-cell { display: flex; flex-wrap: wrap; align-items: center; gap: var(--onyx-spacing-sm) var(--onyx-spacing-lg); }
-.list-header p { color: var(--onyx-color-text-icons-neutral-medium); }
+.list-header, .selection-actions, .review-cell, .scan-summary { display: flex; flex-wrap: wrap; align-items: center; gap: var(--onyx-spacing-sm) var(--onyx-spacing-lg); }
+.list-header p, .scan-summary { color: var(--onyx-color-text-icons-neutral-medium); }
 .review-cell { justify-content: space-between; }
 .review-cell > span { flex: 1 1 8rem; }
-.review-hint { padding: var(--onyx-spacing-sm) var(--onyx-spacing-md); border-inline-start: 3px solid var(--onyx-color-text-icons-primary-intense); background: var(--onyx-color-base-background-tinted); }
 p { margin: 0; }
 td { overflow-wrap: anywhere; }
 .error { color: var(--onyx-color-text-icons-danger-intense); }

@@ -40,6 +40,26 @@ Once dependencies are cached, `pnpm install --offline --frozen-lockfile` is the
 verified offline install variant. `pnpm dev` starts only Vite; host-backed file
 operations need the Tauri window described below.
 
+### Onyx design-system MCP
+
+The project configures the [official Onyx MCP server](https://onyx.schwarz/development/packages/mcp.html)
+in [`.codex/config.toml`](../.codex/config.toml). It runs
+`npx --yes @sit-onyx/modelcontextprotocol@0.4.0 --resourcesAsTools`, with no global
+installation or application dependency. The first start needs network access to
+populate npm's package cache. Node.js must be on the Codex process's PATH.
+
+Open this checkout as a trusted Codex project and restart its MCP connection
+after changing the configuration. `codex mcp get onyx --json` verifies that Codex
+has loaded the project entry. Use `list-components`, `get-component-api` and
+`list-css-design-tokens` with the exact `sit-onyx` version in
+`apps/desktop/package.json` (currently `1.20.0`); the server also provides
+`onyx-components`, `onyx-foundation` and `onyx-setup` guidance.
+
+This is a development documentation tool. It is not bundled into Redactio and
+does not receive documents. Validate UI changes using synthetic fixtures. Use
+Onyx navigation, cards, headings, status tags and form controls; retain the
+existing review-selection behavior and guards when composing those components.
+
 ## Offline German models
 
 Install model wheels explicitly during setup. The default is `de_core_news_lg`;

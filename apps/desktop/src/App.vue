@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { OnyxAppLayout, OnyxButton, OnyxModal, OnyxPageLayout, OnyxSelect } from "sit-onyx";
-import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from "vue";
+import { OnyxAppLayout, OnyxButton, OnyxCard, OnyxHeadline, OnyxInfoCard, OnyxModal, OnyxNavBar, OnyxNavItem, OnyxPageLayout, OnyxSelect } from "sit-onyx";
+import { computed, onMounted, onUnmounted, ref, shallowRef, useTemplateRef, watch } from "vue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import AppearanceSelect from "./components/AppearanceSelect.vue";
@@ -30,6 +30,7 @@ const empty: Settings = { schema_version: 1, sync_pairs: [], selected_sync_pair_
 const pairs = usePairs(props.initialSettings ?? empty);
 const detection = useDetection(pairs.selectedPair, (settings) => { pairs.settings.value = settings; });
 const view = ref<"documents" | "settings" | "review">("documents");
+const navigation = useTemplateRef("navigation");
 const review = useReview();
 const reviewDocuments = ref<{ value: string; label: string }[]>([]);
 const selectedId = computed(() => pairs.selectedPair.value?.id ?? null);
@@ -57,6 +58,7 @@ async function leave(choice: "save" | "discard" | "stay") {
   review.clear(); await action?.();
 }
 function changeView(next: "documents" | "settings") {
+  navigation.value?.closeMobileMenus();
   if (next === view.value) return;
   guard(() => { review.clear(); view.value = next; if (next === "settings") void loadAuditLocation(); });
 }
@@ -132,27 +134,34 @@ const errorText: Record<string, string> = {
 </script>
 
 <template>
-  <OnyxAppLayout>
+  <OnyxAppLayout class="onyx-grid-max-lg onyx-grid-center">
+    <template #navBar>
+      <OnyxNavBar ref="navigation" app-name="Redactio" mobile="xs" aria-label="Ansichten">
+        <template #appArea><span class="brand">Redactio</span></template>
+        <OnyxNavItem v-if="!startupError" data-testid="documents-nav" label="Dokumente" :active="view !== 'settings'" :aria-current="view !== 'settings' ? 'page' : undefined" :disabled="busy" @click="changeView('documents')" />
+        <OnyxNavItem v-if="!startupError" data-testid="settings-nav" label="Einstellungen" :active="view === 'settings'" :aria-current="view === 'settings' ? 'page' : undefined" :disabled="busy" @click="changeView('settings')" />
+        <template #mobileActivePage>{{ view === 'settings' ? 'Einstellungen' : view === 'review' ? 'Dokument prüfen' : 'Dokumente' }}</template>
+      </OnyxNavBar>
+    </template>
     <OnyxPageLayout>
-      <main class="shell" :class="{ 'shell--review': view === 'review' }">
+      <div class="shell" :class="{ 'shell--review': view === 'review' }">
         <header class="app-header">
           <div class="app-title">
-            <p v-if="view !== 'review'" class="eyebrow">Redactio</p>
-            <h1>{{ view === 'review' ? "Redactio" : "Dokumente sicher schwärzen" }}</h1>
+            <OnyxHeadline is="h1">{{ view === 'settings' ? 'Einstellungen' : view === 'review' ? 'Dokument prüfen' : 'Dokumente' }}</OnyxHeadline>
+            <p v-if="view === 'documents'">Lokal verarbeiten, sorgfältig prüfen und freigegeben exportieren.</p>
           </div>
           <AppearanceSelect class="appearance" />
         </header>
 
-        <section v-if="startupError" class="error" role="alert">
-          <h2>Einstellungen konnten nicht geladen werden</h2>
+        <OnyxInfoCard v-if="startupError" headline="Einstellungen konnten nicht geladen werden" color="danger" role="alert">
           <p>{{ errorText[startupError.code] ?? "Die lokalen Einstellungen sind derzeit nicht verfügbar." }}</p>
           <MappingRecovery v-if="startupError.code !== 'invalid_settings'" @recovered="recovered" />
-        </section>
+        </OnyxInfoCard>
 
         <template v-else>
-          <p v-if="pairs.error.value" class="error" role="alert">
+          <OnyxInfoCard v-if="pairs.error.value" color="danger" role="alert">
             {{ errorText[pairs.error.value.code] ?? "Die Änderung konnte nicht gespeichert werden." }}
-          </p>
+          </OnyxInfoCard>
           <PairManager
             :settings="pairs.settings.value"
             :busy="busy"
@@ -163,11 +172,7 @@ const errorText: Record<string, string> = {
           >
             <template #context><small v-if="view === 'review'">Prüfung: {{ review.key.value?.doc_id }}</small></template>
           </PairManager>
-          <div class="view-switcher">
-            <nav aria-label="Ansichten" class="view-navigation">
-              <OnyxButton data-testid="documents-nav" label="Dokumente" type="button" :mode="view === 'documents' ? 'default' : 'outline'" :aria-current="view === 'documents' ? 'page' : undefined" :disabled="busy" @click="changeView('documents')" />
-              <OnyxButton data-testid="settings-nav" label="Einstellungen" type="button" :mode="view === 'settings' ? 'default' : 'outline'" :aria-current="view === 'settings' ? 'page' : undefined" :disabled="busy" @click="changeView('settings')" />
-            </nav>
+          <div v-if="view === 'review' && pairs.selectedPair.value" class="view-switcher">
             <OnyxSelect v-if="view === 'review' && pairs.selectedPair.value" class="review-picker" data-testid="review-document-select" label="Dokument prüfen" list-label="Verarbeitete Dokumente" :options="reviewDocuments" :model-value="review.key.value?.doc_id" :hide-clear-icon="true" :disabled="busy" @update:model-value="id => typeof id === 'string' && openReview(id)" />
           </div>
           <p v-if="closeError" role="alert">{{ closeError }}</p>
@@ -176,9 +181,9 @@ const errorText: Record<string, string> = {
             <ReviewView :key="`${review.key.value?.sync_pair_id}:${review.key.value?.doc_id}`" :review="review" :pair-name="pairs.selectedPair.value.name" :disabled="busy" @back="changeView('documents')" />
           </template>
           <p v-if="view === 'documents' && detection.error.value" role="alert">Die Erkennung ist derzeit nicht verfügbar. Prüfen Sie die Modelle und Regeln unter Einstellungen.</p>
-          <section v-if="pairs.selectedPair.value" v-show="view === 'documents'" data-testid="document-view" aria-labelledby="documents-heading">
+          <OnyxCard v-if="pairs.selectedPair.value" v-show="view === 'documents'" data-testid="document-view" role="region" aria-labelledby="documents-heading">
             <div class="section-heading">
-              <h2 id="documents-heading">Dokumente: {{ pairs.selectedPair.value.name }}</h2>
+              <OnyxHeadline id="documents-heading" is="h2">Dokumentübersicht</OnyxHeadline>
               <p>Ordner einlesen, Dokumente verarbeiten und anschließend direkt in der Liste prüfen.</p>
             </div>
             <DocumentList :key="`${pairs.selectedPair.value.id}:${pairs.selectedPair.value.processing_revision}`" :pair-id="pairs.selectedPair.value.id" :invalidation="documentInvalidation" :disabled="busy || !!leaveAction" @busy="setScanning" @invalidated="invalidateDocuments" @scanned="onScanned" @reprocess="reprocess" @review="openReview" @export="openExport">
@@ -196,17 +201,17 @@ const errorText: Record<string, string> = {
               />
               <OnyxButton v-if="run.summary.value?.errors.length" label="Fehlgeschlagene Dokumente erneut versuchen" type="button" :disabled="busy" @click="run.start(run.summary.value.errors.map((failure) => failure.relative_path))" />
             </DocumentList>
-          </section>
+          </OnyxCard>
           <section v-if="view === 'settings'" class="settings" aria-label="Einstellungen">
             <DetectionSettings v-if="pairs.selectedPair.value" :pair="pairs.selectedPair.value" :models="detection.models.value" :busy="busy"
               :preview="detection.result.value" :error="detection.error.value" :saved="detection.saved.value"
               @save="detection.save" @preview="detection.preview" />
-            <section class="audit-settings">
-              <h2>Protokoll</h2>
+            <OnyxCard class="audit-settings" role="region" aria-labelledby="audit-heading">
+              <OnyxHeadline id="audit-heading" is="h2">Protokoll</OnyxHeadline>
               <p>{{ auditPath }}</p>
               <OnyxButton label="Protokollordner öffnen" type="button" @click="openAuditFolder" />
               <p v-if="auditError" role="alert">Der Protokollordner ist derzeit nicht verfügbar.</p>
-            </section>
+            </OnyxCard>
           </section>
         </template>
         <ExportDialog v-if="exportSelection" :pair-id="exportSelection.pairId" :pair-name="exportSelection.pairName" :keys="exportSelection.keys" @close="exportSelection = null" />
@@ -222,38 +227,30 @@ const errorText: Record<string, string> = {
             </div>
           </div>
         </OnyxModal>
-      </main>
+      </div>
     </OnyxPageLayout>
   </OnyxAppLayout>
 </template>
 
 <style scoped>
-.shell { display: grid; align-content: start; gap: var(--onyx-spacing-xl); min-height: 100%; min-width: 0; width: 100%; max-width: 90rem; margin-inline: auto; }
+.shell { display: grid; align-content: start; gap: var(--onyx-spacing-lg); min-height: 100%; min-width: 0; }
+.brand { font-size: var(--onyx-font-size-lg); font-weight: var(--onyx-font-weight-semibold); color: var(--onyx-color-text-icons-primary-intense); }
 .app-header { display: flex; justify-content: space-between; align-items: flex-end; flex-wrap: wrap; gap: var(--onyx-spacing-lg); }
 .app-title, .section-heading { display: grid; gap: var(--onyx-spacing-xs); }
 .app-title { flex: 1 1 24rem; }
+.app-title p { color: var(--onyx-color-text-icons-neutral-medium); }
 .appearance { flex: 0 1 12rem; }
 .shell--review { gap: var(--onyx-spacing-lg); }
 .shell--review .app-title { flex-basis: 12rem; }
-.shell--review :deep(.pair-manager) { padding: var(--onyx-spacing-md); }
 .view-switcher { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--onyx-spacing-md) var(--onyx-spacing-lg); }
 .review-picker { flex: 1 1 24rem; min-width: 0; }
-.eyebrow { font-weight: var(--onyx-font-weight-semibold); color: var(--onyx-color-text-icons-primary-intense); }
-h1 { font-size: clamp(1.5rem, 2.5vw, 2rem); line-height: 1.25; }
-h2 { font-size: 1.25rem; }
 h1, h2, h3, p { margin: 0; }
-:deep(.pair-manager), .error, [data-testid="document-view"], :deep(.review), :deep(.detection-settings), .audit-settings { background: var(--onyx-color-base-background-blank); border: 1px solid var(--onyx-color-component-border-neutral); border-radius: var(--onyx-radius-md); padding: var(--onyx-spacing-lg); min-width: 0; }
-[data-testid="document-view"], .audit-settings, .error { display: grid; gap: var(--onyx-spacing-lg); }
+[data-testid="document-view"], .audit-settings { display: grid; gap: var(--onyx-spacing-lg); min-width: 0; }
 .section-heading p { color: var(--onyx-color-text-icons-neutral-medium); }
-.error { color: var(--onyx-color-text-icons-danger-intense); }
 .view-navigation { display: flex; flex-wrap: wrap; gap: var(--onyx-spacing-sm); }
 .leave-dialog { display: grid; gap: var(--onyx-spacing-md); padding: var(--onyx-spacing-lg); max-width: 36rem; }
 .settings { display: grid; gap: var(--onyx-spacing-xl); }
 .audit-settings p { overflow-wrap: anywhere; }
 .audit-settings > :deep(.onyx-button) { justify-self: start; }
 :deep(.pair-manager) { align-self: start; }
-@media (max-width: 650px) {
-  .shell { gap: var(--onyx-spacing-lg); }
-  :deep(.pair-manager), [data-testid="document-view"], :deep(.review), :deep(.detection-settings), .audit-settings { padding: var(--onyx-spacing-md); }
-}
 </style>

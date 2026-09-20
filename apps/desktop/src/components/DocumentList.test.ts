@@ -81,10 +81,11 @@ test("a late scan response cannot populate a newly selected pair", async () => {
   expect(wrapper.text()).toContain("pair-b.docx");
 });
 
-test("busy work disables discovery and selected reprocessing names exact stable IDs", async () => {
+test("reviewable count and selected reprocessing use exact stable IDs", async () => {
   const wrapper = mountList(async () => ({ ...report, files: [{ ...report.files[0], doc_id: "doc-0001", review_status: "pending", state: "current" }] }));
   await wrapper.get("button").trigger("click");
   expect(wrapper.emitted("scanned")).toHaveLength(1);
+  expect(wrapper.text()).toContain("1 prüfbar");
   await wrapper.get('input[type="checkbox"]').setValue(true);
   const reprocess = wrapper.findAll("button").find((button) => button.text().includes("erneut verarbeiten"))!;
   await reprocess.trigger("click");

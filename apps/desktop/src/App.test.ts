@@ -15,6 +15,7 @@ test("an empty registry offers setup without a pretend sync action", () => {
   } });
   expect(wrapper.text()).toContain("Ordnerpaar hinzufügen");
   expect(wrapper.find('[data-testid="start-sync"]').exists()).toBe(false);
+  expect(wrapper.findAll("main")).toHaveLength(1);
 });
 
 test("a settings load failure is visible instead of pretending setup is empty", () => {
@@ -24,6 +25,41 @@ test("a settings load failure is visible instead of pretending setup is empty", 
   } });
   expect(wrapper.text()).toContain("Einstellungen konnten nicht geladen werden");
   expect(wrapper.text()).not.toContain("Ordnerpaar hinzufügen");
+});
+
+test("mobile navigation closes after changing views and after selecting the current view", async () => {
+  vi.stubGlobal("ResizeObserver", class {
+    constructor(private callback: ResizeObserverCallback) {}
+    observe(target: Element) {
+      if (target.classList.contains("onyx-nav-bar")) this.callback([
+        { target, contentBoxSize: [{ inlineSize: 520, blockSize: 64 }] } as ResizeObserverEntry,
+      ], this as unknown as ResizeObserver);
+    }
+    unobserve() {}
+    disconnect() {}
+  });
+  vi.spyOn(runApi, "auditLocation").mockResolvedValue("/config/audit-log.jsonl");
+  const wrapper = mount(App, { props: {
+    initialSettings: { schema_version: 1, sync_pairs: [], selected_sync_pair_id: null },
+  } });
+  try {
+    await flushPromises();
+    const burger = () => wrapper.get(".onyx-nav-bar__burger button");
+    const menu = () => wrapper.get(".onyx-mobile-nav-button__flyout");
+    await burger().trigger("click");
+    expect(menu().attributes("style")).not.toContain("display: none");
+    await wrapper.get('[data-testid="settings-nav"]').trigger("click");
+    await flushPromises();
+    expect(wrapper.get("h1").text()).toBe("Einstellungen");
+    expect(menu().attributes("style")).toContain("display: none");
+    await burger().trigger("click");
+    await wrapper.get('[data-testid="settings-nav"]').trigger("click");
+    await flushPromises();
+    expect(menu().attributes("style")).toContain("display: none");
+  } finally {
+    wrapper.unmount();
+    vi.unstubAllGlobals();
+  }
 });
 
 test("a missing source mapping asks for repair without offering empty setup", () => {
@@ -56,6 +92,7 @@ test("a scanned selected pair stays locked through the authoritative finish and 
   await button("Quellordner einlesen").trigger("click"); await flushPromises();
   await button("Verarbeitung starten").trigger("click"); await flushPromises();
   expect(wrapper.getComponent(PairManager).props("busy")).toBe(true);
+  expect(wrapper.get('[data-testid="settings-nav"]').attributes("disabled")).toBeDefined();
   expect(button("Abbrechen").exists()).toBe(true);
   const final = { sync_pair_id: pairId, run_id: runId, stage: "finished" as const, discovered: 1, processed: 1, skipped: 0, failed: 0, unprocessed: 0, warned: 0 };
   getSummary.mockResolvedValue({ ...final, outcome: "completed", errors: [], error: null, audit_warning: true });
@@ -70,6 +107,7 @@ test("a scanned selected pair stays locked through the authoritative finish and 
     source_hash_sha256: "a".repeat(64), review_status: "pending", state: "current" }], errors: [] });
   await flushPromises();
   expect(wrapper.getComponent(PairManager).props("busy")).toBe(false);
+  expect(wrapper.get('[data-testid="settings-nav"]').attributes("disabled")).toBeUndefined();
   expect(wrapper.text()).toContain("processed.docx");
   expect(button("Verarbeitung starten").attributes("disabled")).toBeUndefined();
   const reviewData: ReviewViewData = {

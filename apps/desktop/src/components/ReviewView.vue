@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { OnyxButton, OnyxCheckbox, OnyxSelect, OnyxTextarea } from "sit-onyx";
+import { OnyxButton, OnyxCard, OnyxCheckbox, OnyxHeadline, OnyxSelect, OnyxTag, OnyxTextarea } from "sit-onyx";
 import { computed, nextTick, ref, watch } from "vue";
 import type { useReview } from "../composables/useReview";
 import { EntityTypeSchema, type EntityType } from "../lib/contracts";
@@ -123,16 +123,16 @@ function restorePreview(event: Event) {
 </script>
 
 <template>
-  <section class="review" aria-labelledby="review-heading">
-    <div class="actions">
-      <h2 id="review-heading">Prüfung: {{ pairName }} · {{ review.key.value?.doc_id }}</h2>
+  <OnyxCard class="review" role="region" aria-labelledby="review-heading">
+    <div class="actions review-header">
+      <OnyxHeadline id="review-heading" is="h2">{{ pairName }} · {{ review.key.value?.doc_id }}</OnyxHeadline>
       <OnyxButton label="Zur Dokumentliste" type="button" mode="outline" :disabled="controlsBusy" @click="emit('back')" />
     </div>
     <p v-if="review.busy.value" role="status">Prüfung wird geladen oder gespeichert …</p>
     <p v-if="review.error.value" role="alert">{{ errors[review.error.value.code] ?? "Die Prüfung konnte nicht geladen oder gespeichert werden. Ihre ungespeicherten Änderungen bleiben erhalten." }}</p>
     <p aria-live="polite">{{ review.message.value }}</p>
     <template v-if="review.data.value">
-      <p><strong>Status: {{ statuses[review.status.value] }}</strong> · {{ review.dirty.value ? 'Ungespeicherte Änderungen' : 'Gespeicherter Stand' }}</p>
+      <div class="review-status"><OnyxTag :label="statuses[review.status.value]" :color="review.status.value === 'approved' ? 'success' : review.status.value === 'rejected' ? 'danger' : review.status.value === 'needs-rework' ? 'warning' : 'neutral'" /><span>{{ review.dirty.value ? 'Ungespeicherte Änderungen' : 'Gespeicherter Stand' }}</span></div>
       <section v-if="review.data.value.warnings.length" class="warnings" aria-label="Hinweise zur Extraktion">
         <h3>Inhalte möglicherweise unvollständig</h3>
         <OnyxCheckbox v-for="warning in review.data.value.warnings" :key="warning" :value="warning"
@@ -191,22 +191,24 @@ function restorePreview(event: Event) {
       </div>
       <p v-if="review.decisionsChanged.value">Korrekturen zunächst speichern, danach die aktualisierte Ausgabe prüfen und ausdrücklich freigeben.</p>
     </template>
-  </section>
+  </OnyxCard>
 </template>
 
 <style scoped>
 .review, .warnings, .detections { display: grid; gap: var(--onyx-spacing-md); min-width: 0; }
 .actions, .detections li { display: flex; align-items: flex-end; flex-wrap: wrap; gap: var(--onyx-spacing-md); }
 .actions h2 { flex: 1 1 18rem; }
+.review-status { display: flex; align-items: center; flex-wrap: wrap; gap: var(--onyx-spacing-sm); }
+.review-status > span { color: var(--onyx-color-text-icons-neutral-medium); }
 .actions :deep(.onyx-select) { max-width: 18rem; }
 .comparison { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--onyx-spacing-md); }
 .comparison section { display: grid; gap: var(--onyx-spacing-sm); min-width: 0; }
 .document-text { display: block; white-space: pre-wrap; overflow-wrap: anywhere; width: 100%; height: clamp(22rem, 48vh, 38rem); overflow: auto; padding: var(--onyx-spacing-sm); border: 1px solid var(--onyx-color-component-border-neutral); border-radius: var(--onyx-radius-sm); background: var(--onyx-color-base-background-blank); color: inherit; font: inherit; box-sizing: border-box; }
 textarea.document-text { resize: vertical; }
 .document-text:focus-visible, input:focus-visible, summary:focus-visible { outline: 3px solid var(--onyx-color-text-icons-primary-intense); outline-offset: 2px; }
-mark { cursor: pointer; color: inherit; background: var(--onyx-color-base-warning-200, #ffe59b); text-decoration: underline; }
-mark:focus-visible, .focused-redaction { outline: 3px solid var(--onyx-color-text-icons-primary-intense, #005eb8); outline-offset: 2px; }
-mark.focused-redaction { background: var(--onyx-color-base-warning-300, #ffd05b); }
+mark { cursor: pointer; color: var(--onyx-color-text-icons-warning-intense); background: var(--onyx-color-base-warning-200); text-decoration: underline; }
+mark:focus-visible, .focused-redaction { outline: var(--onyx-outline-width) solid var(--onyx-color-component-focus-primary); outline-offset: 2px; }
+mark.focused-redaction { background: var(--onyx-color-base-warning-300); }
 .detections { margin: 0; padding: var(--onyx-spacing-xs); list-style: none; }
 .detections li { padding: var(--onyx-spacing-md); border: 1px solid var(--onyx-color-component-border-neutral); border-radius: var(--onyx-radius-sm); }
 .detection-text { flex: 1 1 12rem; min-width: 0; overflow-wrap: anywhere; }
@@ -216,5 +218,10 @@ mark.focused-redaction { background: var(--onyx-color-base-warning-300, #ffd05b)
 .warnings { border-inline-start: 4px solid var(--onyx-color-text-icons-warning-intense); padding: var(--onyx-spacing-sm); }
 summary { cursor: pointer; font-weight: var(--onyx-font-weight-semibold); }
 h2, h3, p { margin: 0; }
-@media (max-width: 650px) { .comparison { grid-template-columns: 1fr; } .document-text { height: 16rem; } }
+@media (max-width: 768px) {
+  .comparison { grid-template-columns: 1fr; }
+  .document-text { height: 16rem; }
+  .review-header { align-items: flex-start; flex-direction: column; }
+  .review-header h2 { flex-basis: auto; }
+}
 </style>

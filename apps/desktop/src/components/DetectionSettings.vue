@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { OnyxButton, OnyxCheckbox, OnyxInput, OnyxSelect, OnyxTextarea } from "sit-onyx";
+import { OnyxButton, OnyxCard, OnyxCheckbox, OnyxHeadline, OnyxInput, OnyxSelect, OnyxTextarea } from "sit-onyx";
 import { computed, ref, watch } from "vue";
 import { EntityTypeSchema, ProcessingConfigSchema, type CustomRule, type EntityType, type ProcessingConfig, type SyncPair, type ModelInfo, type RulePreview, type SafeError } from "../lib/contracts";
 
@@ -79,8 +79,8 @@ function submit(preview = false) {
 </script>
 
 <template>
-  <section class="detection-settings" aria-labelledby="detection-heading">
-    <h2 id="detection-heading">Erkennung für {{ pair.name }}</h2>
+  <OnyxCard class="detection-settings" role="region" aria-labelledby="detection-heading">
+    <OnyxHeadline id="detection-heading" is="h2">Erkennung für {{ pair.name }}</OnyxHeadline>
     <form @submit.prevent="submit()">
       <OnyxSelect v-model="draft.model" label="Lokales Sprachmodell" list-label="Installierte Sprachmodelle"
         :options="modelOptions" :disabled="busy" :hide-clear-icon="true" />
@@ -136,7 +136,7 @@ function submit(preview = false) {
         <OnyxButton data-testid="save" label="Erkennung speichern" type="submit" :disabled="busy || !!validation" />
       </div>
     </form>
-  </section>
+  </OnyxCard>
 </template>
 
 <style scoped>

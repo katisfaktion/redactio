@@ -1,0 +1,6 @@
+# Official Onyx design-system documentation (development only).
+[mcp_servers.onyx]
+command = "npx"
+args = ["--yes", "@sit-onyx/modelcontextprotocol@0.4.0", "--resourcesAsTools"]
+startup_timeout_sec = 120
+tool_timeout_sec = 60
