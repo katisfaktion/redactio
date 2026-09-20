@@ -1,5 +1,5 @@
 import { computed, onScopeDispose, ref, shallowRef } from "vue";
-import type { Decisions, Detection, DocumentKey, EntityType, ReviewStatus, ReviewViewData } from "../lib/contracts";
+import { EntityTypeSchema, type Decisions, type Detection, type DocumentKey, type EntityType, type ReviewStatus, type ReviewViewData } from "../lib/contracts";
 import { reviewApi, safeError, type ReviewApi } from "../lib/ipc";
 import type { SafeError } from "../lib/contracts";
 
@@ -56,6 +56,20 @@ export function useReview(api: ReviewApi = reviewApi) {
       ...span, id: crypto.randomUUID(), entity_type, origin: "manual", confidence: null, recognizer: "manual",
     }] });
   }
+  function replace(span: { start: number; end: number }, entity_type: EntityType) {
+    if (!data.value || busy.value || !Number.isInteger(span.start) || !Number.isInteger(span.end)
+      || span.start < 0 || span.end <= span.start || span.end > Array.from(data.value.original_text).length
+      || !EntityTypeSchema.safeParse(entity_type).success) return;
+    const overlapping = active.value.filter(item => item.start < span.end && span.start < item.end);
+    const id = crypto.randomUUID();
+    edit({
+      dismissed_ids: [...decisions.value.dismissed_ids, ...overlapping.filter(item => item.origin === "automatic").map(item => item.id)],
+      manual: [...decisions.value.manual.filter(item => !overlapping.some(other => other.id === item.id)), {
+        ...span, id, entity_type, origin: "manual", confidence: null, recognizer: "manual",
+      }],
+    });
+    return id;
+  }
   function dismiss(id: string) {
     if (!active.value.some(item => item.id === id)) return;
     edit({ dismissed_ids: data.value!.detections.some(item => item.id === id)
@@ -63,10 +77,11 @@ export function useReview(api: ReviewApi = reviewApi) {
   }
   function changeType(id: string, entity_type: EntityType) {
     const item = active.value.find(item => item.id === id);
-    if (!item || item.entity_type === entity_type) return;
+    if (busy.value || !item || item.entity_type === entity_type) return;
     const manual: Detection = { ...item, id: crypto.randomUUID(), entity_type, origin: "manual", confidence: null, recognizer: "manual" };
     edit({ dismissed_ids: item.origin === "automatic" ? [...decisions.value.dismissed_ids, id] : [...decisions.value.dismissed_ids],
       manual: [...decisions.value.manual.filter(item => item.id !== id), manual] });
+    return manual.id;
   }
   function undo() {
     if (busy.value || !history.value.length || !data.value) return;
@@ -91,5 +106,5 @@ export function useReview(api: ReviewApi = reviewApi) {
     } finally { if (token === request) busy.value = false; }
   }
   return { data, key, saved, decisions, notes, status, acknowledged, busy, error, message, dirty, decisionsChanged, canApprove,
-    active, canUndo: computed(() => history.value.length > 0), open, clear, add, dismiss, changeType, undo, save };
+    active, canUndo: computed(() => history.value.length > 0), open, clear, add, replace, dismiss, changeType, undo, save };
 }

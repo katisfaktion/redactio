@@ -154,7 +154,7 @@ const errorText: Record<string, string> = {
     </template>
     <OnyxPageLayout>
       <div class="shell" :class="{ 'shell--review': view === 'review' }">
-        <header class="app-header">
+        <header v-show="view !== 'review'" class="app-header">
           <div class="app-title">
             <OnyxHeadline is="h1">{{ view === 'settings' ? 'Einstellungen' : view === 'review' ? 'Dokument prüfen' : 'Dokumente' }}</OnyxHeadline>
             <p v-if="view === 'documents'">Lokal verarbeiten, sorgfältig prüfen und freigegeben exportieren.</p>
@@ -171,7 +171,7 @@ const errorText: Record<string, string> = {
           <OnyxInfoCard v-if="pairs.error.value" color="danger" role="alert">
             {{ errorText[pairs.error.value.code] ?? "Die Änderung konnte nicht gespeichert werden." }}
           </OnyxInfoCard>
-          <PairManager
+          <PairManager v-show="view !== 'review'"
             :settings="pairs.settings.value"
             :busy="busy"
             @add="(name, source, target, createTarget) => changePair(() => pairs.addPair(name, source, target, createTarget))"

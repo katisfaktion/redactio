@@ -133,16 +133,27 @@ Weitere aktuelle Ergebnisse sind unter **Dokument prüfen** auswählbar.
 der neuen Schwärzung** wählen und **Auswahl schwärzen** betätigen. Das Original
 bleibt zum Vergleich daneben sichtbar. Bereits geschwärzte Angaben erscheinen
 als Platzhalter; eine Auswahl über einen Platzhalter umfasst dessen ganze
-Originalstelle. Für die Tastatur **Per Tastatur
-auswählen** öffnen, mit Umschalt- und Pfeiltasten markieren und mit Umschalt+Tab
-zur Schaltfläche **Auswahl schwärzen** zurückkehren. Unter **Schwärzungen
-bearbeiten** steht der betroffene Originaltext. **Im Text anzeigen** springt zur
-Stelle und hebt sie in beiden Ansichten hervor. Ein Klick auf eine markierte
-Stelle öffnet umgekehrt ihren Listeneintrag. Dort falsche Treffer entfernen oder
-ihren Typ korrigieren.
-**Korrektur zurücknehmen** macht die letzte Schwärzungskorrektur der Sitzung
-rückgängig. Allgemeine Textbearbeitung und frei gewählte Ersatztexte sind nicht
-Teil dieses Arbeitsablaufs.
+Originalstelle. Die feste Seitenleiste zeigt die Auswahl oder die Details der
+angeklickten Schwärzung; der Text bleibt dabei an seiner Position. **Vorherige**,
+**Nächste** und **Alle Schwärzungen** navigieren ausdrücklich zur jeweiligen Stelle.
+Auf schmalen Fenstern stehen dieselben Steuerelemente unter den Textansichten.
+
+Für genaue Grenzen **Bereich korrigieren** wählen und im Original den gewünschten
+Text mit der Maus oder Umschalt- und Pfeiltasten neu auswählen. Der Text selbst ist
+schreibgeschützt. Eine Auswahl darf mehrere vorhandene Schwärzungen umfassen.
+**1 Schwärzung ersetzen** bzw. **2 Schwärzungen ersetzen** entfernt alle vorhandenen
+Schwärzungen, die die Auswahl überlappen, vollständig und erstellt genau eine
+manuelle Schwärzung für den ausgewählten Bereich. Nur angrenzende Schwärzungen
+bleiben erhalten. Die Seitenleiste nennt die ersetzten Stellen und zeigt Text,
+der außerhalb des neuen Bereichs wieder sichtbar wird.
+
+Für neue Auswahlen per Tastatur **Per Tastatur auswählen** öffnen, in der Vorschau
+markieren und mit Tab zu den Korrektursteuerelementen wechseln. **Markierungen
+anzeigen** kehrt zur markierten Ansicht zurück. **Korrektur zurücknehmen** stellt
+auch bei mehreren ersetzten Schwärzungen den gesamten vorherigen Zustand mit
+einem Schritt wieder her. Allgemeine Textbearbeitung und frei gewählte Ersatztexte
+sind nicht Teil dieses Arbeitsablaufs. **Notizen und Prüfstatus** enthält private
+Notizen und weitere Prüfzustände.
 
 Die Vorschau zeigt Schwärzungskorrekturen sofort. Die Ausgabedatei wird erst
 beim Speichern geändert.

@@ -192,10 +192,19 @@ detector output, not a guarantee of privacy. Show extraction warnings prominentl
 Users can select text directly in the redacted preview to add redactions while
 keeping the highlighted original beside it. Preview selections map to original
 Unicode code-point spans; selecting any part of a placeholder selects its whole
-source span. Keyboard selection uses the same masked preview. Each detection
-entry shows the affected original text and a jump action that highlights its
-location in both panes. Activating a highlighted passage opens its list entry,
-including the appropriate page for long lists.
+source span. A persistent inspector shows either the selected range or the clicked
+redaction's details without moving the document or stealing selection focus.
+Explicit previous/next and list navigation scroll only the document panes.
+Selection messages and editing controls never insert content above the panes.
+On narrow windows, the inspector occupies a reserved area below the text panes.
+
+Range correction selects exact characters in the original, including keyboard
+selection. Applying a selected range completely removes every active detection
+that strictly overlaps it and creates exactly one manual detection for the exact
+range. Automatic overlaps become dismissed decisions; manual overlaps are removed.
+Merely adjacent and disjoint detections remain. The inspector previews the affected
+old detections and any text that becomes visible outside the new range. This is
+one undoable correction, and saved/reopened reviews keep the old overlaps removed.
 
 Users can dismiss false positives and change a detection's entity type. The
 draft preview updates immediately after corrections and undo; saving regenerates

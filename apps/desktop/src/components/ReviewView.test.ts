@@ -26,7 +26,7 @@ test("review keeps an unknown native code selectable and displays it beside its 
   const { wrapper, cleanup } = await setup(native, ["BILLING_ACCOUNT", "PERSON"]);
   try {
     expect(wrapper.text()).toContain("BILLING_ACCOUNT (BILLING_ACCOUNT)");
-    await wrapper.get("details summary").trigger("click");
+    await wrapper.get('[data-testid="review-output"] mark').trigger("click");
     expect(wrapper.get('[role="option"][aria-label="BILLING_ACCOUNT"]').exists()).toBe(true);
   } finally { cleanup(); }
 });
@@ -152,48 +152,81 @@ test("selection in the masked preview maps to the original and updates the draft
   } finally { window.getSelection()!.removeAllRanges(); cleanup(); }
 });
 
-test("redaction entries show source text and navigate to linked marks in both panes", async () => {
+test("clicking a mark updates the inspector without moving focus or scrolling the page", async () => {
   const scroll = vi.fn();
   const previous = HTMLElement.prototype.scrollIntoView;
   HTMLElement.prototype.scrollIntoView = scroll;
   const { wrapper, cleanup } = await setup(linkedView);
   try {
-    const row = wrapper.get('[data-testid="detection-anna"]');
-    expect(row.text()).toContain("Anna");
-    await wrapper.get('[data-testid="jump-anna"]').trigger("click");
+    const mark = wrapper.get<HTMLElement>('[data-testid="review-output"] mark');
+    mark.element.focus();
+    await mark.trigger("click");
     await flushPromises();
+    expect(wrapper.get('[data-testid="redaction-inspector"]').text()).toContain("Anna");
     expect(wrapper.get('[data-testid="review-original"] mark').classes()).toContain("focused-redaction");
-    expect(wrapper.get('[data-testid="review-output"] mark').classes()).toContain("focused-redaction");
-    expect(scroll).toHaveBeenCalledTimes(2);
-    expect(document.activeElement).toBe(wrapper.get('[data-testid="review-output"] mark').element);
+    expect(document.activeElement).toBe(mark.element);
+    expect(scroll).not.toHaveBeenCalled();
   } finally { HTMLElement.prototype.scrollIntoView = previous; cleanup(); }
 });
 
-test("activating a document mark opens its page and dragging across a mark keeps text selection", async () => {
-  const original_text = Array.from({ length: 21 }, (_, i) => `Name${String(i).padStart(2, "0")}`).join(" ");
-  const detections = Array.from({ length: 21 }, (_, i) => ({ id: `name-${i}`, start: i * 7, end: i * 7 + 6,
-    entity_type: "PERSON" as const, confidence: .9, recognizer: "test", origin: "automatic" as const }));
-  const { wrapper, cleanup } = await setup({ ...view, original_text, detections });
-  const previous = HTMLElement.prototype.scrollIntoView;
-  HTMLElement.prototype.scrollIntoView = vi.fn();
+test("dragging over a mark keeps selection and does not activate its detail controls", async () => {
+  const { wrapper, cleanup } = await setup(linkedView);
   try {
-    const mark = wrapper.findAll('[data-testid="review-output"] mark').at(-1)!;
+    const mark = wrapper.get('[data-testid="review-output"] mark');
     const text = mark.element.firstChild!;
     window.getSelection()!.setBaseAndExtent(text, 1, text, 4);
     await mark.trigger("mouseup");
     await mark.trigger("click");
-    expect(wrapper.get("details").element.open).toBe(false);
-    expect(wrapper.text()).toContain("Auswahl: Position 140–146");
-    // A previous selection must not block explicit keyboard navigation.
+    expect(wrapper.get('[data-testid="redaction-inspector"]').text()).toContain("Auswahl: Position 2–6");
+    expect(wrapper.get('[data-testid="add-redaction"]').text()).toContain("1 Schwärzung ersetzen");
+    expect(wrapper.find('[data-testid="edit-range"]').exists()).toBe(false);
+    // Keyboard activation explicitly selects the detection even with a stale text selection.
     await mark.trigger("keydown", { key: "Enter" });
-    await flushPromises();
-    expect(wrapper.get("details").element.open).toBe(true);
-    expect(wrapper.text()).toContain("Seite 2 von 2");
-    const row = wrapper.get('[data-testid="detection-name-20"]');
-    expect(row.text()).toContain("Name20");
-    expect(row.classes()).toContain("focused-redaction");
-    expect(document.activeElement).toBe(row.element);
-  } finally { window.getSelection()!.removeAllRanges(); HTMLElement.prototype.scrollIntoView = previous; cleanup(); }
+    expect(wrapper.get('[data-testid="edit-range"]').exists()).toBe(true);
+  } finally { window.getSelection()!.removeAllRanges(); cleanup(); }
+});
+
+test("replacing a selection across two redactions removes both old spans including their overshoot", async () => {
+  const value: ReviewViewData = { ...view, original_text: "Hans Gehring, wohnt in München", detections: [
+    { id: "first", start: 0, end: 4, entity_type: "FIRSTNAME", confidence: .9, recognizer: "test", origin: "automatic" },
+    { id: "wide", start: 7, end: 19, entity_type: "LASTNAME", confidence: .9, recognizer: "test", origin: "automatic" },
+  ] };
+  const { review, wrapper, cleanup } = await setup(value);
+  try {
+    const original = wrapper.get('[data-testid="review-original"]');
+    const marks = original.findAll('mark');
+    window.getSelection()!.setBaseAndExtent(marks[0]!.element.firstChild!, 0, marks[1]!.element.firstChild!, 5);
+    await original.trigger('mouseup');
+    const panel = wrapper.get('[data-testid="redaction-inspector"]');
+    expect(panel.text()).toContain('Hans Gehring');
+    expect(panel.text()).toContain(', wohnt');
+    expect(wrapper.get('[data-testid="add-redaction"]').text()).toContain('2 Schwärzungen ersetzen');
+    await wrapper.get('[data-testid="add-redaction"]').trigger('click');
+    expect(review.active.value).toHaveLength(1);
+    expect(review.decisions.value.dismissed_ids).toEqual(['first', 'wide']);
+    expect(wrapper.get('[data-testid="review-output"]').text()).toBe('<PERSON_1>, wohnt in München');
+    await wrapper.get('[data-testid="undo-review"]').trigger('click');
+    expect(review.active.value.map(d => d.id)).toEqual(['first', 'wide']);
+  } finally { window.getSelection()!.removeAllRanges(); cleanup(); }
+});
+
+test("range editing exposes exact original characters and replaces a too-wide detection", async () => {
+  const { review, wrapper, cleanup } = await setup({ ...linkedView, detections: [
+    { ...linkedView.detections[0]!, end: 10 },
+  ] });
+  try {
+    await wrapper.get('[data-testid="review-output"] mark').trigger('click');
+    await wrapper.get('[data-testid="edit-range"]').trigger('click');
+    const input = wrapper.get<HTMLTextAreaElement>('[data-testid="range-text"]');
+    expect(input.element.value).toBe(linkedView.original_text);
+    expect(input.element.value.slice(input.element.selectionStart, input.element.selectionEnd)).toBe('Anna und');
+    input.element.setSelectionRange(3, 7); await input.trigger('select');
+    await wrapper.get('[data-testid="add-redaction"]').trigger('click');
+    expect(review.active.value).toHaveLength(1);
+    expect(review.active.value[0]).toMatchObject({ start: 2, end: 6 });
+    expect(review.decisions.value.dismissed_ids).toEqual(['anna']);
+    expect(wrapper.get('[data-testid="review-output"]').text()).toBe(linkedView.body.trim());
+  } finally { cleanup(); }
 });
 
 test("keyboard selection uses the masked preview while original redactions remain visible", async () => {
@@ -261,4 +294,32 @@ test("the million-code-point limit keeps original highlights and maps a native p
   expect(wrapper.text()).toContain("Auswahl: Position 999996–1000000");
   console.info(`Synthetic 1M code points: mount ${(rendered - started).toFixed(1)} ms; mode switch + selection ${(performance.now() - rendered).toFixed(1)} ms (jsdom; native timing measured separately)`);
   cleanup();
+});
+
+test("exiting original range edit preserves original and preview positions", async () => {
+ const {wrapper,cleanup}=await setup({...view,original_text:"Anna und Jörg",detections:[{id:"a",start:0,end:4,entity_type:"PERSON",confidence:.9,recognizer:"test",origin:"automatic"}]});
+ try {
+ const original=wrapper.get<HTMLElement>('[data-testid="review-original"]');
+ const output=wrapper.get<HTMLElement>('[data-testid="review-output"]');
+ original.element.scrollTop=640; output.element.scrollTop=320;
+ await output.get('mark').trigger('click');
+ await wrapper.get('[data-testid="edit-range"]').trigger('click');
+ expect(wrapper.get<HTMLTextAreaElement>('[data-testid="range-text"]').element.scrollTop).toBe(640);
+ await wrapper.get('[data-testid="keyboard-select"]').trigger('click');
+ expect(wrapper.get<HTMLElement>('[data-testid="review-original"]').element.scrollTop).toBe(640);
+ expect(wrapper.get<HTMLElement>('[data-testid="review-output"]').element.scrollTop).toBe(320);
+ } finally {cleanup();}
+});
+test("keyboard activation survives the keyup event after a previous selection", async () => {
+ const {wrapper,cleanup}=await setup({...view,original_text:"Anna und Jörg",detections:[{id:"a",start:0,end:4,entity_type:"PERSON",confidence:.9,recognizer:"test",origin:"automatic"}]});
+ try {
+ const mark=wrapper.get('[data-testid="review-output"] mark');
+ const text=mark.element.firstChild!;
+ window.getSelection()!.setBaseAndExtent(text,1,text,4);
+ await mark.trigger('mouseup');
+ await mark.trigger('keydown',{key:'Enter'});
+ expect(wrapper.find('[data-testid="edit-range"]').exists()).toBe(true);
+ await mark.trigger('keyup',{key:'Enter'});
+ expect(wrapper.find('[data-testid="edit-range"]').exists()).toBe(true);
+ } finally {window.getSelection()!.removeAllRanges();cleanup();}
 });
