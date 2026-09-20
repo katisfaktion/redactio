@@ -93,6 +93,9 @@ More capable implementation tools do not change the app's offline contract.
 The German-language UI has three main views: documents/run status, document
 review, and settings. This retains the prototype's simple folder-based desktop
 workflow. Screens show product language rather than implementation milestones.
+Use consistent Onyx spacing, aligned form actions, and responsive content sections.
+Provide the native Onyx dark appearance by default with a remembered light/dark/
+system appearance choice.
 An always-visible pair selector identifies the active collection. Document
 lists, run summaries, review views, and pair-specific settings show its name.
 
@@ -168,7 +171,11 @@ unsaved review edits requires saving or explicitly discarding those edits first.
 
 Cancel finishes the current bounded operation or terminates a stalled sidecar
 after its deadline, then stops scheduling work. Results already committed remain
-usable. A final summary distinguishes completed, completed-with-errors,
+usable. Refresh the selected pair's document list automatically after an
+authoritative run summary, including partial or cancelled runs, so current
+results can be opened for review without another manual scan. Review saves also
+refresh statuses without clearing the document picker during the refresh.
+A final summary distinguishes completed, completed-with-errors,
 cancelled, and failed runs. Counts use the same discovered-file denominator:
 processed + skipped + failed + unprocessed = discovered; warned is a subset of
 processed and is not added again. Display failed paths only in the local UI.

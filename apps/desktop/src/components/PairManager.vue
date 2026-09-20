@@ -135,16 +135,23 @@ async function remove(pairId: string) {
 </template>
 
 <style scoped>
-.pair-manager, .management, .add-pair { display: grid; gap: var(--onyx-spacing-lg); }
+.pair-manager, .management, .add-pair { display: grid; gap: var(--onyx-spacing-lg); min-width: 0; }
 .management[open] { padding-block-start: var(--onyx-spacing-md); }
 .management summary { cursor: pointer; font-weight: var(--onyx-font-weight-semibold); }
 .pairs { display: grid; gap: var(--onyx-spacing-md); list-style: none; margin: 0; padding: 0; }
-.pairs li, .pair-actions, .folder-choice { align-items: center; display: flex; flex-wrap: wrap; gap: var(--onyx-spacing-sm); justify-content: space-between; }
-.pairs small { display: block; }
+.pairs li { display: grid; gap: var(--onyx-spacing-md); padding-block: var(--onyx-spacing-md); border-bottom: 1px solid var(--onyx-color-component-border-neutral); }
+.pair-actions, .folder-choice { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--onyx-spacing-sm); }
+.pair-actions :deep(.onyx-input) { flex: 1 1 16rem; max-width: 28rem; }
+.folder-choice span { flex-basis: 100%; overflow-wrap: anywhere; }
+.pairs small { display: block; overflow-wrap: anywhere; color: var(--onyx-color-text-icons-neutral-medium); }
+.add-pair > :deep(.onyx-input) { max-width: 32rem; }
+.add-pair > :deep(.onyx-button) { justify-self: start; }
 .hint { color: var(--onyx-color-text-icons-neutral-medium); font-size: var(--onyx-font-size-sm); }
+h2, h3, p { margin: 0; }
 @media (min-width: 700px) {
-  .pair-manager { grid-template-columns: auto minmax(12rem, 1fr) auto; align-items: center; gap: var(--onyx-spacing-md); }
+  .pair-manager { grid-template-columns: auto minmax(12rem, 28rem) 1fr; align-items: end; gap: var(--onyx-spacing-lg); }
   .pair-manager h2 { font-size: var(--onyx-font-size-lg); }
-  .management[open], .management:not(details) { grid-column: 1 / -1; }
+  .management { justify-self: end; }
+  .management[open], .management:not(details) { grid-column: 1 / -1; justify-self: stretch; }
 }
 </style>

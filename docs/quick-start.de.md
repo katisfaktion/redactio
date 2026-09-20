@@ -76,6 +76,10 @@ Markdown-Metadaten; die interne Prüfung behält ihre benötigten Positionen.
 Ergebnisse dieses Paars veraltet. Auch ein Verarbeitungsupdate kann erneute
 Verarbeitung und Prüfung erfordern. Das bloße Auswählen oder Umbenennen tut dies nicht.
 
+Über **Erscheinungsbild** im Kopfbereich zwischen **Dunkel**, **Hell** und **Wie
+Windows** wählen. Die Auswahl bleibt beim nächsten Start erhalten. Ohne gespeicherte
+Auswahl startet Redactio im dunklen Onyx-Design.
+
 ## 4. Dokumente verarbeiten und Fehler behandeln
 
 Unter **Dokumente** zuerst **Quellordner einlesen** wählen. Die Übersicht zeigt
@@ -95,8 +99,10 @@ Operation beendet oder abgebrochen ist. Bereits gespeicherte Ergebnisse bleiben
 erhalten. Die Übersicht unterscheidet verarbeitet, übersprungen, fehlgeschlagen
 und noch nicht verarbeitet. Nach Behebung der Ursache fehlgeschlagene Dateien
 über **Fehlgeschlagene Dokumente erneut versuchen** gezielt erneut versuchen.
-Nach der Verarbeitung **Quellordner einlesen** wählen, um den aktuellen Stand
-und die Schaltflächen zur Prüfung zu sehen. Eine Zeitüberschreitung ist ein Fehler, kein Erfolg;
+Nach der Verarbeitung aktualisiert sich die Dokumentliste automatisch. Über
+**doc-… prüfen** ein aktuelles Ergebnis direkt öffnen; ein erneutes Einlesen ist
+nicht nötig. Auch nach dem Speichern einer Prüfung werden die Zustände automatisch
+aktualisiert, und die Auswahl **Dokument prüfen** bleibt verfügbar. Eine Zeitüberschreitung ist ein Fehler, kein Erfolg;
 die Initialisierung ist auf 180 Sekunden, eine Dokumentanfrage auf 120 Sekunden begrenzt.
 
 Arbeitsausgaben nicht außerhalb von Redactio bearbeiten: geänderte Ausgabedateien

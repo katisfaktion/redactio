@@ -103,10 +103,16 @@ const errorLabels: Record<string, string> = {
 </template>
 
 <style scoped>
-.run-panel { display: grid; gap: var(--onyx-spacing-md); }
+.run-panel { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--onyx-spacing-sm) var(--onyx-spacing-lg); padding: var(--onyx-spacing-md); background: var(--onyx-color-base-background-tinted); border: 1px solid var(--onyx-color-component-border-neutral); border-radius: var(--onyx-radius-md); }
 h2, p, ul { margin-block: 0; }
+h2 { font-size: var(--onyx-font-size-lg); }
+.run-panel > :is(progress, ul, .error) { grid-column: 1 / -1; }
 progress { width: 100%; accent-color: var(--onyx-color-text-icons-primary-intense); }
-.counts { display: flex; flex-wrap: wrap; gap: var(--onyx-spacing-md); padding: 0; list-style: none; }
+.counts { display: flex; flex-wrap: wrap; gap: var(--onyx-spacing-sm) var(--onyx-spacing-lg); padding: 0; list-style: none; color: var(--onyx-color-text-icons-neutral-medium); }
 .error { color: var(--onyx-color-text-icons-danger-intense); }
-.run-panel > :last-child { justify-self: start; }
+.run-panel > :last-child { grid-column: 2; grid-row: 1 / 3; align-self: center; justify-self: start; }
+@media (max-width: 650px) {
+  .run-panel { grid-template-columns: minmax(0, 1fr); }
+  .run-panel > :last-child { grid-column: 1; grid-row: auto; }
+}
 </style>

@@ -86,7 +86,7 @@ function submit(preview = false) {
         :options="modelOptions" :disabled="busy" :hide-clear-icon="true" />
       <p>Modelle werden ausschließlich lokal verwendet. Fehlende Modelle werden nicht heruntergeladen.</p>
       <p v-if="draft.model === biomedbert">BiomedBERT läuft lokal auf der CPU; das erste Laden kann einen Moment dauern.</p>
-      <fieldset :disabled="busy">
+      <fieldset class="builtin-entities" :disabled="busy">
         <legend>Automatische Erkennung</legend>
         <OnyxCheckbox v-for="option in builtins" :key="option.value" :data-testid="`entity-${option.value}`"
           :label="option.label" :value="option.value" :model-value="draft.enabled_entities.includes(option.value)"
@@ -141,7 +141,12 @@ function submit(preview = false) {
 
 <style scoped>
 .detection-settings, form, fieldset { display: grid; gap: var(--onyx-spacing-md); }
-fieldset { margin: 0; border: var(--onyx-1px-in-rem) solid var(--onyx-color-component-border-neutral); padding: var(--onyx-spacing-md); min-width: 0; }
+fieldset { margin: 0; border: var(--onyx-1px-in-rem) solid var(--onyx-color-component-border-neutral); border-radius: var(--onyx-radius-md); padding: var(--onyx-spacing-lg); min-width: 0; }
+legend { padding-inline: var(--onyx-spacing-xs); font-weight: var(--onyx-font-weight-semibold); }
+.builtin-entities { grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: var(--onyx-spacing-sm) var(--onyx-spacing-lg); }
+fieldset > :deep(.onyx-button) { justify-self: start; }
+.detection-settings > h2, h3 { margin: 0; }
+form > h3 { margin-block-start: var(--onyx-spacing-md); }
 .actions { display: flex; flex-wrap: wrap; gap: var(--onyx-spacing-sm); }
 p { margin: 0; }
 </style>

@@ -115,6 +115,38 @@ test("document changes use the same save/discard/stay guard", async () => {
   wrapper.unmount();
 });
 
+test("save and continue opens the next review before starting the queued list refresh", async () => {
+  const { wrapper, review } = await setup();
+  review.notes.value = "save before doc two";
+  wrapper.getComponent('[data-testid="review-document-select"]').vm.$emit("update:modelValue", "doc-0002");
+  await flushPromises();
+
+  let finishOpen!: () => void;
+  vi.mocked(reviewApi.open).mockImplementationOnce(key => new Promise(resolve => {
+    finishOpen = () => resolve({ ...view, key });
+  }));
+  let finishRefresh!: (report: Awaited<ReturnType<typeof pairApi.scanPair>>) => void;
+  vi.mocked(pairApi.scanPair).mockImplementationOnce(() => new Promise(resolve => { finishRefresh = resolve; }));
+  await wrapper.get('[data-testid="leave-save"]').trigger("click");
+  await flushPromises();
+
+  expect(review.key.value?.doc_id).toBe("doc-0002");
+  expect(review.busy.value).toBe(true);
+  expect(pairApi.scanPair).toHaveBeenCalledTimes(1);
+
+  finishOpen(); await flushPromises();
+  expect(pairApi.scanPair).toHaveBeenCalledTimes(2);
+  expect(wrapper.text()).toContain("Dokumentliste wird aktualisiert");
+  expect(wrapper.getComponent('[data-testid="review-document-select"]').props("disabled")).toBe(true);
+
+  finishRefresh({ files: [{ doc_id: "doc-0002", relative_path: "doc-0002.docx", size_bytes: 5, mtime: null,
+    source_hash_sha256: "a".repeat(64), review_status: "pending", state: "current" }], errors: [] });
+  await flushPromises();
+  expect(wrapper.text()).not.toContain("Dokumentliste wird aktualisiert");
+  expect(wrapper.getComponent('[data-testid="review-document-select"]').props("disabled")).toBe(false);
+  wrapper.unmount();
+});
+
 test("native close can stay, save then close, and removes its listener on unmount", async () => {
   const { wrapper, review, save, close, unlisten } = await setup();
   review.notes.value = "private note";
@@ -186,13 +218,38 @@ test("export uses the dirty-review guard and captures keys before deferred navig
 });
 
 
-test("a saved review invalidates the matching list projection", async () => {
-  const { wrapper, review } = await setup();
+test("a saved review locks host operations while refreshing without dropping the document selector", async () => {
+  const { wrapper, review, save } = await setup();
+  const options = () => wrapper.getComponent('[data-testid="review-document-select"]').props("options");
+  expect(options()).toHaveLength(2);
   expect(wrapper.getComponent(DocumentList).text()).toContain("Ausstehend");
+  let finishRefresh!: (report: Awaited<ReturnType<typeof pairApi.scanPair>>) => void;
+  vi.mocked(pairApi.scanPair).mockImplementationOnce(() => new Promise(resolve => { finishRefresh = resolve; }));
   review.notes.value = "private change";
   expect(await review.save()).toBe(true);
   await flushPromises();
   expect(wrapper.getComponent(DocumentList).text()).not.toContain("Ausstehend");
   expect(wrapper.getComponent(DocumentList).emitted("invalidated")).toHaveLength(1);
+  expect(wrapper.getComponent(DocumentList).emitted("busy")?.at(-1)).toEqual([true]);
+  expect(options()).toHaveLength(2);
+  review.notes.value = "another change";
+  await flushPromises();
+  expect(wrapper.text()).toContain("Dokumentliste wird aktualisiert");
+  expect(wrapper.getComponent('[data-testid="review-document-select"]').props("disabled")).toBe(true);
+  expect(wrapper.getComponent(PairManager).props("busy")).toBe(true);
+  expect(wrapper.get('[data-testid="save-review"]').attributes("disabled")).toBeDefined();
+  expect(wrapper.get('[data-testid="approve-review"]').attributes("disabled")).toBeDefined();
+  expect(save).toHaveBeenCalledTimes(1);
+
+  finishRefresh({ files: [{ doc_id: "doc-0001", relative_path: "doc-0001.docx", size_bytes: 5, mtime: null,
+    source_hash_sha256: "a".repeat(64), review_status: "approved", state: "current" }], errors: [] });
+  await flushPromises();
+  expect(wrapper.getComponent(DocumentList).text()).toContain("Freigegeben");
+  expect(options()).toEqual([{ value: "doc-0001", label: "doc-0001 · doc-0001.docx" }]);
+  expect(wrapper.text()).not.toContain("Dokumentliste wird aktualisiert");
+  expect(wrapper.getComponent('[data-testid="review-document-select"]').props("disabled")).toBe(false);
+  expect(wrapper.getComponent(PairManager).props("busy")).toBe(false);
+  expect(wrapper.get('[data-testid="save-review"]').attributes("disabled")).toBeUndefined();
+  expect(wrapper.get('[data-testid="approve-review"]').attributes("disabled")).toBeUndefined();
   wrapper.unmount();
 });

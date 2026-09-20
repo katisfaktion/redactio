@@ -19,9 +19,9 @@ const report: ScanReport = {
   errors: [],
 };
 
-function mountList(scan: (pairId: string) => Promise<ScanReport>, pairId = pairA) {
+function mountList(scan: (pairId: string) => Promise<ScanReport>, pairId = pairA, onBusy?: (value: boolean) => void) {
   return mount(DocumentList, {
-    props: { pairId, scan },
+    props: { pairId, scan, onBusy },
     global: {
       plugins: [createOnyx({
         i18n: { locale: ref("de-DE"), messages: { "de-DE": onyxDeDE } },
@@ -40,6 +40,7 @@ test("an explicit scan displays the selected pair's documents in the table", asy
   expect(wrapper.text()).toContain("nested/document.docx");
   expect(wrapper.text()).toContain("Neu");
   expect(wrapper.text()).toContain("2026");
+  expect(wrapper.emitted("busy")).toEqual([[true], [false]]);
 });
 
 test("no eligible documents is distinct from scan and per-file failures", async () => {
@@ -60,6 +61,7 @@ test("no eligible documents is distinct from scan and per-file failures", async 
   await flushPromises();
   expect(failed.get('[role="alert"]').text()).toContain("Quellordner konnte nicht eingelesen werden");
   expect(failed.text()).not.toContain("Keine geeigneten DOCX-Dokumente gefunden");
+  expect(failed.emitted("busy")).toEqual([[true], [false]]);
 });
 
 test("a late scan response cannot populate a newly selected pair", async () => {
@@ -114,14 +116,79 @@ test("export emits a copied full-key selection and clears it on pair changes", a
 
 test("review labels distinguish validated states and invalidate after a pair-owned change", async () => {
   const statuses = ["pending", "approved", "rejected", "needs-rework"] as const;
-  const wrapper = mountList(async () => ({ files: statuses.map((review_status, index) => ({
-    ...report.files[0]!, relative_path: `${index}.docx`, doc_id: `doc-000${index + 1}`, state: "current", review_status,
-  })), errors: [] }));
+  const refreshed = { files: [{
+    ...report.files[0]!, relative_path: "0.docx", doc_id: "doc-0001", state: "current" as const, review_status: "approved" as const,
+  }], errors: [] };
+  const scan = vi.fn()
+    .mockResolvedValueOnce({ files: statuses.map((review_status, index) => ({
+      ...report.files[0]!, relative_path: `${index}.docx`, doc_id: `doc-000${index + 1}`, state: "current", review_status,
+    })), errors: [] })
+    .mockResolvedValueOnce(refreshed);
+  const wrapper = mountList(scan);
   await wrapper.get("button").trigger("click");
   for (const label of ["Ausstehend", "Freigegeben", "Abgelehnt", "Nacharbeit erforderlich"]) expect(wrapper.text()).toContain(label);
   await wrapper.setProps({ invalidation: { sync_pair_id: pairB, doc_id: "doc-0001" } });
   expect(wrapper.text()).toContain("Freigegeben");
+  await wrapper.setProps({ invalidation: { sync_pair_id: pairA, doc_id: "missing" } });
+  expect(scan).toHaveBeenCalledTimes(1);
   await wrapper.setProps({ invalidation: { sync_pair_id: pairA, doc_id: "doc-0001" } });
-  expect(wrapper.text()).not.toContain("Freigegeben");
+  await flushPromises();
+  expect(scan).toHaveBeenCalledTimes(2);
+  expect(wrapper.text()).toContain("Freigegeben");
+  expect(wrapper.text()).not.toContain("Nacharbeit erforderlich");
   expect(wrapper.emitted("invalidated")).toHaveLength(1);
+});
+
+test("a matching invalidation waits until global work finishes before refreshing", async () => {
+  const initial = { files: [{ ...report.files[0]!, doc_id: "doc-0001", state: "current" as const, review_status: "pending" as const }], errors: [] };
+  const refreshed = { files: [{ ...initial.files[0]!, review_status: "approved" as const }], errors: [] };
+  const scan = vi.fn().mockResolvedValueOnce(initial).mockResolvedValueOnce(refreshed);
+  const wrapper = mountList(scan);
+  await wrapper.get("button").trigger("click");
+
+  await wrapper.setProps({ disabled: true, invalidation: { sync_pair_id: pairA } });
+  expect(scan).toHaveBeenCalledTimes(1);
+  expect(wrapper.text()).not.toContain("Ausstehend");
+  expect(wrapper.emitted("invalidated")).toHaveLength(1);
+
+  await wrapper.setProps({ disabled: false });
+  await flushPromises();
+  expect(scan).toHaveBeenCalledTimes(2);
+  expect(wrapper.text()).toContain("Freigegeben");
+});
+
+test("changing pairs cancels a deferred invalidation refresh", async () => {
+  const scan = vi.fn(async () => ({ files: [{ ...report.files[0]!, doc_id: "doc-0001", state: "current" as const }], errors: [] }));
+  const wrapper = mountList(scan);
+  await wrapper.get("button").trigger("click");
+  await wrapper.setProps({ disabled: true, invalidation: { sync_pair_id: pairA } });
+
+  await wrapper.setProps({ pairId: pairB, disabled: false });
+  await flushPromises();
+  expect(scan).toHaveBeenCalledTimes(1);
+
+  await wrapper.get("button").trigger("click");
+  expect(scan).toHaveBeenLastCalledWith(pairB);
+});
+
+test("pair changes and unmounts release an active scan", async () => {
+  let finishPair!: (value: ScanReport) => void;
+  const pairScan = new Promise<ScanReport>(resolve => { finishPair = resolve; });
+  const changed = mountList(() => pairScan);
+  await changed.get("button").trigger("click");
+  expect(changed.emitted("busy")).toEqual([[true]]);
+  await changed.setProps({ pairId: pairB });
+  expect(changed.emitted("busy")).toEqual([[true], [false]]);
+  finishPair(report); await flushPromises();
+  expect(changed.emitted("scanned")).toBeUndefined();
+
+  let finishUnmount!: (value: ScanReport) => void;
+  const unmountScan = new Promise<ScanReport>(resolve => { finishUnmount = resolve; });
+  const onBusy = vi.fn();
+  const unmounted = mountList(() => unmountScan, pairA, onBusy);
+  await unmounted.get("button").trigger("click");
+  unmounted.unmount();
+  expect(onBusy.mock.calls).toEqual([[true], [false]]);
+  finishUnmount(report); await flushPromises();
+  expect(unmounted.emitted("scanned")).toBeUndefined();
 });

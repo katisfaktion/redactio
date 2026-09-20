@@ -3,6 +3,7 @@ import { OnyxAppLayout, OnyxButton, OnyxModal, OnyxPageLayout, OnyxSelect } from
 import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from "vue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { confirm } from "@tauri-apps/plugin-dialog";
+import AppearanceSelect from "./components/AppearanceSelect.vue";
 import MappingRecovery from "./components/MappingRecovery.vue";
 import DocumentList from "./components/DocumentList.vue";
 import PairManager from "./components/PairManager.vue";
@@ -36,10 +37,11 @@ const run = useRun(selectedId);
 const documentInvalidation = shallowRef<{ sync_pair_id: string; doc_id?: string } | null>(null);
 watch(review.saved, key => { if (key) documentInvalidation.value = { ...key }; });
 watch(run.summary, summary => { if (summary) documentInvalidation.value = { sync_pair_id: summary.sync_pair_id }; });
-function invalidateDocuments() { scanned.value = false; reviewDocuments.value = []; }
-const scanned = ref(false), confirming = ref(false);
+function invalidateDocuments() { scanned.value = false; }
+const scanned = ref(false), scanning = ref(false), confirming = ref(false);
+function setScanning(value: boolean) { scanning.value = value; }
 const exportSelection = shallowRef<{ pairId: string; pairName: string; keys: DocumentKey[] } | null>(null);
-const busy = computed(() => !!exportSelection.value || pairs.busy.value || run.busy.value || detection.busy.value || review.busy.value || confirming.value);
+const busy = computed(() => scanning.value || !!exportSelection.value || pairs.busy.value || run.busy.value || detection.busy.value || review.busy.value || confirming.value);
 const leaveAction = shallowRef<(() => void | Promise<void>) | null>(null);
 const closeError = ref("");
 function guard(action: () => void | Promise<void>) {
@@ -94,7 +96,7 @@ onMounted(async () => {
 onUnmounted(() => { disposed = true; unlistenClose?.(); leaveAction.value = null; });
 const emptyCounts = { discovered: 0, processed: 0, skipped: 0, failed: 0, unprocessed: 0, warned: 0 };
 watch(selectedId, () => { scanned.value = false; reviewDocuments.value = []; review.clear(); });
-watch(() => pairs.selectedPair.value?.processing_revision, () => { scanned.value = false; });
+watch(() => pairs.selectedPair.value?.processing_revision, () => { scanned.value = false; reviewDocuments.value = []; });
 const auditPath = ref("");
 const auditError = ref(false);
 async function loadAuditLocation() {
@@ -132,10 +134,13 @@ const errorText: Record<string, string> = {
 <template>
   <OnyxAppLayout>
     <OnyxPageLayout>
-      <main class="shell">
-        <header>
-          <p class="eyebrow">Redactio</p>
-          <h1>Dokumente sicher schwärzen</h1>
+      <main class="shell" :class="{ 'shell--review': view === 'review' }">
+        <header class="app-header">
+          <div class="app-title">
+            <p v-if="view !== 'review'" class="eyebrow">Redactio</p>
+            <h1>{{ view === 'review' ? "Redactio" : "Dokumente sicher schwärzen" }}</h1>
+          </div>
+          <AppearanceSelect class="appearance" />
         </header>
 
         <section v-if="startupError" class="error" role="alert">
@@ -158,42 +163,50 @@ const errorText: Record<string, string> = {
           >
             <template #context><small v-if="view === 'review'">Prüfung: {{ review.key.value?.doc_id }}</small></template>
           </PairManager>
-          <nav aria-label="Ansichten" class="view-navigation">
-            <OnyxButton data-testid="documents-nav" label="Dokumente" type="button" :mode="view === 'documents' ? 'default' : 'outline'" :aria-current="view === 'documents' ? 'page' : undefined" :disabled="busy" @click="changeView('documents')" />
-            <OnyxButton data-testid="settings-nav" label="Einstellungen" type="button" :mode="view === 'settings' ? 'default' : 'outline'" :aria-current="view === 'settings' ? 'page' : undefined" :disabled="busy" @click="changeView('settings')" />
-          </nav>
+          <div class="view-switcher">
+            <nav aria-label="Ansichten" class="view-navigation">
+              <OnyxButton data-testid="documents-nav" label="Dokumente" type="button" :mode="view === 'documents' ? 'default' : 'outline'" :aria-current="view === 'documents' ? 'page' : undefined" :disabled="busy" @click="changeView('documents')" />
+              <OnyxButton data-testid="settings-nav" label="Einstellungen" type="button" :mode="view === 'settings' ? 'default' : 'outline'" :aria-current="view === 'settings' ? 'page' : undefined" :disabled="busy" @click="changeView('settings')" />
+            </nav>
+            <OnyxSelect v-if="view === 'review' && pairs.selectedPair.value" class="review-picker" data-testid="review-document-select" label="Dokument prüfen" list-label="Verarbeitete Dokumente" :options="reviewDocuments" :model-value="review.key.value?.doc_id" :hide-clear-icon="true" :disabled="busy" @update:model-value="id => typeof id === 'string' && openReview(id)" />
+          </div>
           <p v-if="closeError" role="alert">{{ closeError }}</p>
           <template v-if="view === 'review' && pairs.selectedPair.value">
-            <OnyxSelect data-testid="review-document-select" label="Dokument prüfen" list-label="Verarbeitete Dokumente" :options="reviewDocuments" :model-value="review.key.value?.doc_id" :hide-clear-icon="true" :disabled="busy" @update:model-value="id => typeof id === 'string' && openReview(id)" />
-            <ReviewView :key="`${review.key.value?.sync_pair_id}:${review.key.value?.doc_id}`" :review="review" :pair-name="pairs.selectedPair.value.name" @back="changeView('documents')" />
+            <p v-if="scanning" role="status">Dokumentliste wird aktualisiert …</p>
+            <ReviewView :key="`${review.key.value?.sync_pair_id}:${review.key.value?.doc_id}`" :review="review" :pair-name="pairs.selectedPair.value.name" :disabled="busy" @back="changeView('documents')" />
           </template>
           <p v-if="view === 'documents' && detection.error.value" role="alert">Die Erkennung ist derzeit nicht verfügbar. Prüfen Sie die Modelle und Regeln unter Einstellungen.</p>
           <section v-if="pairs.selectedPair.value" v-show="view === 'documents'" data-testid="document-view" aria-labelledby="documents-heading">
-            <h2 id="documents-heading">Dokumente: {{ pairs.selectedPair.value.name }}</h2>
-            <p>Der Arbeitsordner enthält auch ungeprüfte Ergebnisse. Prüfen Sie Dokumente vor der Weitergabe.</p>
-            <DocumentList :key="`${pairs.selectedPair.value.id}:${pairs.selectedPair.value.processing_revision}`" :pair-id="pairs.selectedPair.value.id" :invalidation="documentInvalidation" :disabled="busy" @invalidated="invalidateDocuments" @scanned="onScanned" @reprocess="reprocess" @review="openReview" @export="openExport" />
-            <RunPanel
-              :pair-name="pairs.selectedPair.value.name"
-              :counts="run.progress.value ?? emptyCounts"
-              :stage="run.progress.value?.stage ?? (run.busy.value ? 'initializing' : null)"
-              :outcome="run.summary.value?.outcome"
-              :cancelling="run.cancelling.value"
-              :disabled="busy || !scanned"
-              :error="run.error.value"
-              :errors="run.summary.value?.errors"
-              :audit-warning="run.summary.value?.audit_warning"
-              @start="run.start()" @cancel="run.cancel()"
-            />
-            <OnyxButton v-if="run.summary.value?.errors.length" label="Fehlgeschlagene Dokumente erneut versuchen" type="button" :disabled="busy" @click="run.start(run.summary.value.errors.map((failure) => failure.relative_path))" />
+            <div class="section-heading">
+              <h2 id="documents-heading">Dokumente: {{ pairs.selectedPair.value.name }}</h2>
+              <p>Ordner einlesen, Dokumente verarbeiten und anschließend direkt in der Liste prüfen.</p>
+            </div>
+            <DocumentList :key="`${pairs.selectedPair.value.id}:${pairs.selectedPair.value.processing_revision}`" :pair-id="pairs.selectedPair.value.id" :invalidation="documentInvalidation" :disabled="busy || !!leaveAction" @busy="setScanning" @invalidated="invalidateDocuments" @scanned="onScanned" @reprocess="reprocess" @review="openReview" @export="openExport">
+              <RunPanel
+                :pair-name="pairs.selectedPair.value.name"
+                :counts="run.progress.value ?? emptyCounts"
+                :stage="run.progress.value?.stage ?? (run.busy.value ? 'initializing' : null)"
+                :outcome="run.summary.value?.outcome"
+                :cancelling="run.cancelling.value"
+                :disabled="busy || !scanned"
+                :error="run.error.value"
+                :errors="run.summary.value?.errors"
+                :audit-warning="run.summary.value?.audit_warning"
+                @start="run.start()" @cancel="run.cancel()"
+              />
+              <OnyxButton v-if="run.summary.value?.errors.length" label="Fehlgeschlagene Dokumente erneut versuchen" type="button" :disabled="busy" @click="run.start(run.summary.value.errors.map((failure) => failure.relative_path))" />
+            </DocumentList>
           </section>
           <section v-if="view === 'settings'" class="settings" aria-label="Einstellungen">
             <DetectionSettings v-if="pairs.selectedPair.value" :pair="pairs.selectedPair.value" :models="detection.models.value" :busy="busy"
               :preview="detection.result.value" :error="detection.error.value" :saved="detection.saved.value"
               @save="detection.save" @preview="detection.preview" />
-            <h2>Protokoll</h2>
-            <p>{{ auditPath }}</p>
-            <OnyxButton label="Protokollordner öffnen" type="button" @click="openAuditFolder" />
-            <p v-if="auditError" role="alert">Der Protokollordner ist derzeit nicht verfügbar.</p>
+            <section class="audit-settings">
+              <h2>Protokoll</h2>
+              <p>{{ auditPath }}</p>
+              <OnyxButton label="Protokollordner öffnen" type="button" @click="openAuditFolder" />
+              <p v-if="auditError" role="alert">Der Protokollordner ist derzeit nicht verfügbar.</p>
+            </section>
           </section>
         </template>
         <ExportDialog v-if="exportSelection" :pair-id="exportSelection.pairId" :pair-name="exportSelection.pairName" :keys="exportSelection.keys" @close="exportSelection = null" />
@@ -215,14 +228,32 @@ const errorText: Record<string, string> = {
 </template>
 
 <style scoped>
-.shell { display: grid; gap: var(--onyx-spacing-lg); }
-.shell { min-height: 100%; padding-block: var(--onyx-spacing-md); }
-.eyebrow { font-weight: var(--onyx-font-weight-semibold); margin: 0 0 var(--onyx-spacing-xs); }
-h1, h2, h3, p { margin-block: 0; }
-:deep(.pair-manager), .error, [data-testid="document-view"] { background: var(--onyx-color-base-background-blank); border: var(--onyx-1px-in-rem) solid var(--onyx-color-component-border-neutral); border-radius: var(--onyx-radius-md); padding: var(--onyx-spacing-xl); }
+.shell { display: grid; align-content: start; gap: var(--onyx-spacing-xl); min-height: 100%; min-width: 0; width: 100%; max-width: 90rem; margin-inline: auto; }
+.app-header { display: flex; justify-content: space-between; align-items: flex-end; flex-wrap: wrap; gap: var(--onyx-spacing-lg); }
+.app-title, .section-heading { display: grid; gap: var(--onyx-spacing-xs); }
+.app-title { flex: 1 1 24rem; }
+.appearance { flex: 0 1 12rem; }
+.shell--review { gap: var(--onyx-spacing-lg); }
+.shell--review .app-title { flex-basis: 12rem; }
+.shell--review :deep(.pair-manager) { padding: var(--onyx-spacing-md); }
+.view-switcher { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--onyx-spacing-md) var(--onyx-spacing-lg); }
+.review-picker { flex: 1 1 24rem; min-width: 0; }
+.eyebrow { font-weight: var(--onyx-font-weight-semibold); color: var(--onyx-color-text-icons-primary-intense); }
+h1 { font-size: clamp(1.5rem, 2.5vw, 2rem); line-height: 1.25; }
+h2 { font-size: 1.25rem; }
+h1, h2, h3, p { margin: 0; }
+:deep(.pair-manager), .error, [data-testid="document-view"], :deep(.review), :deep(.detection-settings), .audit-settings { background: var(--onyx-color-base-background-blank); border: 1px solid var(--onyx-color-component-border-neutral); border-radius: var(--onyx-radius-md); padding: var(--onyx-spacing-lg); min-width: 0; }
+[data-testid="document-view"], .audit-settings, .error { display: grid; gap: var(--onyx-spacing-lg); }
+.section-heading p { color: var(--onyx-color-text-icons-neutral-medium); }
 .error { color: var(--onyx-color-text-icons-danger-intense); }
 .view-navigation { display: flex; flex-wrap: wrap; gap: var(--onyx-spacing-sm); }
 .leave-dialog { display: grid; gap: var(--onyx-spacing-md); padding: var(--onyx-spacing-lg); max-width: 36rem; }
-.settings { display: grid; gap: var(--onyx-spacing-lg); }
-:deep(.pair-manager) { position: sticky; top: 0; z-index: 1; align-self: start; padding: var(--onyx-spacing-md); }
+.settings { display: grid; gap: var(--onyx-spacing-xl); }
+.audit-settings p { overflow-wrap: anywhere; }
+.audit-settings > :deep(.onyx-button) { justify-self: start; }
+:deep(.pair-manager) { align-self: start; }
+@media (max-width: 650px) {
+  .shell { gap: var(--onyx-spacing-lg); }
+  :deep(.pair-manager), [data-testid="document-view"], :deep(.review), :deep(.detection-settings), .audit-settings { padding: var(--onyx-spacing-md); }
+}
 </style>
