@@ -85,13 +85,16 @@ jobs:
           & $env:REDACTIO_TEST_PYTHON scripts/test_prepare_biomedbert.py
           & $env:REDACTIO_TEST_PYTHON -m ruff check --config apps/sidecar/pyproject.toml scripts packaging
           & $env:REDACTIO_TEST_PYTHON -m ruff format --check --config apps/sidecar/pyproject.toml scripts packaging
-          cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check
-          cargo clippy --locked --offline --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
-          # Avoid overlapping large Linux test links after a rust-lld SIGBUS crash.
+          # Keep Linux test artifacts within the hosted runner's disk budget.
           if ($IsLinux) {
             $env:CARGO_BUILD_JOBS = '1'
+            $env:CARGO_INCREMENTAL = '0'
+            $env:CARGO_PROFILE_DEV_DEBUG = '0'
+            $env:CARGO_PROFILE_TEST_DEBUG = '0'
             df -h . $env:RUNNER_TEMP
           }
+          cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check
+          cargo clippy --locked --offline --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
           cargo test --locked --offline --manifest-path apps/desktop/src-tauri/Cargo.toml
           $env:REDACTIO_REAL_SIDECAR_PYTHON = $env:REDACTIO_TEST_PYTHON
           $env:REDACTIO_REAL_MODEL_DIR = $env:REDACTIO_MODEL_DIR
