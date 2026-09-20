@@ -125,6 +125,56 @@ test("known overlapping spans highlight their union without changing selectable 
   cleanup();
 });
 
+test("overlapping detections are one navigation stop with visible, individually removable alternatives", async () => {
+  const original_text = "09/1981 - 08/1986 Berlin";
+  const { review, wrapper, cleanup } = await setup({ ...view, original_text, detections: [
+    { id: "date", start: 0, end: 7, entity_type: "DATE_TIME", confidence: .8, recognizer: "test", origin: "automatic" },
+    { id: "phone", start: 0, end: 17, entity_type: "PHONE_NUMBER", confidence: .9, recognizer: "test", origin: "automatic" },
+    { id: "city", start: 18, end: 24, entity_type: "CITY", confidence: .9, recognizer: "test", origin: "automatic" },
+  ] });
+  try {
+    const mark = wrapper.get('[data-testid="review-original"] mark');
+    expect(mark.attributes("aria-label")).toContain("2 überlappende Erkennungen");
+    expect(wrapper.get('[data-testid="review-original"]').element.textContent).toBe(original_text);
+    await mark.trigger("click");
+    expect(wrapper.get(".detection-navigation").text()).toContain("1 von 2 Stellen");
+    const conflict = wrapper.get('[aria-label="Überlappende Erkennungen"]');
+    expect(conflict.text()).toContain("Datum und Uhrzeit");
+    expect(conflict.text()).toContain("Telefonnummer");
+    expect(conflict.get('[data-testid="inspect-phone"] mark').text()).toBe("09/1981 - 08/1986");
+    await wrapper.get('[data-testid="next-redaction"]').trigger("click");
+    expect(wrapper.get('[aria-label="Ausgewählte Schwärzung"]').text()).toContain("Berlin");
+    await wrapper.get('[data-testid="previous-redaction"]').trigger("click");
+    await wrapper.get('[data-testid="inspect-phone"]').trigger("click");
+    await wrapper.get('[data-testid="remove-redaction"]').trigger("click");
+    expect(review.decisions.value.dismissed_ids).toEqual(["phone"]);
+    expect(wrapper.find('[aria-label="Überlappende Erkennungen"]').exists()).toBe(false);
+    expect(wrapper.get('[aria-label="Ausgewählte Schwärzung"]').text()).toContain("09/1981");
+    expect(wrapper.get('[data-testid="review-output"]').text()).toBe("<DATE_TIME_1> - 08/1986 <CITY_1>");
+    await wrapper.get('[data-testid="undo-review"]').trigger("click");
+    expect(wrapper.get('[aria-label="Überlappende Erkennungen"]').text()).toContain("2 überlappende Erkennungen");
+  } finally { cleanup(); }
+});
+
+test("identical and transitively overlapping spans remain accessible within their shared location", async () => {
+  const { wrapper, cleanup } = await setup({ ...view, original_text: "abcdefghij", detections: [
+    { id: "a", start: 0, end: 4, entity_type: "PERSON", confidence: .8, recognizer: "test", origin: "automatic" },
+    { id: "duplicate", start: 0, end: 4, entity_type: "LOCATION", confidence: .9, recognizer: "test", origin: "automatic" },
+    { id: "bridge", start: 3, end: 7, entity_type: "PHONE_NUMBER", confidence: .8, recognizer: "test", origin: "automatic" },
+    { id: "tail", start: 6, end: 8, entity_type: "DATE_TIME", confidence: .9, recognizer: "test", origin: "automatic" },
+    { id: "adjacent", start: 8, end: 10, entity_type: "PERSON", confidence: .9, recognizer: "test", origin: "automatic" },
+  ] });
+  try {
+    await wrapper.get('[data-testid="review-output"] mark').trigger("keydown", { key: "Enter" });
+    expect(wrapper.get(".detection-navigation").text()).toContain("1 von 2 Stellen");
+    expect(wrapper.get('[aria-label="Überlappende Erkennungen"]').findAll("button")).toHaveLength(4);
+    await wrapper.get('[data-testid="inspect-tail"]').trigger("click");
+    await wrapper.get('[data-testid="edit-range"]').trigger("click");
+    const input = wrapper.get<HTMLTextAreaElement>('[data-testid="range-text"]');
+    expect(input.element.value.slice(input.element.selectionStart, input.element.selectionEnd)).toBe("gh");
+  } finally { cleanup(); }
+});
+
 const linkedView: ReviewViewData = {
   ...view, original_text: "🙂 Anna und Jörg.", body: "🙂 <PERSON_1> und Jörg.\n",
   detections: [{ id: "anna", start: 2, end: 6, entity_type: "PERSON", confidence: .9, recognizer: "test", origin: "automatic" }],
@@ -167,6 +217,23 @@ test("clicking a mark updates the inspector without moving focus or scrolling th
     expect(document.activeElement).toBe(mark.element);
     expect(scroll).not.toHaveBeenCalled();
   } finally { HTMLElement.prototype.scrollIntoView = previous; cleanup(); }
+});
+
+test("pointer selection restores keyboard access after release, cancellation, and leaving the window", async () => {
+  const { wrapper, cleanup } = await setup(linkedView);
+  try {
+    const mark = wrapper.get('[data-testid="review-original"] mark');
+    for (const finish of ["pointerup", "pointercancel", "blur"]) {
+      mark.element.dispatchEvent(new MouseEvent("pointerdown", { button: 0, bubbles: true }));
+      expect(mark.attributes("tabindex")).toBeUndefined();
+      window.dispatchEvent(new Event(finish));
+      expect(mark.attributes("tabindex")).toBe("0");
+    }
+    await mark.trigger("keydown", { key: "Enter" });
+    expect(wrapper.find('[data-testid="edit-range"]').exists()).toBe(true);
+    mark.element.dispatchEvent(new MouseEvent("pointerdown", { button: 2, bubbles: true }));
+    expect(mark.attributes("tabindex")).toBe("0");
+  } finally { cleanup(); }
 });
 
 test("dragging over a mark keeps selection and does not activate its detail controls", async () => {

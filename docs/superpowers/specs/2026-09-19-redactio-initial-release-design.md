@@ -198,6 +198,13 @@ Explicit previous/next and list navigation scroll only the document panes.
 Selection messages and editing controls never insert content above the panes.
 On narrow windows, the inspector occupies a reserved area below the text panes.
 
+Overlapping detections form one marked location and one previous/next or list
+navigation stop. A visible count distinguishes overlaps in both text panes.
+The inspector lists every contributing detection with its type and exact range
+highlighted in shared context, including identical and transitive overlaps.
+Users can select an individual detection to correct or remove it without
+implicitly dismissing the others. Merely adjacent detections remain separate.
+
 Range correction selects exact characters in the original, including keyboard
 selection. Applying a selected range completely removes every active detection
 that strictly overlaps it and creates exactly one manual detection for the exact

@@ -28,11 +28,13 @@ const warnings: Record<string, string> = {
 const detections = computed(() => [...props.review.active.value].sort((a, b) => a.start - b.start || a.end - b.end || a.id.localeCompare(b.id)));
 const entities = computed(() => [...new Set([...props.entityTypes, ...detections.value.map(item => item.entity_type), "CUSTOM"])]
   .sort().map(entityOption));
-const visibleDetections = computed(() => detections.value.slice(page.value * 20, (page.value + 1) * 20));
 const sourcePoints = computed(() => Array.from(props.review.data.value?.original_text ?? ""));
 const projection = computed(() => projectReview(props.review.data.value?.original_text ?? "", props.review.active.value));
+const locations = computed(() => projection.value.original.filter(part => part.ids.length));
+const visibleLocations = computed(() => locations.value.slice(page.value * 20, (page.value + 1) * 20));
+const byId = computed(() => new Map(detections.value.map(item => [item.id, item])));
 watch(detections, () => {
-  page.value = Math.min(page.value, Math.max(0, Math.ceil(detections.value.length / 20) - 1));
+  page.value = Math.min(page.value, Math.max(0, Math.ceil(locations.value.length / 20) - 1));
   selected.value = null;
   if (!detections.value.some(item => item.id === focused.value)) focused.value = null;
 });
@@ -50,8 +52,10 @@ watch(() => projection.value.text, async () => {
 function excerpt(start: number, end: number) {
   return sourcePoints.value.slice(start, Math.min(end, start + 100)).join("") + (end - start > 100 ? "…" : "");
 }
-const focusedIndex = computed(() => detections.value.findIndex(item => item.id === focused.value));
-const focusedDetection = computed(() => detections.value[focusedIndex.value]);
+const focusedIndex = computed(() => locations.value.findIndex(part => focused.value !== null && part.ids.includes(focused.value)));
+const focusedLocation = computed(() => locations.value[focusedIndex.value]);
+const focusedDetection = computed(() => focused.value === null ? undefined : byId.value.get(focused.value));
+const alternatives = computed(() => focusedLocation.value?.ids.map(id => byId.value.get(id)!) ?? []);
 const overlaps = computed(() => selected.value ? detections.value.filter(item => item.start < selected.value!.end && item.end > selected.value!.start) : []);
 const uncovered = computed(() => {
   if (!selected.value) return [];
@@ -68,13 +72,34 @@ const uncovered = computed(() => {
 const applyLabel = computed(() => overlaps.value.length
   ? `${overlaps.value.length} ${overlaps.value.length === 1 ? "Schwärzung" : "Schwärzungen"} ersetzen` : "Auswahl schwärzen");
 function isFocused(part: ReviewSegment) { return focused.value !== null && part.ids.includes(focused.value); }
+function markLabel(part: ReviewSegment) {
+  return part.ids.length > 1 ? `${part.ids.length} überlappende Erkennungen – Details anzeigen` : "Details zur Schwärzung anzeigen";
+}
+let restorePointerFocus: (() => void) | undefined;
+function preservePointerSelection(event: PointerEvent) {
+  if (event.button !== 0) return;
+  restorePointerFocus?.();
+  const mark = event.currentTarget as HTMLElement;
+  // Chromium stalls a drag at an inline focusable element's leading boundary.
+  // Retain native text selection during the gesture, then restore keyboard access.
+  mark.removeAttribute("tabindex");
+  const finishEvents = ["pointerup", "pointercancel", "blur"];
+  const restore = () => {
+    mark.setAttribute("tabindex", "0");
+    for (const type of finishEvents) window.removeEventListener(type, restore);
+    restorePointerFocus = undefined;
+  };
+  restorePointerFocus = restore;
+  for (const type of finishEvents) window.addEventListener(type, restore);
+}
+onBeforeUnmount(() => restorePointerFocus?.());
 async function showDetection(id: string, fromText = false, event?: Event) {
   if (controlsBusy.value || (event?.type === "click" && !window.getSelection()?.isCollapsed)) return;
-  const index = detections.value.findIndex(item => item.id === id);
+  const index = locations.value.findIndex(part => part.ids.includes(id));
   if (index < 0) return;
   focused.value = id; selected.value = null;
   page.value = Math.floor(index / 20);
-  entity.value = detections.value[index]!.entity_type;
+  entity.value = byId.value.get(id)!.entity_type;
   if (fromText) return; // Inspect in place; never take focus away from a pointer selection.
   keyboard.value = null;
   await nextTick();
@@ -87,8 +112,15 @@ async function showDetection(id: string, fromText = false, event?: Event) {
 }
 function stepDetection(direction: number) {
   const index = focusedIndex.value < 0 ? 0 : focusedIndex.value + direction;
-  const next = detections.value[index];
-  if (next) void showDetection(next.id);
+  const next = locations.value[index];
+  if (next) void showDetection(next.ids[0]!);
+}
+function dismissFocused() {
+  if (controlsBusy.value || !focusedDetection.value) return;
+  const id = focusedDetection.value.id;
+  const remaining = focusedLocation.value?.ids.find(other => other !== id) ?? null;
+  props.review.dismiss(id);
+  focused.value = remaining;
 }
 function changeType(value: unknown) {
   if (controlsBusy.value || !focusedDetection.value || typeof value !== "string" || !value) return;
@@ -214,22 +246,34 @@ function restoreText(event: Event, value: string) {
           <section aria-label="Originaltext">
             <h3>Originaltext</h3>
             <textarea v-if="keyboard === 'original'" ref="originalInput" data-testid="range-text" class="document-text" aria-readonly="true" spellcheck="false" autocomplete="off" aria-label="Bereich im Original korrigieren" aria-describedby="selection-help" :value="review.data.value.original_text" :disabled="controlsBusy" @beforeinput.prevent @paste.prevent @drop.prevent @input="restoreText($event, review.data.value.original_text)" @select="capture('original')" @keyup="capture('original')" @mouseup="capture('original')" />
-            <div v-else ref="original" data-testid="review-original" class="document-text" tabindex="0" aria-label="Originaltext mit Markierungen" @mouseup="capture('original')" @keyup="capture('original')"><template v-for="(part, index) in projection.original" :key="index"><mark v-if="part.ids.length" :class="{ 'focused-redaction': isFocused(part) }" tabindex="0" role="button" aria-label="Details zur Schwärzung anzeigen" @click="showDetection(part.ids[0]!, true, $event)" @keydown.enter.prevent="showDetection(part.ids[0]!, true)" @keydown.space.prevent="showDetection(part.ids[0]!, true)" @keyup.enter.stop @keyup.space.stop>{{ part.text }}</mark><template v-else>{{ part.text }}</template></template></div>
+            <div v-else ref="original" data-testid="review-original" class="document-text" tabindex="0" aria-label="Originaltext mit Markierungen" @mouseup="capture('original')" @keyup="capture('original')"><template v-for="(part, index) in projection.original" :key="index"><mark v-if="part.ids.length" :class="{ 'focused-redaction': isFocused(part), 'overlapping-redaction': part.ids.length > 1 }" :data-overlap-count="part.ids.length" tabindex="0" role="button" @pointerdown="preservePointerSelection" :aria-label="markLabel(part)" :title="markLabel(part)" @click="showDetection(part.ids[0]!, true, $event)" @keydown.enter.prevent="showDetection(part.ids[0]!, true)" @keydown.space.prevent="showDetection(part.ids[0]!, true)" @keyup.enter.stop @keyup.space.stop>{{ part.text }}</mark><template v-else>{{ part.text }}</template></template></div>
           </section>
           <section aria-label="Geschwärzte Vorschau">
             <h3>Geschwärzte Vorschau</h3>
             <!-- WebKit's readonly textarea blocks caret navigation; prevent edits while retaining native selection. -->
             <textarea v-if="keyboard === 'preview'" ref="textarea" data-testid="selection-text" class="document-text" aria-readonly="true" spellcheck="false" autocomplete="off" aria-label="Text in der geschwärzten Vorschau auswählen" aria-describedby="selection-help" :value="projection.text" :disabled="controlsBusy" @beforeinput.prevent @paste.prevent @drop.prevent @input="restoreText($event, projection.text)" @select="capture('preview')" @keyup="capture('preview')" @mouseup="capture('preview')" />
-            <div v-else ref="output" data-testid="review-output" class="document-text" tabindex="0" aria-label="Geschwärzte Vorschau auswählen" @mouseup="capture('preview')" @keyup="capture('preview')"><template v-for="(part, index) in projection.preview" :key="index"><mark v-if="part.ids.length" :class="{ 'focused-redaction': isFocused(part) }" tabindex="0" role="button" aria-label="Details zur Schwärzung anzeigen" @click="showDetection(part.ids[0]!, true, $event)" @keydown.enter.prevent="showDetection(part.ids[0]!, true)" @keydown.space.prevent="showDetection(part.ids[0]!, true)" @keyup.enter.stop @keyup.space.stop>{{ part.text }}</mark><template v-else>{{ part.text }}</template></template></div>
+            <div v-else ref="output" data-testid="review-output" class="document-text" tabindex="0" aria-label="Geschwärzte Vorschau auswählen" @mouseup="capture('preview')" @keyup="capture('preview')"><template v-for="(part, index) in projection.preview" :key="index"><mark v-if="part.ids.length" :class="{ 'focused-redaction': isFocused(part), 'overlapping-redaction': part.ids.length > 1 }" :data-overlap-count="part.ids.length" tabindex="0" role="button" @pointerdown="preservePointerSelection" :aria-label="markLabel(part)" :title="markLabel(part)" @click="showDetection(part.ids[0]!, true, $event)" @keydown.enter.prevent="showDetection(part.ids[0]!, true)" @keydown.space.prevent="showDetection(part.ids[0]!, true)" @keyup.enter.stop @keyup.space.stop>{{ part.text }}</mark><template v-else>{{ part.text }}</template></template></div>
           </section>
         </div>
         <aside data-testid="redaction-inspector" class="inspector" aria-labelledby="inspector-heading">
           <h2 id="inspector-heading">Schwärzungen</h2>
           <div class="actions detection-navigation">
             <OnyxButton data-testid="previous-redaction" label="Vorherige" aria-label="Vorherige Schwärzung" type="button" mode="outline" :disabled="controlsBusy || focusedIndex <= 0" @click="stepDetection(-1)" />
-            <span>{{ focusedIndex < 0 ? detections.length + ' gesamt' : (focusedIndex + 1) + ' von ' + detections.length }}</span>
-            <OnyxButton data-testid="next-redaction" label="Nächste" aria-label="Nächste Schwärzung" type="button" mode="outline" :disabled="controlsBusy || !detections.length || focusedIndex === detections.length - 1" @click="stepDetection(1)" />
+            <span>{{ focusedIndex < 0 ? locations.length : (focusedIndex + 1) + ' von ' + locations.length }}<span class="navigation-unit"> Stellen</span></span>
+            <OnyxButton data-testid="next-redaction" label="Nächste" aria-label="Nächste Schwärzung" type="button" mode="outline" :disabled="controlsBusy || !locations.length || focusedIndex === locations.length - 1" @click="stepDetection(1)" />
           </div>
+          <section v-if="!selected && alternatives.length > 1" class="inspector-section" aria-label="Überlappende Erkennungen">
+            <OnyxTag :label="`${alternatives.length} überlappende Erkennungen`" color="warning" />
+            <p>Erkennung zum Bearbeiten auswählen:</p>
+            <ul class="detections alternatives">
+              <li v-for="item in alternatives" :key="item.id">
+                <button :data-testid="`inspect-${item.id}`" type="button" :aria-pressed="focused === item.id" :disabled="controlsBusy" @click="showDetection(item.id, true)">
+                  <small>{{ entityLabel(item.entity_type) }} ({{ item.entity_type }})</small>
+                  <q><span>{{ excerpt(Math.max(focusedLocation!.start, item.start - 24), item.start) }}</span><mark>{{ excerpt(item.start, item.end) }}</mark><span>{{ excerpt(item.end, Math.min(focusedLocation!.end, item.end + 24)) }}</span></q>
+                </button>
+              </li>
+            </ul>
+          </section>
           <section v-if="selected" class="inspector-section" aria-label="Auswahl korrigieren">
             <h3>Auswahl</h3>
             <q class="excerpt">{{ excerpt(selected.start, selected.end) }}</q>
@@ -239,11 +283,11 @@ function restoreText(event: Event, value: string) {
             <div v-if="uncovered.length"><p>Danach wieder sichtbar:</p><ul class="affected"><li v-for="span in uncovered" :key="`${span.start}:${span.end}`"><q>{{ excerpt(span.start, span.end) }}</q></li></ul></div>
           </section>
           <section v-else-if="focusedDetection" class="inspector-section" aria-label="Ausgewählte Schwärzung">
-            <q class="excerpt">{{ excerpt(focusedDetection.start, focusedDetection.end) }}</q>
+            <q v-if="alternatives.length < 2" class="excerpt">{{ excerpt(focusedDetection.start, focusedDetection.end) }}</q>
             <small>{{ entityLabel(focusedDetection.entity_type) }} ({{ focusedDetection.entity_type }}) · {{ focusedDetection.origin === 'manual' ? 'Manuell' : `Konfidenz ${focusedDetection.confidence === null ? 'unbekannt' : Math.round(focusedDetection.confidence * 100) + ' %'}` }}</small>
             <OnyxSelect :model-value="focusedDetection.entity_type" label="Typ der Schwärzung" list-label="Entitätstypen" :options="entities" :hide-clear-icon="true" :disabled="controlsBusy" @update:model-value="changeType" />
             <OnyxButton data-testid="edit-range" label="Bereich korrigieren" type="button" mode="outline" :disabled="controlsBusy" @click="editRange" />
-            <OnyxButton label="Schwärzung entfernen" type="button" mode="outline" :disabled="controlsBusy" @click="review.dismiss(focusedDetection.id)" />
+            <OnyxButton data-testid="remove-redaction" :label="alternatives.length > 1 ? 'Diese Erkennung entfernen' : 'Schwärzung entfernen'" type="button" mode="outline" :disabled="controlsBusy" @click="dismissFocused" />
           </section>
           <p v-else>Markierte Stelle anklicken oder Text auswählen, um eine Schwärzung zu korrigieren.</p>
           <div v-show="selected || !focusedDetection" class="inspector-section">
@@ -255,16 +299,16 @@ function restoreText(event: Event, value: string) {
           <OnyxButton data-testid="undo-review" label="Korrektur zurücknehmen" type="button" mode="outline" :disabled="controlsBusy || !review.canUndo.value" @click="review.undo" />
           <p class="edit-status" aria-live="polite">{{ review.message.value }}</p>
           <details>
-            <summary>Alle Schwärzungen ({{ detections.length }})</summary>
+            <summary>Alle geschwärzten Stellen ({{ locations.length }})</summary>
             <ul class="detections">
-              <li v-for="item in visibleDetections" :key="item.id" :data-testid="`detection-${item.id}`" :class="{ 'focused-redaction': focused === item.id }">
-                <button :data-testid="`jump-${item.id}`" type="button" :disabled="controlsBusy" @click="showDetection(item.id)"><q>{{ excerpt(item.start, item.end) }}</q><small>{{ entityLabel(item.entity_type) }} ({{ item.entity_type }})</small></button>
+              <li v-for="part in visibleLocations" :key="part.ids[0]" :data-testid="`detection-${part.ids[0]}`" :class="{ 'focused-redaction': isFocused(part) }">
+                <button :data-testid="`jump-${part.ids[0]}`" type="button" :disabled="controlsBusy" @click="showDetection(part.ids[0]!)"><q>{{ excerpt(part.start, part.end) }}</q><small v-for="id in part.ids" :key="id">{{ entityLabel(byId.get(id)!.entity_type) }} ({{ byId.get(id)!.entity_type }})</small><OnyxTag v-if="part.ids.length > 1" :label="`${part.ids.length} überlappende Erkennungen`" color="warning" /></button>
               </li>
             </ul>
-            <div v-if="detections.length > 20" class="actions">
+            <div v-if="locations.length > 20" class="actions">
               <OnyxButton label="Vorherige Seite" type="button" mode="outline" :disabled="controlsBusy || page === 0" @click="page--" />
-              <span>Seite {{ page + 1 }} von {{ Math.ceil(detections.length / 20) }}</span>
-              <OnyxButton label="Weitere Seite" type="button" mode="outline" :disabled="controlsBusy || (page + 1) * 20 >= detections.length" @click="page++" />
+              <span>Seite {{ page + 1 }} von {{ Math.ceil(locations.length / 20) }}</span>
+              <OnyxButton label="Weitere Seite" type="button" mode="outline" :disabled="controlsBusy || (page + 1) * 20 >= locations.length" @click="page++" />
             </div>
           </details>
         </aside>
@@ -303,17 +347,26 @@ textarea.document-text { resize: none; }
 mark { cursor: text; color: var(--onyx-color-text-icons-warning-intense); background: var(--onyx-color-base-warning-200); text-decoration: underline; }
 mark:focus-visible, .focused-redaction { outline: var(--onyx-outline-width) solid var(--onyx-color-component-focus-primary); outline-offset: 2px; }
 mark.focused-redaction { background: var(--onyx-color-base-warning-300); }
+.overlapping-redaction { text-decoration-style: double; }
+/* Generated badges are not document text and do not change selection offsets. */
+.overlapping-redaction::after { content: '×' attr(data-overlap-count); display: inline-block; margin-inline: .2em; padding-inline: .2em; border: 1px solid currentColor; border-radius: var(--onyx-radius-sm); font-size: .75em; font-weight: var(--onyx-font-weight-semibold); line-height: 1; vertical-align: middle; user-select: none; }
 .inspector { display: flex; flex-direction: column; gap: var(--onyx-spacing-md); height: calc(clamp(22rem, 52vh, 50rem) + 2rem); overflow-y: auto; min-width: 0; padding: var(--onyx-spacing-md); border: 1px solid var(--onyx-color-component-border-neutral); border-radius: var(--onyx-radius-sm); background: var(--onyx-color-base-background-blank); scrollbar-gutter: stable; }
 .inspector > * { flex-shrink: 0; }
 .inspector-section { display: grid; gap: var(--onyx-spacing-sm); min-width: 0; }
 .inspector .onyx-button { max-width: 100%; }
 .inspector h2 { font-size: var(--onyx-font-size-lg); }
 .excerpt { display: block; white-space: pre-wrap; overflow-wrap: anywhere; font-weight: var(--onyx-font-weight-semibold); }
-.detection-navigation { justify-content: space-between; font-size: var(--onyx-font-size-sm); }
+.detection-navigation { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: var(--onyx-spacing-xs); text-align: center; font-size: var(--onyx-font-size-sm); }
+.navigation-unit { display: block; }
 .detection-navigation :deep(.onyx-button) { padding-inline: var(--onyx-spacing-xs); }
 .detections { display: grid; gap: var(--onyx-spacing-sm); margin: var(--onyx-spacing-sm) 0; padding: var(--onyx-spacing-xs); list-style: none; }
 .detections button { display: block; width: 100%; text-align: start; background: transparent; color: inherit; font: inherit; padding: var(--onyx-spacing-xs); border: 1px solid var(--onyx-color-component-border-neutral); border-radius: var(--onyx-radius-sm); cursor: pointer; overflow-wrap: anywhere; }
 .detections small { display: block; }
+.alternatives { margin: 0; }
+.alternatives button[aria-pressed="true"] { border-color: var(--onyx-color-component-focus-primary); box-shadow: inset 3px 0 var(--onyx-color-component-focus-primary); }
+.alternatives q { white-space: pre-wrap; }
+.alternatives q > span { color: var(--onyx-color-text-icons-neutral-medium); }
+.alternatives mark { cursor: pointer; }
 .affected { margin: 0; padding-inline-start: var(--onyx-spacing-md); overflow-wrap: anywhere; }
 .warnings { border-inline-start: 4px solid var(--onyx-color-text-icons-warning-intense); padding: var(--onyx-spacing-sm); }
 .additional-actions { align-self: center; }

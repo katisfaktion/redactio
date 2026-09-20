@@ -135,8 +135,15 @@ bleibt zum Vergleich daneben sichtbar. Bereits geschwärzte Angaben erscheinen
 als Platzhalter; eine Auswahl über einen Platzhalter umfasst dessen ganze
 Originalstelle. Die feste Seitenleiste zeigt die Auswahl oder die Details der
 angeklickten Schwärzung; der Text bleibt dabei an seiner Position. **Vorherige**,
-**Nächste** und **Alle Schwärzungen** navigieren ausdrücklich zur jeweiligen Stelle.
+**Nächste** und **Alle geschwärzten Stellen** navigieren ausdrücklich zur jeweiligen Stelle.
 Auf schmalen Fenstern stehen dieselben Steuerelemente unter den Textansichten.
+
+Überlappende Erkennungen zählen als eine Stelle und tragen eine Kennzeichnung wie
+**×2**. Beim Anklicken zeigt die Seitenleiste alle Erkennungen mit ihrem Typ und
+dem jeweils markierten Textbereich. Dort die passende Erkennung auswählen, um
+sie zu korrigieren oder mit **Diese Erkennung entfernen** einzeln zu entfernen.
+Die übrigen Erkennungen bleiben erhalten; **Korrektur zurücknehmen** stellt die
+entfernte Erkennung wieder her.
 
 Für genaue Grenzen **Bereich korrigieren** wählen und im Original den gewünschten
 Text mit der Maus oder Umschalt- und Pfeiltasten neu auswählen. Der Text selbst ist
