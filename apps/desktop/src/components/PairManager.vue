@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { confirm, open, save } from "@tauri-apps/plugin-dialog";
-import { OnyxButton, OnyxCard, OnyxHeadline, OnyxInput, OnyxSelect } from "sit-onyx";
-import { computed, reactive, ref } from "vue";
+import { OnyxButton, OnyxCard, OnyxHeadline, OnyxInput, OnyxSelect, OnyxVisuallyHidden } from "sit-onyx";
+import { computed, reactive, ref, useId } from "vue";
 import type { Settings } from "../lib/contracts";
 
 const props = defineProps<{ settings: Settings; busy: boolean }>();
@@ -16,6 +16,8 @@ const name = ref("");
 const source = ref("");
 const target = ref("");
 const createTarget = ref(false);
+const managementOpen = ref(false);
+const managementId = useId();
 const renameNames = reactive<Record<string, string>>({});
 const pairOptions = computed(() => props.settings.sync_pairs.map((pair) => ({
   label: pair.name,
@@ -66,21 +68,35 @@ async function remove(pairId: string) {
 
 <template>
   <OnyxCard class="pair-manager" role="region" aria-labelledby="pairs-heading">
-    <div><OnyxHeadline id="pairs-heading" is="h2" show-as="h3">Ordnerpaare</OnyxHeadline><slot name="context" /></div>
+    <OnyxVisuallyHidden v-if="settings.sync_pairs.length" id="pairs-heading" is="h2">Ordnerpaare</OnyxVisuallyHidden>
+    <OnyxHeadline v-else id="pairs-heading" is="h2" show-as="h3">Ordnerpaare</OnyxHeadline>
+    <div v-if="settings.sync_pairs.length" class="pair-toolbar">
+      <OnyxSelect
+        class="pair-selector"
+        data-testid="active-pair-select"
+        label="Aktives Ordnerpaar"
+        list-label="Gespeicherte Ordnerpaare"
+        :model-value="settings.selected_sync_pair_id ?? undefined"
+        :options="pairOptions"
+        :hide-clear-icon="true"
+        :disabled="busy"
+        @update:model-value="selectPair"
+      />
+      <OnyxButton
+        data-testid="pair-management-toggle"
+        label="Ordnerpaare verwalten"
+        type="button"
+        color="neutral"
+        :mode="managementOpen ? 'default' : 'outline'"
+        :aria-expanded="managementOpen"
+        :aria-controls="managementId"
+        :disabled="busy"
+        @click="managementOpen = !managementOpen"
+      />
+    </div>
+    <slot name="context" />
 
-    <OnyxSelect
-      v-if="settings.sync_pairs.length"
-      data-testid="active-pair-select"
-      label="Aktives Ordnerpaar"
-      list-label="Gespeicherte Ordnerpaare"
-      :model-value="settings.selected_sync_pair_id ?? undefined"
-      :options="pairOptions"
-      :disabled="busy"
-      @update:model-value="selectPair"
-    />
-
-    <component :is="settings.sync_pairs.length ? 'details' : 'div'" class="management">
-      <summary v-if="settings.sync_pairs.length">Ordnerpaare verwalten</summary>
+    <div v-show="managementOpen || !settings.sync_pairs.length" :id="managementId" class="management" :class="{ 'management--separated': settings.sync_pairs.length }">
 
       <ul v-if="settings.sync_pairs.length" class="pairs">
         <li v-for="pair in settings.sync_pairs" :key="pair.id">
@@ -130,14 +146,15 @@ async function remove(pairId: string) {
         <p class="hint">Ein nicht leerer Zielordner wird nur übernommen, wenn er bereits zu dieser Quelle gehört.</p>
         <OnyxButton label="Ordnerpaar hinzufügen" type="submit" :disabled="busy || !name.trim() || !source || !target" />
       </form>
-    </component>
+    </div>
   </OnyxCard>
 </template>
 
 <style scoped>
 .pair-manager, .management, .add-pair { display: grid; gap: var(--onyx-spacing-lg); min-width: 0; }
-.management[open] { padding-block-start: var(--onyx-spacing-md); }
-.management summary { cursor: pointer; font-weight: var(--onyx-font-weight-semibold); }
+.pair-toolbar { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--onyx-spacing-md); }
+.pair-selector { flex: 1 1 20rem; max-width: 28rem; min-width: 0; }
+.management--separated { border-top: 1px solid var(--onyx-color-component-border-neutral); padding-block-start: var(--onyx-spacing-lg); }
 .pairs { display: grid; gap: var(--onyx-spacing-md); list-style: none; margin: 0; padding: 0; }
 .pairs li { display: grid; gap: var(--onyx-spacing-md); padding-block: var(--onyx-spacing-md); border-bottom: 1px solid var(--onyx-color-component-border-neutral); }
 .pair-actions, .folder-choice { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--onyx-spacing-sm); }
@@ -148,9 +165,4 @@ async function remove(pairId: string) {
 .add-pair > :deep(.onyx-button) { justify-self: start; }
 .hint { color: var(--onyx-color-text-icons-neutral-medium); font-size: var(--onyx-font-size-sm); }
 h2, h3, p { margin: 0; }
-@media (min-width: 700px) {
-  .pair-manager { grid-template-columns: auto minmax(12rem, 28rem) 1fr; align-items: end; gap: var(--onyx-spacing-lg); }
-  .management { justify-self: end; }
-  .management[open], .management:not(details) { grid-column: 1 / -1; justify-self: stretch; }
-}
 </style>

@@ -32,7 +32,7 @@ function mountManager(settings: Settings) {
   });
 }
 
-test("existing pair management is collapsed while the active selector stays visible", () => {
+test("management opens below the selector and keeps draft input when collapsed", async () => {
   const wrapper = mountManager({
     schema_version: 1,
     sync_pairs: [pair],
@@ -40,10 +40,19 @@ test("existing pair management is collapsed while the active selector stays visi
   });
 
   expect(wrapper.get('[data-testid="active-pair-select"]').exists()).toBe(true);
-  const management = wrapper.get("details");
-  expect(management.attributes("open")).toBeUndefined();
-  expect(management.get("summary").text()).toContain("Ordnerpaare verwalten");
-  expect(management.find("form").exists()).toBe(true);
+  const toggle = wrapper.get('[data-testid="pair-management-toggle"]');
+  const management = wrapper.get(`#${toggle.attributes("aria-controls")}`);
+  expect(toggle.attributes("aria-expanded")).toBe("false");
+  expect(management.attributes("style")).toContain("display: none");
+  await toggle.trigger("click");
+  expect(toggle.attributes("aria-expanded")).toBe("true");
+  expect(management.attributes("style")).not.toContain("display: none");
+  await management.get("form input").setValue("Weitere Akten");
+  await toggle.trigger("click");
+  await toggle.trigger("click");
+  expect((management.get("form input").element as HTMLInputElement).value).toBe("Weitere Akten");
+  await wrapper.setProps({ busy: true });
+  expect(toggle.attributes("disabled")).toBeDefined();
 });
 
 test("the initial empty setup remains expanded", () => {
@@ -54,6 +63,7 @@ test("the initial empty setup remains expanded", () => {
   });
 
   expect(wrapper.find("details").exists()).toBe(false);
+  expect(wrapper.find('[data-testid="pair-management-toggle"]').exists()).toBe(false);
   expect(wrapper.get("form").text()).toContain("Noch kein Ordnerpaar eingerichtet");
   expect(wrapper.text()).toContain("Quellordner auswählen");
 });
