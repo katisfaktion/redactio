@@ -312,6 +312,59 @@ test("keyboard selection uses the masked preview while original redactions remai
   } finally { cleanup(); }
 });
 
+test.each(["original", "preview"])("%s textarea retains the selected range while choosing a redaction type", async mode => {
+  const { review, wrapper, cleanup } = await setup(linkedView, ["PERSON", "CUSTOM"]);
+  try {
+    if (mode === "original") {
+      await wrapper.get('[data-testid="review-output"] mark').trigger("click");
+      await wrapper.get('[data-testid="edit-range"]').trigger("click");
+    } else await wrapper.get('[data-testid="keyboard-select"]').trigger("click");
+    const source = wrapper.get<HTMLTextAreaElement>(mode === "original" ? '[data-testid="range-text"]' : '[data-testid="selection-text"]');
+    source.element.focus();
+    const at = source.element.value.indexOf("Jörg");
+    source.element.setSelectionRange(at, at + 4, "backward");
+    await source.trigger("select");
+    const type = wrapper.findAllComponents({ name: "OnyxSelect" }).find(item => item.props("label") === "Typ der neuen Schwärzung")!;
+    type.get<HTMLInputElement>("input").element.focus();
+    await flushPromises();
+    expect(wrapper.get('[data-testid="retained-selection"] mark').text()).toBe("Jörg");
+    type.vm.$emit("update:modelValue", "CUSTOM");
+    await flushPromises();
+    expect(wrapper.get('[data-testid="retained-selection"] mark').text()).toBe("Jörg");
+    expect(document.activeElement).toBe(type.get("input").element);
+    expect(source.element.selectionStart).toBe(at);
+    expect(source.element.selectionEnd).toBe(at + 4);
+    await wrapper.get('[data-testid="add-redaction"]').trigger("click");
+    expect(review.decisions.value.manual[0]).toMatchObject({ start: 11, end: 15, entity_type: "CUSTOM" });
+    expect(wrapper.find('[data-testid="retained-selection"]').exists()).toBe(false);
+  } finally { cleanup(); }
+});
+
+test("selecting in the other pane clears the retained textarea highlight", async () => {
+  const { review, wrapper, cleanup } = await setup(linkedView);
+  try {
+    await wrapper.get('[data-testid="review-output"] mark').trigger("click");
+    await wrapper.get('[data-testid="edit-range"]').trigger("click");
+    const input = wrapper.get<HTMLTextAreaElement>('[data-testid="range-text"]');
+    input.element.blur();
+    await flushPromises();
+    expect(wrapper.get('[data-testid="retained-selection"] mark').text()).toBe("Anna");
+    const output = wrapper.get('[data-testid="review-output"]');
+    const walker = document.createTreeWalker(output.element, NodeFilter.SHOW_TEXT);
+    let tail = walker.nextNode()!;
+    while (!tail.textContent!.includes("Jörg")) tail = walker.nextNode()!;
+    const at = tail.textContent!.indexOf("Jörg");
+    const range = document.createRange();
+    range.setStart(tail, at); range.setEnd(tail, at + 4);
+    window.getSelection()!.removeAllRanges();
+    window.getSelection()!.addRange(range);
+    await output.trigger("mouseup");
+    expect(wrapper.find('[data-testid="retained-selection"]').exists()).toBe(false);
+    await wrapper.get('[data-testid="add-redaction"]').trigger("click");
+    expect(review.decisions.value.manual[0]).toMatchObject({ start: 11, end: 15 });
+  } finally { window.getSelection()!.removeAllRanges(); cleanup(); }
+});
+
 test("warnings and empty extraction prevent approval and save failures are announced", async () => {
   const { review, wrapper, cleanup } = await setup({ ...view, original_text: "", body: "", status: "needs-rework", warnings: ["empty_document"] });
   expect(wrapper.get('[data-testid="approve-review"]').attributes("disabled")).toBeDefined();

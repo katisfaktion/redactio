@@ -12,6 +12,8 @@ const entity = ref("PERSON"), keyboard = ref<"original" | "preview" | null>(null
 const selected = ref<{ start: number; end: number } | null>(null);
 const original = ref<HTMLElement>(), output = ref<HTMLElement>(), textarea = ref<HTMLTextAreaElement>();
 const originalInput = ref<HTMLTextAreaElement>(), focused = ref<string | null>(null);
+const selectionMirror = ref<HTMLElement>();
+const retainedSelection = ref<{ before: string; text: string; after: string } | null>(null);
 const controlsBusy = computed(() => props.disabled || props.review.busy.value);
 const statuses = { pending: "Ausstehend", approved: "Freigegeben", rejected: "Abgelehnt", "needs-rework": "Nacharbeit erforderlich" };
 const errors: Record<string, string> = {
@@ -204,6 +206,7 @@ function capture(view: "original" | "preview") {
       selected.value = view === "original" ? { start, end } : previewSelection(projection.value.preview, start, end);
     } catch { /* A partial surrogate pair is not a selectable redaction. */ }
   } else {
+    retainedSelection.value = null;
     const selection = window.getSelection(), container = view === "original" ? original.value : output.value;
     const span = container && selection ? selectionOffsets(container, selection) : null;
     selected.value = span && view === "preview" ? previewSelection(projection.value.preview, span.start, span.end) : span;
@@ -219,6 +222,21 @@ function add() {
 function restoreText(event: Event, value: string) {
   (event.target as HTMLTextAreaElement).value = value;
   selected.value = null;
+}
+function syncSelectionScroll(input: HTMLTextAreaElement) {
+  if (!selectionMirror.value) return;
+  selectionMirror.value.scrollTop = input.scrollTop;
+  selectionMirror.value.scrollLeft = input.scrollLeft;
+}
+async function retainTextSelection(event: FocusEvent) {
+  const input = event.target as HTMLTextAreaElement;
+  const { value, selectionStart: start, selectionEnd: end } = input;
+  // Native textarea selection is invisible when another input owns focus.
+  retainedSelection.value = start === end ? null : {
+    before: value.slice(0, start), text: value.slice(start, end), after: value.slice(end),
+  };
+  await nextTick();
+  syncSelectionScroll(input);
 }
 </script>
 
@@ -245,13 +263,19 @@ function restoreText(event: Event, value: string) {
         <div class="comparison">
           <section aria-label="Originaltext">
             <h3>Originaltext</h3>
-            <textarea v-if="keyboard === 'original'" ref="originalInput" data-testid="range-text" class="document-text" aria-readonly="true" spellcheck="false" autocomplete="off" aria-label="Bereich im Original korrigieren" aria-describedby="selection-help" :value="review.data.value.original_text" :disabled="controlsBusy" @beforeinput.prevent @paste.prevent @drop.prevent @input="restoreText($event, review.data.value.original_text)" @select="capture('original')" @keyup="capture('original')" @mouseup="capture('original')" />
+            <div v-if="keyboard === 'original'" class="selection-editor">
+              <textarea ref="originalInput" data-testid="range-text" class="document-text" aria-readonly="true" spellcheck="false" autocomplete="off" aria-label="Bereich im Original korrigieren" aria-describedby="selection-help" :value="review.data.value.original_text" :disabled="controlsBusy" @blur="retainTextSelection" @scroll="syncSelectionScroll($event.target as HTMLTextAreaElement)" @beforeinput.prevent @paste.prevent @drop.prevent @input="restoreText($event, review.data.value.original_text)" @select="capture('original')" @keyup="capture('original')" @mouseup="capture('original')" />
+              <div v-if="selected && retainedSelection" ref="selectionMirror" data-testid="retained-selection" class="document-text selection-mirror" aria-hidden="true">{{ retainedSelection.before }}<mark>{{ retainedSelection.text }}</mark>{{ retainedSelection.after }}&#8203;</div>
+            </div>
             <div v-else ref="original" data-testid="review-original" class="document-text" tabindex="0" aria-label="Originaltext mit Markierungen" @mouseup="capture('original')" @keyup="capture('original')"><template v-for="(part, index) in projection.original" :key="index"><mark v-if="part.ids.length" :class="{ 'focused-redaction': isFocused(part), 'overlapping-redaction': part.ids.length > 1 }" :data-overlap-count="part.ids.length" tabindex="0" role="button" @pointerdown="preservePointerSelection" :aria-label="markLabel(part)" :title="markLabel(part)" @click="showDetection(part.ids[0]!, true, $event)" @keydown.enter.prevent="showDetection(part.ids[0]!, true)" @keydown.space.prevent="showDetection(part.ids[0]!, true)" @keyup.enter.stop @keyup.space.stop>{{ part.text }}</mark><template v-else>{{ part.text }}</template></template></div>
           </section>
           <section aria-label="Geschwärzte Vorschau">
             <h3>Geschwärzte Vorschau</h3>
             <!-- WebKit's readonly textarea blocks caret navigation; prevent edits while retaining native selection. -->
-            <textarea v-if="keyboard === 'preview'" ref="textarea" data-testid="selection-text" class="document-text" aria-readonly="true" spellcheck="false" autocomplete="off" aria-label="Text in der geschwärzten Vorschau auswählen" aria-describedby="selection-help" :value="projection.text" :disabled="controlsBusy" @beforeinput.prevent @paste.prevent @drop.prevent @input="restoreText($event, projection.text)" @select="capture('preview')" @keyup="capture('preview')" @mouseup="capture('preview')" />
+            <div v-if="keyboard === 'preview'" class="selection-editor">
+              <textarea ref="textarea" data-testid="selection-text" class="document-text" aria-readonly="true" spellcheck="false" autocomplete="off" aria-label="Text in der geschwärzten Vorschau auswählen" aria-describedby="selection-help" :value="projection.text" :disabled="controlsBusy" @blur="retainTextSelection" @scroll="syncSelectionScroll($event.target as HTMLTextAreaElement)" @beforeinput.prevent @paste.prevent @drop.prevent @input="restoreText($event, projection.text)" @select="capture('preview')" @keyup="capture('preview')" @mouseup="capture('preview')" />
+              <div v-if="selected && retainedSelection" ref="selectionMirror" data-testid="retained-selection" class="document-text selection-mirror" aria-hidden="true">{{ retainedSelection.before }}<mark>{{ retainedSelection.text }}</mark>{{ retainedSelection.after }}&#8203;</div>
+            </div>
             <div v-else ref="output" data-testid="review-output" class="document-text" tabindex="0" aria-label="Geschwärzte Vorschau auswählen" @mouseup="capture('preview')" @keyup="capture('preview')"><template v-for="(part, index) in projection.preview" :key="index"><mark v-if="part.ids.length" :class="{ 'focused-redaction': isFocused(part), 'overlapping-redaction': part.ids.length > 1 }" :data-overlap-count="part.ids.length" tabindex="0" role="button" @pointerdown="preservePointerSelection" :aria-label="markLabel(part)" :title="markLabel(part)" @click="showDetection(part.ids[0]!, true, $event)" @keydown.enter.prevent="showDetection(part.ids[0]!, true)" @keydown.space.prevent="showDetection(part.ids[0]!, true)" @keyup.enter.stop @keyup.space.stop>{{ part.text }}</mark><template v-else>{{ part.text }}</template></template></div>
           </section>
         </div>
@@ -343,6 +367,10 @@ function restoreText(event: Event, value: string) {
 .comparison section { min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); gap: var(--onyx-spacing-sm); min-width: 0; }
 .document-text { display: block; white-space: pre-wrap; overflow-wrap: anywhere; width: 100%; height: clamp(22rem, 52vh, 50rem); overflow: auto; overflow-anchor: none; padding: var(--onyx-spacing-sm); border: 1px solid var(--onyx-color-component-border-neutral); border-radius: var(--onyx-radius-sm); background: var(--onyx-color-base-background-blank); color: inherit; font: inherit; box-sizing: border-box; scrollbar-gutter: stable; }
 textarea.document-text { resize: none; }
+.selection-editor { position: relative; min-height: 0; }
+.selection-mirror { position: absolute; inset: 0; height: 100%; pointer-events: none; }
+.selection-editor:focus-within .selection-mirror { visibility: hidden; }
+.selection-mirror mark { background: var(--onyx-color-base-primary-200); color: var(--onyx-color-text-icons-neutral-intense); }
 .document-text:focus-visible, summary:focus-visible, .detections button:focus-visible { outline: 3px solid var(--onyx-color-text-icons-primary-intense); outline-offset: 2px; }
 mark { cursor: text; color: var(--onyx-color-text-icons-warning-intense); background: var(--onyx-color-base-warning-200); text-decoration: underline; }
 mark:focus-visible, .focused-redaction { outline: var(--onyx-outline-width) solid var(--onyx-color-component-focus-primary); outline-offset: 2px; }
