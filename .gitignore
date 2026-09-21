@@ -20,8 +20,11 @@ audit-log.jsonl
 node_modules/
 .pnpm-store/
 dist/
+packaging/*.pkg
 target/
+apps/desktop/src-tauri/gen/
 .venv/
+apps/sidecar/models/
 __pycache__/
 *.py[cod]
 *.egg-info/
@@ -38,3 +41,8 @@ Thumbs.db
 desktop.ini
 *.swp
 *~
+
+# Shared synthetic model-management contract fixture
+!/tests/fixtures/
+/tests/fixtures/*
+!/tests/fixtures/model-management.json

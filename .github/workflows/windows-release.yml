@@ -1,0 +1,61 @@
+name: Build Windows ZIP
+on:
+  workflow_dispatch:
+    inputs:
+      preload_model:
+        description: Optional catalog model to include for an offline demonstration
+        type: choice
+        required: true
+        default: none
+        options:
+          - none
+          - biomedbert
+          - hugginglil
+permissions:
+  contents: read
+jobs:
+  package:
+    runs-on: windows-2025
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - id: tools
+        run: |
+          $tools = (Get-Content packaging/build-inputs.json -Raw | ConvertFrom-Json).tools
+          foreach ($name in @('node', 'pnpm', 'python', 'rust', 'uv')) {
+            "$name=$($tools.$name)" >> $env:GITHUB_OUTPUT
+          }
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ steps.tools.outputs.node }}
+          package-manager-cache: false
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: ${{ steps.tools.outputs.uv }}
+          python-version: ${{ steps.tools.outputs.python }}
+          enable-cache: false
+      - name: Build and check exact portable artifact
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          npm install --global pnpm@${{ steps.tools.outputs.pnpm }}
+          rustup toolchain install ${{ steps.tools.outputs.rust }} --profile minimal
+          $env:RUSTUP_TOOLCHAIN = '${{ steps.tools.outputs.rust }}'
+          $preload = '${{ inputs.preload_model }}'
+          if ($preload -eq 'none') { ./scripts/package-windows.ps1 }
+          else { ./scripts/package-windows.ps1 -PreloadModels $preload }
+      - name: Upload retained CI artifact; public publication requires a separate action
+        uses: actions/upload-artifact@v4
+        with:
+          name: redactio-windows-x64-${{ github.sha }}
+          path: |
+            dist/windows/*.zip
+            dist/windows/*.zip.sha256
+            dist/windows/check-package.ps1
+            dist/windows/smoke/
+          if-no-files-found: error
+          retention-days: 14

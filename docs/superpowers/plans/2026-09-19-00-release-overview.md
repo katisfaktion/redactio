@@ -1,5 +1,8 @@
 # Redactio Initial Release Implementation Plan
 
+The detector/model defaults in this original plan are superseded by [model-owned labels](2026-09-20-model-owned-labels.md): BiomedBERT replaces core-news and exposes its native label set.
+
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Deliver the approved offline Windows application through five testable increments.
@@ -49,9 +52,10 @@ Run P5.1's package smoke as soon as P3.2 works, before finishing the review UI.
 Repeat P5.1 on the final branch in P5.3. This catches runtime/model packaging
 problems early without delaying the standalone engine work.
 
-These are dependency-ordered subsystem plans, not permission to implement in
-parallel. P1/P2 can be developed independently only if their shared contracts stay
-aligned. Execution begins after plan review and an execution-method choice.
+Execution was approved on 19 September 2026 using Subagent-driven development
+and parallel work where independent. P1/P2 use separate worktrees and shared
+contracts; dependent tasks start after their prerequisite reviews. Shared-file
+changes and integration are serialized.
 
 ## File and ownership map
 
@@ -240,9 +244,9 @@ is implemented, avoiding unused scaffolding.
 
 ## Verification and handoff
 
-- [ ] Review all five plans and the shared contracts together before execution.
-- [ ] Select Native or Subagent-driven execution; no method has been chosen yet.
-- [ ] At execution start, use the worktree skill to establish isolation and read
+- [x] Review all five plans and the shared contracts together before execution.
+- [x] Select Subagent-driven execution with parallel independent tasks.
+- [x] At execution start, use the worktree skill to establish isolation and read
   the chosen execution skill. Never restart from the prototype checkout.
 - [ ] Execute red/green checks per task, keep commits small, and record actual
   command results. Examples below are planned tests, not reported passing tests.

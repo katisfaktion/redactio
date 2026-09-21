@@ -1,0 +1,569 @@
+{
+  "schema_version": 1,
+  "target": "x86_64-pc-windows-msvc",
+  "tools": {
+    "node": "26.7.0",
+    "pnpm": "10.11.0",
+    "python": "3.13.13",
+    "rust": "1.95.0",
+    "uv": "0.12.9",
+    "pyinstaller": "6.22.3"
+  },
+  "engine": {
+    "redactio-sidecar": "0.1.0",
+    "spacy": "3.8.16",
+    "presidio-analyzer": "2.2.364",
+    "tldextract": "5.3.2"
+  },
+  "model_catalog": "apps/sidecar/src/redactio_sidecar/model_catalog.json",
+  "models": [],
+  "webview2": {
+    "version": "153.0.4234.48",
+    "url": "https://msedge.sf.dl.delivery.mp.microsoft.com/filestreamingservice/files/08cd33ee-d109-49b8-9301-9f0bea43c575/Microsoft.WebView2.FixedVersionRuntime.153.0.4234.48.x64.cab",
+    "sha256": "11e8240cb0bc56dcd3e4498907203c251346f65107fe35a3a13e152c7d51c79e",
+    "license": "Microsoft Edge WebView2 Runtime (Fixed Version)",
+    "source": "https://developer.microsoft.com/en-us/microsoft-edge/webview2/"
+  },
+  "browser_requirement": {
+    "sit-onyx": "1.20.0",
+    "minimum_edge_major": 140,
+    "source": "https://onyx.schwarz/development/#browser-support"
+  },
+  "notices": [
+    {
+      "package": "tokenizers",
+      "version": "0.22.2",
+      "path": "licenses/tokenizers-0.22.2-LICENSE",
+      "url": "https://raw.githubusercontent.com/huggingface/tokenizers/v0.22.2/LICENSE",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+    },
+    {
+      "path": "licenses/presidio-LICENSE.txt",
+      "url": "https://raw.githubusercontent.com/data-privacy-stack/presidio/779dbd286d5ef4d1fbe2514275fb1bce358f2417/LICENSE",
+      "sha256": "f3e86ee59a49bcfb0d9a9547484d55224ea7b2d04f95b1947b4d18d17f6de535"
+    },
+    {
+      "path": "licenses/webview2-fixed-LICENSE.html",
+      "url": "https://developer.microsoft.com/microsoft-edge/api/eula/webview2?fixed=true",
+      "json_field": "fixedHtml",
+      "sha256": "13abe52770be9206cd86a6f4564c2923813d4fbaef8913d6a8704e4ec5c51b03"
+    },
+    {
+      "package": "alloc-stdlib",
+      "version": "0.2.4",
+      "path": "licenses/alloc-stdlib-0.2.4-LICENSE",
+      "url": "https://raw.githubusercontent.com/dropbox/rust-alloc-no-stdlib/ae42d22078b98549e987d2f03d12df7b984fde47/LICENSE",
+      "sha256": "c0c56f26d9c051cac4d200c34c84e7ae9aaa853e01a982a1df08b09931e518ae"
+    },
+    {
+      "package": "defmt-parser",
+      "version": "1.0.0",
+      "path": "licenses/defmt-parser-1.0.0-LICENSE-APACHE",
+      "url": "https://raw.githubusercontent.com/knurling-rs/defmt/4a8cdb44891ed57b8ff5a023b6bec7137c48708f/LICENSE-APACHE",
+      "sha256": "8173d5c29b4f956d532781d2b86e4e30f83e6b7878dce18c919451d6ba707c90"
+    },
+    {
+      "package": "defmt-parser",
+      "version": "1.0.0",
+      "path": "licenses/defmt-parser-1.0.0-LICENSE-MIT",
+      "url": "https://raw.githubusercontent.com/knurling-rs/defmt/4a8cdb44891ed57b8ff5a023b6bec7137c48708f/LICENSE-MIT",
+      "sha256": "2710a622a896bba67356913d4d0492cab5465f61b2ecce6d880aeb483834fb50"
+    },
+    {
+      "package": "tauri-plugin",
+      "version": "2.6.3",
+      "path": "licenses/tauri-plugin-2.6.3-LICENSE.spdx",
+      "url": "https://raw.githubusercontent.com/tauri-apps/tauri/6f6ab1207bb3923c2721fbc67d2fdb1c8deb0c7a/LICENSE.spdx",
+      "sha256": "5e834fe9788c524210deda859c46a550ffa5aa0cba9ea0572f0d81120e97c008"
+    },
+    {
+      "package": "tauri-plugin",
+      "version": "2.6.3",
+      "path": "licenses/tauri-plugin-2.6.3-LICENSE_APACHE-2.0",
+      "url": "https://raw.githubusercontent.com/tauri-apps/tauri/6f6ab1207bb3923c2721fbc67d2fdb1c8deb0c7a/LICENSE_APACHE-2.0",
+      "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+    },
+    {
+      "package": "tauri-plugin",
+      "version": "2.6.3",
+      "path": "licenses/tauri-plugin-2.6.3-LICENSE_MIT",
+      "url": "https://raw.githubusercontent.com/tauri-apps/tauri/6f6ab1207bb3923c2721fbc67d2fdb1c8deb0c7a/LICENSE_MIT",
+      "sha256": "9dd42ea92cff2ede5cd477cbfcce051b2d0115c0ac7f368ee88cb545055dff1d"
+    },
+    {
+      "package": "unic-char-property",
+      "version": "0.9.0",
+      "path": "licenses/unic-char-property-0.9.0-LICENSE-APACHE",
+      "url": "https://raw.githubusercontent.com/open-i18n/rust-unic/5878605364af97a3358368a6eaef02104af2e016/LICENSE-APACHE",
+      "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+    },
+    {
+      "package": "unic-char-property",
+      "version": "0.9.0",
+      "path": "licenses/unic-char-property-0.9.0-LICENSE-MIT",
+      "url": "https://raw.githubusercontent.com/open-i18n/rust-unic/5878605364af97a3358368a6eaef02104af2e016/LICENSE-MIT",
+      "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+    },
+    {
+      "package": "unic-char-range",
+      "version": "0.9.0",
+      "path": "licenses/unic-char-range-0.9.0-LICENSE-APACHE",
+      "url": "https://raw.githubusercontent.com/open-i18n/rust-unic/5878605364af97a3358368a6eaef02104af2e016/LICENSE-APACHE",
+      "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+    },
+    {
+      "package": "unic-char-range",
+      "version": "0.9.0",
+      "path": "licenses/unic-char-range-0.9.0-LICENSE-MIT",
+      "url": "https://raw.githubusercontent.com/open-i18n/rust-unic/5878605364af97a3358368a6eaef02104af2e016/LICENSE-MIT",
+      "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+    },
+    {
+      "package": "unic-common",
+      "version": "0.9.0",
+      "path": "licenses/unic-common-0.9.0-LICENSE-APACHE",
+      "url": "https://raw.githubusercontent.com/open-i18n/rust-unic/5878605364af97a3358368a6eaef02104af2e016/LICENSE-APACHE",
+      "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+    },
+    {
+      "package": "unic-common",
+      "version": "0.9.0",
+      "path": "licenses/unic-common-0.9.0-LICENSE-MIT",
+      "url": "https://raw.githubusercontent.com/open-i18n/rust-unic/5878605364af97a3358368a6eaef02104af2e016/LICENSE-MIT",
+      "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+    },
+    {
+      "package": "unic-ucd-ident",
+      "version": "0.9.0",
+      "path": "licenses/unic-ucd-ident-0.9.0-LICENSE-APACHE",
+      "url": "https://raw.githubusercontent.com/open-i18n/rust-unic/8a6ce83063d90b91ae2ce59eddb803edd393fca9/LICENSE-APACHE",
+      "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+    },
+    {
+      "package": "unic-ucd-ident",
+      "version": "0.9.0",
+      "path": "licenses/unic-ucd-ident-0.9.0-LICENSE-MIT",
+      "url": "https://raw.githubusercontent.com/open-i18n/rust-unic/8a6ce83063d90b91ae2ce59eddb803edd393fca9/LICENSE-MIT",
+      "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+    },
+    {
+      "package": "unic-ucd-version",
+      "version": "0.9.0",
+      "path": "licenses/unic-ucd-version-0.9.0-LICENSE-APACHE",
+      "url": "https://raw.githubusercontent.com/open-i18n/rust-unic/5878605364af97a3358368a6eaef02104af2e016/LICENSE-APACHE",
+      "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+    },
+    {
+      "package": "unic-ucd-version",
+      "version": "0.9.0",
+      "path": "licenses/unic-ucd-version-0.9.0-LICENSE-MIT",
+      "url": "https://raw.githubusercontent.com/open-i18n/rust-unic/5878605364af97a3358368a6eaef02104af2e016/LICENSE-MIT",
+      "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+    },
+    {
+      "package": "webview2-com",
+      "version": "0.38.2",
+      "path": "licenses/webview2-com-0.38.2-LICENSE",
+      "url": "https://raw.githubusercontent.com/wravery/webview2-rs/b74dc5e2b394044bea5191052868ce7a106c202c/LICENSE",
+      "sha256": "0dcf41516e608bbcb6cdc5229feb7b86fe4a643b85e7df251133c93408fdac73"
+    },
+    {
+      "package": "webview2-com-macros",
+      "version": "0.8.1",
+      "path": "licenses/webview2-com-macros-0.8.1-LICENSE",
+      "url": "https://raw.githubusercontent.com/wravery/webview2-rs/dffa41a8a46d3f5565eefbff2de57d38d399f158/LICENSE",
+      "sha256": "0dcf41516e608bbcb6cdc5229feb7b86fe4a643b85e7df251133c93408fdac73"
+    },
+    {
+      "package": "webview2-com-sys",
+      "version": "0.38.2",
+      "path": "licenses/webview2-com-sys-0.38.2-LICENSE",
+      "url": "https://raw.githubusercontent.com/wravery/webview2-rs/b74dc5e2b394044bea5191052868ce7a106c202c/LICENSE",
+      "sha256": "0dcf41516e608bbcb6cdc5229feb7b86fe4a643b85e7df251133c93408fdac73"
+    },
+    {
+      "package": "selectors",
+      "version": "0.36.1",
+      "path": "licenses/selectors-0.36.1-MPL-2.0.txt",
+      "url": "https://www.mozilla.org/media/MPL/2.0/index.txt",
+      "sha256": "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04"
+    }
+  ],
+  "suffix_snapshot": {
+    "package": "tldextract",
+    "version": "5.3.2",
+    "path": "sidecar/_internal/tldextract/.tld_set_snapshot",
+    "sha256": "b69315c085d53972724b8f2df111ffc329b0c84fe0a47d62c8c91655cc774a38"
+  },
+  "cross_build": {
+    "cargo-xwin": "0.23.1",
+    "llvm": "19.1.1",
+    "msvc_crt": "14.44.35220.0",
+    "source": "https://v2.tauri.app/distribute/windows-installer/#build-windows-apps-on-linux-and-macos",
+    "windows_sdk": "10.0.26100",
+    "xwin_version": "17",
+    "visual_studio_manifest_url": "https://download.visualstudio.microsoft.com/download/pr/bc92e2cb-33de-4a0c-995d-efa817f16b16/6e470016e4324c84c255ffd0beb3767d17ec89cc8561e9409ee3e1f6d29400f5/VisualStudio.vsman",
+    "visual_studio_manifest_sha256": "f0a50ea157222c29abd5ea6ff01bfc3c33b04e011c5e45ee2ca38ef0778e5643"
+  },
+  "python_packages": [
+    {
+      "name": "Jinja2",
+      "version": "3.1.6",
+      "license": [
+        "OSI Approved :: BSD License"
+      ]
+    },
+    {
+      "name": "MarkupSafe",
+      "version": "3.0.3",
+      "license": "BSD-3-Clause"
+    },
+    {
+      "name": "PyYAML",
+      "version": "6.0.3",
+      "license": [
+        "OSI Approved :: MIT License"
+      ]
+    },
+    {
+      "name": "Pygments",
+      "version": "2.21.0",
+      "license": "BSD-2-Clause"
+    },
+    {
+      "name": "altgraph",
+      "version": "0.17.5",
+      "license": [
+        "OSI Approved :: MIT License"
+      ]
+    },
+    {
+      "name": "annotated-doc",
+      "version": "0.0.5",
+      "license": "MIT"
+    },
+    {
+      "name": "annotated-types",
+      "version": "0.8.0",
+      "license": "MIT"
+    },
+    {
+      "name": "anyio",
+      "version": "4.15.1",
+      "license": "MIT"
+    },
+    {
+      "name": "blis",
+      "version": "1.3.3",
+      "license": [
+        "OSI Approved :: BSD License"
+      ]
+    },
+    {
+      "name": "catalogue",
+      "version": "2.0.10",
+      "license": [
+        "OSI Approved :: MIT License"
+      ]
+    },
+    {
+      "name": "certifi",
+      "version": "2026.7.22",
+      "license": [
+        "OSI Approved :: Mozilla Public License 2.0 (MPL 2.0)"
+      ]
+    },
+    {
+      "name": "charset-normalizer",
+      "version": "3.5.1",
+      "license": "MIT"
+    },
+    {
+      "name": "click",
+      "version": "8.5.0",
+      "license": "BSD-3-Clause"
+    },
+    {
+      "name": "cloudpathlib",
+      "version": "0.25.0",
+      "license": [
+        "OSI Approved :: MIT License"
+      ]
+    },
+    {
+      "name": "colorama",
+      "version": "0.4.6",
+      "license": [
+        "OSI Approved :: BSD License"
+      ]
+    },
+    {
+      "name": "confection",
+      "version": "1.3.3",
+      "license": [
+        "OSI Approved :: MIT License"
+      ]
+    },
+    {
+      "name": "cymem",
+      "version": "2.0.13",
+      "license": [
+        "OSI Approved :: MIT License"
+      ]
+    },
+    {
+      "name": "filelock",
+      "version": "4.0.1",
+      "license": "MIT"
+    },
+    {
+      "name": "h11",
+      "version": "0.16.0",
+      "license": [
+        "OSI Approved :: MIT License"
+      ]
+    },
+    {
+      "name": "httpcore",
+      "version": "1.0.9",
+      "license": "BSD-3-Clause"
+    },
+    {
+      "name": "httpx",
+      "version": "0.28.1",
+      "license": [
+        "OSI Approved :: BSD License"
+      ]
+    },
+    {
+      "name": "idna",
+      "version": "3.20",
+      "license": "BSD-3-Clause"
+    },
+    {
+      "name": "lxml",
+      "version": "6.1.3",
+      "license": "BSD-3-Clause"
+    },
+    {
+      "name": "markdown-it-py",
+      "version": "4.2.0",
+      "license": [
+        "OSI Approved :: MIT License"
+      ]
+    },
+    {
+      "name": "mdurl",
+      "version": "0.1.2",
+      "license": [
+        "OSI Approved :: MIT License"
+      ]
+    },
+    {
+      "name": "murmurhash",
+      "version": "1.0.15",
+      "license": [
+        "OSI Approved :: MIT License"
+      ]
+    },
+    {
+      "name": "numpy",
+      "version": "2.4.6",
+      "license": "BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0"
+    },
+    {
+      "name": "packaging",
+      "version": "26.3",
+      "license": "Apache-2.0 OR BSD-2-Clause"
+    },
+    {
+      "name": "pefile",
+      "version": "2024.8.26",
+      "license": "MIT"
+    },
+    {
+      "name": "phonenumbers",
+      "version": "9.0.39",
+      "license": "Apache-2.0"
+    },
+    {
+      "name": "preshed",
+      "version": "3.0.13",
+      "license": [
+        "OSI Approved :: MIT License"
+      ]
+    },
+    {
+      "name": "presidio_analyzer",
+      "version": "2.2.364",
+      "license": "MIT"
+    },
+    {
+      "name": "pydantic",
+      "version": "2.13.5",
+      "license": "MIT"
+    },
+    {
+      "name": "pydantic_core",
+      "version": "2.46.5",
+      "license": "MIT"
+    },
+    {
+      "name": "pyinstaller",
+      "version": "6.22.3",
+      "license": [
+        "OSI Approved :: GNU General Public License v2 (GPLv2)"
+      ]
+    },
+    {
+      "name": "pyinstaller-hooks-contrib",
+      "version": "2026.7",
+      "license": [
+        "OSI Approved :: Apache Software License",
+        "OSI Approved :: GNU General Public License v2 (GPLv2)"
+      ]
+    },
+    {
+      "name": "python-docx",
+      "version": "1.2.0",
+      "license": [
+        "OSI Approved :: MIT License"
+      ]
+    },
+    {
+      "name": "pywin32-ctypes",
+      "version": "0.2.3",
+      "license": "BSD-3-Clause"
+    },
+    {
+      "name": "redactio-sidecar",
+      "version": "0.1.0",
+      "license": "MIT"
+    },
+    {
+      "name": "regex",
+      "version": "2026.9.10",
+      "license": "Apache-2.0 AND CNRI-Python"
+    },
+    {
+      "name": "requests",
+      "version": "2.34.2",
+      "license": [
+        "OSI Approved :: Apache Software License"
+      ]
+    },
+    {
+      "name": "requests-file",
+      "version": "3.0.1",
+      "license": [
+        "OSI Approved :: Apache Software License"
+      ]
+    },
+    {
+      "name": "rich",
+      "version": "15.0.0",
+      "license": [
+        "OSI Approved :: MIT License"
+      ]
+    },
+    {
+      "name": "setuptools",
+      "version": "84.0.0",
+      "license": "MIT"
+    },
+    {
+      "name": "shellingham",
+      "version": "1.5.4",
+      "license": [
+        "OSI Approved :: ISC License (ISCL)"
+      ]
+    },
+    {
+      "name": "smart_open",
+      "version": "8.0.1",
+      "license": [
+        "OSI Approved :: MIT License"
+      ]
+    },
+    {
+      "name": "spacy",
+      "version": "3.8.16",
+      "license": [
+        "OSI Approved :: MIT License"
+      ]
+    },
+    {
+      "name": "spacy-legacy",
+      "version": "3.0.12",
+      "license": [
+        "OSI Approved :: MIT License"
+      ]
+    },
+    {
+      "name": "spacy-loggers",
+      "version": "1.0.5",
+      "license": "MIT"
+    },
+    {
+      "name": "srsly",
+      "version": "2.5.3",
+      "license": [
+        "OSI Approved :: MIT License"
+      ]
+    },
+    {
+      "name": "thinc",
+      "version": "8.3.13",
+      "license": [
+        "OSI Approved :: MIT License"
+      ]
+    },
+    {
+      "name": "tldextract",
+      "version": "5.3.2",
+      "license": "BSD-3-Clause"
+    },
+    {
+      "name": "tqdm",
+      "version": "4.70.1",
+      "license": "MPL-2.0 AND MIT"
+    },
+    {
+      "name": "typer",
+      "version": "0.27.2",
+      "license": "MIT"
+    },
+    {
+      "name": "typing-inspection",
+      "version": "0.4.4",
+      "license": "MIT"
+    },
+    {
+      "name": "typing_extensions",
+      "version": "4.16.0",
+      "license": "PSF-2.0"
+    },
+    {
+      "name": "urllib3",
+      "version": "2.8.0",
+      "license": "MIT"
+    },
+    {
+      "name": "wasabi",
+      "version": "1.1.3",
+      "license": "MIT"
+    },
+    {
+      "name": "weasel",
+      "version": "1.0.0",
+      "license": [
+        "OSI Approved :: MIT License"
+      ]
+    },
+    {
+      "name": "wrapt",
+      "version": "2.4.1",
+      "license": "BSD-2-Clause"
+    }
+  ]
+}

@@ -1,0 +1,200 @@
+import { effectScope } from "vue";
+import { expect, test, vi } from "vitest";
+import { useReview } from "./useReview";
+import type { EntityType, ReviewViewData } from "../lib/contracts";
+import type { ReviewApi } from "../lib/ipc";
+
+const view: ReviewViewData = {
+  key: { sync_pair_id: "11111111-1111-4111-8111-111111111111", doc_id: "doc-0001" },
+  source_hash: "a".repeat(64), revision: "22222222-2222-4222-8222-222222222222", expected_output_hash: "b".repeat(64), expected_review_hash: "d".repeat(64),
+  original_text: "🙂 Anna", body: "🙂 <PERSON_1>", markdown: "synthetic markdown",
+  detections: [{ id: "auto", start: 2, end: 6, entity_type: "PERSON", confidence: .9, origin: "automatic", recognizer: "test" }],
+  redactions: [{ start_offset: 2, end_offset: 12, entity_type: "PERSON", confidence: .9, origin: "automatic", recognizer: "test", placeholder: "<PERSON_1>" }],
+  decisions: { dismissed_ids: [], manual: [] }, warnings: [], acknowledged_warnings: [], notes: "", status: "pending",
+};
+const api: ReviewApi = { open: async () => structuredClone(view), save: async (key, input) => ({ ...view, ...input, key, expected_output_hash: "c".repeat(64) }) };
+
+test("edits, type replacement and undo keep decisions local until a bound save", async () => {
+  const scope = effectScope(), save = vi.fn(api.save);
+  const review = scope.run(() => useReview({ ...api, save }))!;
+  await review.open(view.key);
+  const changed = review.changeType("auto", "CUSTOM");
+  expect(changed).toEqual(review.decisions.value.manual[0]?.id);
+  expect(review.decisions.value.dismissed_ids).toEqual(["auto"]);
+  expect(review.decisions.value.manual[0]).toMatchObject({ start: 2, end: 6, entity_type: "CUSTOM", origin: "manual", confidence: null });
+  expect(review.dirty.value).toBe(true);
+  expect(review.data.value?.body).toBe("🙂 <PERSON_1>");
+  review.undo();
+  expect(review.decisions.value).toEqual(view.decisions);
+  expect(review.dirty.value).toBe(false);
+  review.add({ start: 2, end: 6 }, "PERSON");
+  review.notes.value = "private note";
+  await review.save();
+  expect(save).toHaveBeenCalledWith(view.key, expect.objectContaining({ expected_output_hash: view.expected_output_hash, expected_review_hash: view.expected_review_hash, notes: "private note", status: "pending" }));
+  expect(review.data.value?.expected_output_hash).toBe("c".repeat(64));
+  expect(review.dirty.value).toBe(false);
+  review.dismiss(review.decisions.value.manual[0]!.id);
+  expect(review.decisions.value.manual).toEqual([]);
+  scope.stop();
+});
+
+test("replacement removes every overlapping active detection as one undoable decision", async () => {
+  const overlapping: ReviewViewData = {
+    ...view,
+    original_text: "0123456789abcdef",
+    detections: [
+      { id: "auto-left", start: 1, end: 4, entity_type: "PERSON", confidence: .9, origin: "automatic", recognizer: "test" },
+      { id: "auto-right", start: 9, end: 13, entity_type: "PERSON", confidence: .9, origin: "automatic", recognizer: "test" },
+      { id: "auto-nested", start: 4, end: 8, entity_type: "PERSON", confidence: .9, origin: "automatic", recognizer: "test" },
+      { id: "auto-overshoot", start: 0, end: 15, entity_type: "PERSON", confidence: .9, origin: "automatic", recognizer: "test" },
+      { id: "auto-left-adjacent", start: 0, end: 3, entity_type: "PERSON", confidence: .9, origin: "automatic", recognizer: "test" },
+      { id: "auto-right-adjacent", start: 10, end: 12, entity_type: "PERSON", confidence: .9, origin: "automatic", recognizer: "test" },
+      { id: "auto-disjoint", start: 14, end: 16, entity_type: "PERSON", confidence: .9, origin: "automatic", recognizer: "test" },
+    ],
+    decisions: { dismissed_ids: [], manual: [
+      { id: "manual-left", start: 2, end: 5, entity_type: "CUSTOM", confidence: null, origin: "manual", recognizer: "manual" },
+      { id: "manual-nested", start: 5, end: 8, entity_type: "CUSTOM", confidence: null, origin: "manual", recognizer: "manual" },
+      { id: "manual-overshoot", start: 0, end: 14, entity_type: "CUSTOM", confidence: null, origin: "manual", recognizer: "manual" },
+      { id: "manual-left-adjacent", start: 0, end: 3, entity_type: "CUSTOM", confidence: null, origin: "manual", recognizer: "manual" },
+      { id: "manual-right-adjacent", start: 10, end: 12, entity_type: "CUSTOM", confidence: null, origin: "manual", recognizer: "manual" },
+      { id: "manual-disjoint", start: 14, end: 16, entity_type: "CUSTOM", confidence: null, origin: "manual", recognizer: "manual" },
+    ] },
+  };
+  let persisted = structuredClone(overlapping);
+  const save = vi.fn(async (key, input) => {
+    persisted = { ...persisted, ...input, key, expected_output_hash: "c".repeat(64) };
+    return structuredClone(persisted);
+  });
+  const scope = effectScope(), review = scope.run(() => useReview({ open: async () => structuredClone(persisted), save }))!;
+  await review.open(overlapping.key);
+  const original = JSON.parse(JSON.stringify(review.decisions.value));
+
+  const id = review.replace({ start: 3, end: 10 }, "ZIPCODE");
+
+  expect(id).toEqual(expect.any(String));
+  expect(review.decisions.value.dismissed_ids).toEqual(["auto-left", "auto-right", "auto-nested", "auto-overshoot"]);
+  expect(review.decisions.value.manual.map(item => item.id)).toEqual([
+    "manual-left-adjacent", "manual-right-adjacent", "manual-disjoint", id,
+  ]);
+  expect(new Set(review.active.value.map(item => item.id))).toEqual(new Set([
+    "auto-left-adjacent", "auto-right-adjacent", "auto-disjoint",
+    "manual-left-adjacent", "manual-right-adjacent", "manual-disjoint", id,
+  ]));
+  review.undo();
+  expect(review.decisions.value).toEqual(original);
+  expect(review.canUndo.value).toBe(false);
+
+  const replacement = review.replace({ start: 3, end: 10 }, "ZIPCODE")!;
+  await review.save();
+  expect(save).toHaveBeenLastCalledWith(overlapping.key, expect.objectContaining({
+    decisions: expect.objectContaining({ dismissed_ids: ["auto-left", "auto-right", "auto-nested", "auto-overshoot"] }),
+  }));
+  review.clear(); await review.open(overlapping.key);
+  expect(review.active.value.map(item => item.id)).not.toContain("auto-overshoot");
+  expect(review.active.value.map(item => item.id)).not.toContain("manual-overshoot");
+  expect(review.active.value.map(item => item.id)).toContain(replacement);
+  scope.stop();
+});
+
+test("replacement ignores invalid, unavailable, and busy input without a history entry", async () => {
+  const unopenedScope = effectScope(), unopened = unopenedScope.run(() => useReview(api))!;
+  expect(unopened.replace({ start: 0, end: 1 }, "CUSTOM")).toBeUndefined();
+  unopenedScope.stop();
+
+  let resolve!: (value: ReviewViewData) => void;
+  const pending = new Promise<ReviewViewData>(done => { resolve = done; });
+  const scope = effectScope(), review = scope.run(() => useReview({ ...api, save: () => pending }))!;
+  await review.open(view.key);
+  const original = JSON.parse(JSON.stringify(review.decisions.value));
+  for (const span of [{ start: -1, end: 1 }, { start: 1, end: 1 }, { start: 2, end: 1 }, { start: 0.5, end: 1 }, { start: 0, end: 99 }]) {
+    expect(review.replace(span, "CUSTOM")).toBeUndefined();
+  }
+  expect(review.replace({ start: 0, end: 1 }, "" as EntityType)).toBeUndefined();
+  expect(review.decisions.value).toEqual(original);
+  expect(review.canUndo.value).toBe(false);
+  const saving = review.save();
+  expect(review.busy.value).toBe(true);
+  expect(review.replace({ start: 0, end: 1 }, "CUSTOM")).toBeUndefined();
+  expect(review.changeType("auto", "CUSTOM")).toBeUndefined();
+  expect(review.decisions.value).toEqual(original);
+  expect(review.canUndo.value).toBe(false);
+  resolve(structuredClone(view)); await saving;
+  scope.stop();
+});
+
+test("approval is separate from changed decisions and respects empty text and warnings", async () => {
+  const scope = effectScope(), save = vi.fn(api.save);
+  const review = scope.run(() => useReview({ ...api, save }))!;
+  await review.open(view.key);
+  review.add({ start: 0, end: 1 }, "CUSTOM");
+  expect(review.canApprove.value).toBe(false);
+  expect(await review.save("approved")).toBe(false);
+  expect(save).not.toHaveBeenCalled();
+  await review.save();
+  expect(review.canApprove.value).toBe(true);
+  await review.save("approved");
+  expect(review.status.value).toBe("approved");
+  await review.save("rejected");
+  expect(review.status.value).toBe("rejected");
+  scope.stop();
+  const warnedScope = effectScope();
+  const warned = warnedScope.run(() => useReview({ ...api, open: async () => ({ ...view, warnings: ["headers_footers"], status: "needs-rework" }) }))!;
+  await warned.open(view.key);
+  expect(warned.canApprove.value).toBe(false);
+  warned.acknowledged.value = ["headers_footers"];
+  expect(warned.canApprove.value).toBe(true);
+  warnedScope.stop();
+  const emptyScope = effectScope();
+  const empty = emptyScope.run(() => useReview({ ...api, open: async () => ({ ...view, original_text: " \n", detections: [], redactions: [], status: "needs-rework" }) }))!;
+  await empty.open(view.key);
+  expect(empty.canApprove.value).toBe(false);
+  emptyScope.stop();
+});
+
+test("conflicts preserve unsaved notes and decisions", async () => {
+  const scope = effectScope();
+  const review = scope.run(() => useReview({ ...api, save: async () => { throw { code: "review_conflict", retryable: false }; } }))!;
+  await review.open(view.key);
+  review.notes.value = "keep me";
+  review.add({ start: 0, end: 1 }, "CUSTOM");
+  review.acknowledged.value = ["headers_footers"];
+  const unsaved = structuredClone(JSON.parse(JSON.stringify(review.decisions.value)));
+  expect(await review.save()).toBe(false);
+  expect(review.notes.value).toBe("keep me");
+  expect(review.decisions.value).toEqual(unsaved);
+  expect(review.acknowledged.value).toEqual(["headers_footers"]);
+  expect(review.saved.value).toBeNull();
+  expect(review.dirty.value).toBe(true);
+  expect(review.error.value?.code).toBe("review_conflict");
+  scope.stop();
+});
+
+test.each(["open", "save"] as const)("late %s results never replace the same document ID in another pair", async (operation) => {
+  const scope = effectScope();
+  let resolve!: (value: ReviewViewData) => void;
+  const pending = new Promise<ReviewViewData>(done => { resolve = done; });
+  const other = { ...view, key: { ...view.key, sync_pair_id: "33333333-3333-4333-8333-333333333333" }, notes: "pair B" };
+  const review = scope.run(() => useReview({
+    open: async key => key.sync_pair_id === other.key.sync_pair_id ? other : operation === "open" ? pending : view,
+    save: () => pending,
+  }))!;
+  const opening = review.open(view.key);
+  if (operation === "save") await opening;
+  const saving = operation === "save" ? review.save() : Promise.resolve();
+  await review.open(other.key);
+  resolve(view);
+  await opening; await saving;
+  expect(review.data.value?.key).toEqual(other.key);
+  expect(review.notes.value).toBe("pair B");
+  expect(review.canUndo.value).toBe(false);
+  scope.stop();
+});
+
+test("unmount invalidates an outstanding request and drops private document text", async () => {
+  const scope = effectScope();
+  let resolve!: (value: ReviewViewData) => void;
+  const review = scope.run(() => useReview({ ...api, open: () => new Promise(done => { resolve = done; }) }))!;
+  const request = review.open(view.key);
+  scope.stop(); resolve(view); await request;
+  expect(review.data.value).toBeNull();
+});

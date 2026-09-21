@@ -2,6 +2,11 @@
 
 Status: **approved for implementation planning** · 19 September 2026
 
+Model distribution and download requirements are amended by
+[Model catalog and compatible NER imports](2026-09-21-model-management-design.md).
+That approved specification supersedes this document's bundled-default-model
+and no-runtime-download rules.
+
 This document defines the intended complete first release. Requirements describe
 the release contract, not claims about what the prototype already delivers.
 The original product and Tauri/Rust/Python architecture are retained, with a
@@ -53,7 +58,7 @@ Release success means:
 | Offline Windows desktop, German UI | Single user, no account or backend service | Inherited |
 | Folder configuration | Multiple persistent named source/working-output pairs, with one selected at a time | Explicitly requested expansion |
 | Batch processing | Recursive DOCX discovery, progress, cancel, retry, result summary | Inherited |
-| Detection | Local Presidio and German spaCy model, typed placeholders | Inherited |
+| Detection | Local Presidio and German BiomedBERT, model-owned labels and typed placeholders | Updated |
 | Recognizer settings | Built-in toggles, custom patterns and word lists, local model selection | Inherited but unfinished |
 | Output | Stable `doc-NNNN.md` names and versioned YAML frontmatter | Inherited |
 | Traceability | Source-local mapping, source hashes, metadata-only audit log | Inherited |
@@ -82,7 +87,7 @@ as a request to add every possible feature.
 
 Not included in this release: PDF/TXT ingestion, OCR, automatic folder watching,
 parallel processing of pairs, cross-pair batch execution, automatic rename
-matching, cross-document identity resolution, medical-specific entity models, local generative-model
+matching, cross-document identity resolution, disease/drug entity detection, local generative-model
 inference, rich Word-format preservation, application authentication, multi-user
 collaboration, signed installers, auto-update, or supported macOS/Linux builds.
 Cloud processing, uploads, telemetry, and runtime network downloads are excluded.
@@ -93,6 +98,12 @@ More capable implementation tools do not change the app's offline contract.
 The German-language UI has three main views: documents/run status, document
 review, and settings. This retains the prototype's simple folder-based desktop
 workflow. Screens show product language rather than implementation milestones.
+Use consistent Onyx spacing, aligned form actions, and responsive content sections.
+Use Onyx's navigation bar for the document/settings views, cards and headings for
+content hierarchy, and labeled status tags and checkboxes in the document list.
+Navigation must preserve the active-work lock and unsaved-review guard.
+Provide the native Onyx dark appearance by default with a remembered light/dark/
+system appearance choice.
 An always-visible pair selector identifies the active collection. Document
 lists, run summaries, review views, and pair-specific settings show its name.
 
@@ -168,7 +179,11 @@ unsaved review edits requires saving or explicitly discarding those edits first.
 
 Cancel finishes the current bounded operation or terminates a stalled sidecar
 after its deadline, then stops scheduling work. Results already committed remain
-usable. A final summary distinguishes completed, completed-with-errors,
+usable. Refresh the selected pair's document list automatically after an
+authoritative run summary, including partial or cancelled runs, so current
+results can be opened for review without another manual scan. Review saves also
+refresh statuses without clearing the document picker during the refresh.
+A final summary distinguishes completed, completed-with-errors,
 cancelled, and failed runs. Counts use the same discovered-file denominator:
 processed + skipped + failed + unprocessed = discovered; warned is a subset of
 processed and is not added again. Display failed paths only in the local UI.
@@ -179,9 +194,34 @@ The review view displays extracted original text and the generated text with
 highlighted detections, entity types, and detector confidence. Confidence is
 detector output, not a guarantee of privacy. Show extraction warnings prominently.
 
-Users can select original-text spans to add redactions, dismiss false positives,
-and change a detection's entity type. Corrections regenerate the output, offsets,
-and counts together. Free-form replacement text and general document editing are
+Users can select text directly in the redacted preview to add redactions while
+keeping the highlighted original beside it. Preview selections map to original
+Unicode code-point spans; selecting any part of a placeholder selects its whole
+source span. A persistent inspector shows either the selected range or the clicked
+redaction's details without moving the document or stealing selection focus.
+Explicit previous/next and list navigation scroll only the document panes.
+Selection messages and editing controls never insert content above the panes.
+On narrow windows, the inspector occupies a reserved area below the text panes.
+
+Overlapping detections form one marked location and one previous/next or list
+navigation stop. A visible count distinguishes overlaps in both text panes.
+The inspector lists every contributing detection with its type and exact range
+highlighted in shared context, including identical and transitive overlaps.
+Users can select an individual detection to correct or remove it without
+implicitly dismissing the others. Merely adjacent detections remain separate.
+
+Range correction selects exact characters in the original, including keyboard
+selection. Applying a selected range completely removes every active detection
+that strictly overlaps it and creates exactly one manual detection for the exact
+range. Automatic overlaps become dismissed decisions; manual overlaps are removed.
+Merely adjacent and disjoint detections remain. The inspector previews the affected
+old detections and any text that becomes visible outside the new range. This is
+one undoable correction, and saved/reopened reviews keep the old overlaps removed.
+
+Users can dismiss false positives and change a detection's entity type. The
+draft preview updates immediately after corrections and undo; saving regenerates
+the authoritative output, offsets, and counts together. Approval remains blocked
+until corrections have been saved and the updated result explicitly accepted. Free-form replacement text and general document editing are
 outside this release. A manual redaction is labeled manual, with no invented
 confidence score. Provide undo for edits made during the current review session
 and warn before discarding unsaved changes.
@@ -236,15 +276,19 @@ in Markdown frontmatter (default on). Always retain the internal positions neede
 for review regardless of the export option.
 
 Validate configuration before saving: non-empty opaque rule identity, a type
-chosen from the public entity set or the generic CUSTOM type, valid regex,
+chosen from model metadata, supplementary recognizers or the generic CUSTOM type, valid regex,
 non-empty word-list entries, no duplicate rule IDs, and a locally available model.
 Run regex previews on synthetic user-entered text in the bounded sidecar, so a
 pathological expression cannot hang the UI indefinitely. Show a clear timeout
 error. Custom terms, names, patterns, and preview text are sensitive local data;
 do not include them in logs or output metadata.
 
-Bundle `de_core_news_lg` as the standard model. Offer smaller `sm`/`md` choices
-only when their compatible offline model packages are installed. Missing or
+Bundle the pinned German OpenMed BiomedBERT 340M as the standard model.
+Support the pinned HuggingLil/pii-sensitive-ner-german DeBERTa checkpoint as an
+optional locally prepared alternative, selectable per pair with its own native
+label set. Switching models requires explicit saving and reprocessing; preserve
+existing pair choices and stored reviews. The standard bundle remains BiomedBERT.
+Core-news models are retired from selection, setup and packaging. Missing or
 incompatible models produce a setup error, never an automatic download. Model,
 recognizer, rule, or output-option changes issue a new processing revision for
 that pair only; affected documents become stale even when their source bytes are
@@ -279,11 +323,24 @@ explicit empty `needs-rework` result and warning, never an apparently valid case
 
 ### 4.2 Detection and replacement
 
-Use local Presidio with the selected German spaCy model. The default entity set
-is PERSON, LOCATION, EMAIL_ADDRESS, PHONE_NUMBER, IBAN_CODE, IP_ADDRESS, URL, and
-DATE_TIME. Verify each enabled category has an effective German or language-neutral
-recognizer in the packaged configuration. Do not confuse entity types with the
-actual recognizer implementations.
+Use local Presidio with the pinned German OpenMed BiomedBERT 340M model and
+CPU Transformers runtime. The model's label set is metadata owned by that model,
+not a fixed application enum. Read the native labels from installed model config,
+remove BIO prefixes/O, and preserve label IDs through detection, private review,
+manual corrections, placeholders and Markdown summaries. New pairs enable all
+native labels. Expose per-label choices and select-all/clear controls, plus
+separate supplementary EMAIL_ADDRESS, PHONE_NUMBER, IBAN_CODE, IP_ADDRESS, URL
+and DATE_TIME recognizers. Native detections are filtered only by explicit user
+choices; do not discard types outside the former PERSON/LOCATION mapping.
+
+Pin the model revision and verify downloaded files during setup. Process long
+text in overlapping windows with original Unicode offsets. No runtime downloads
+or fallback to a weaker model. Existing BiomedBERT configurations without native
+label choices retain legacy behavior until explicitly saved with the new choices;
+existing results then become stale through the normal revision mechanism. Existing
+core-news pairs require an explicit switch and reprocessing. Never rewrite saved
+approvals or detection spans in place. Successful processing does not establish
+name/address recall.
 
 Apply enabled custom rules and manual decisions to the extracted text. Validate
 all spans before replacement. Resolve overlapping detections deterministically
@@ -421,7 +478,7 @@ settings exposes the log location and a native open-folder action.
 - **Rust host:** native dialogs, pair management and selection, path validation,
   settings/mapping/review state, batch orchestration, file commits, audit, sidecar
   lifetime, and exports.
-- **Python sidecar:** python-docx extraction, Presidio/spaCy analysis, applying
+- **Python sidecar:** python-docx extraction, Presidio/Transformers analysis, applying
   corrections, placeholder substitution, and Markdown/frontmatter generation.
   Pydantic validates sidecar payloads and output metadata.
 - **Communication:** UTF-8 JSON Lines over child stdin/stdout with correlated

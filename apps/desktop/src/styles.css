@@ -1,0 +1,15 @@
+:root { --onyx-grid-margin-vertical: var(--onyx-spacing-lg); }
+
+html,
+body,
+#app {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+button, input, textarea, select { font: inherit; }
+h1, h2, h3 { text-wrap: balance; }

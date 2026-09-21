@@ -1,0 +1,38 @@
+[package]
+name = "redactio"
+version = "0.1.0"
+description = "Redactio desktop application"
+authors = []
+license = ""
+repository = ""
+edition = "2021"
+rust-version = "1.89"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+name = "redactio_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.6.3", features = [] }
+
+[dependencies]
+tauri = { version = "2.11.3", features = [] }
+tauri-plugin-dialog = "2"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip", "raw_value"] }
+sha2 = "0.10"
+tempfile = "3"
+time = { version = "0.3", features = ["formatting", "parsing"] }
+tokio = { version = "1", features = ["io-util", "process", "rt", "sync", "time"] }
+unicode-normalization = "0.1"
+uuid = { version = "1", features = ["serde", "v4"] }
+walkdir = "2"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_Globalization", "Win32_UI_WindowsAndMessaging"] }

@@ -1,0 +1,254 @@
+{
+  "schema_version": 1,
+  "models": [
+    {
+      "key": "biomedbert",
+      "directory": "biomedbert-de",
+      "descriptor": {
+        "name": "OpenMed-PII-German-BiomedBERT-Large-340M-v1",
+        "version": "ce797d58600cc20bba9a2500dafc0b7f5c3270c1",
+        "repository": "OpenMed/OpenMed-PII-German-BiomedBERT-Large-340M-v1",
+        "title": "OpenMed German BiomedBERT",
+        "license": "Apache-2.0",
+        "model_type": "bert",
+        "architecture": "BertForTokenClassification",
+        "entity_types": [
+          "ACCOUNTNAME",
+          "AGE",
+          "AMOUNT",
+          "BANKACCOUNT",
+          "BIC",
+          "BITCOINADDRESS",
+          "BUILDINGNUMBER",
+          "CITY",
+          "COUNTY",
+          "CREDITCARD",
+          "CREDITCARDISSUER",
+          "CURRENCY",
+          "CURRENCYCODE",
+          "CURRENCYNAME",
+          "CURRENCYSYMBOL",
+          "CVV",
+          "DATE",
+          "DATEOFBIRTH",
+          "EMAIL",
+          "ETHEREUMADDRESS",
+          "EYECOLOR",
+          "FIRSTNAME",
+          "GENDER",
+          "GPSCOORDINATES",
+          "HEIGHT",
+          "IBAN",
+          "IMEI",
+          "IPADDRESS",
+          "JOBDEPARTMENT",
+          "JOBTITLE",
+          "LASTNAME",
+          "LITECOINADDRESS",
+          "MACADDRESS",
+          "MASKEDNUMBER",
+          "MIDDLENAME",
+          "OCCUPATION",
+          "ORDINALDIRECTION",
+          "ORGANIZATION",
+          "PASSWORD",
+          "PHONE",
+          "PIN",
+          "PREFIX",
+          "SECONDARYADDRESS",
+          "SEX",
+          "SSN",
+          "STATE",
+          "STREET",
+          "TIME",
+          "URL",
+          "USERAGENT",
+          "USERNAME",
+          "VIN",
+          "VRM",
+          "ZIPCODE"
+        ],
+        "window_tokens": 512,
+        "stride_tokens": 128,
+        "special_tokens": 2,
+        "files": [
+          {
+            "filename": "model.safetensors",
+            "size": 1336727568,
+            "sha256": "62113e3ab2af4d7d0d4678e1483780a262b7b2b5829257afa17effe804dc739b",
+            "upstream_hash": {
+              "algorithm": "sha256",
+              "value": "62113e3ab2af4d7d0d4678e1483780a262b7b2b5829257afa17effe804dc739b"
+            }
+          },
+          {
+            "filename": "config.json",
+            "size": 4140,
+            "sha256": "5a0c1d75e17b2e35c99468455f5ad1293b401c4166608f4beca46737106982d2",
+            "upstream_hash": {
+              "algorithm": "sha256",
+              "value": "5a0c1d75e17b2e35c99468455f5ad1293b401c4166608f4beca46737106982d2"
+            }
+          },
+          {
+            "filename": "tokenizer.json",
+            "size": 679001,
+            "sha256": "fd172cee21573f3e9625a3f55302246f39a83aa14e6ac7f02308060761a4d098",
+            "upstream_hash": {
+              "algorithm": "sha256",
+              "value": "fd172cee21573f3e9625a3f55302246f39a83aa14e6ac7f02308060761a4d098"
+            }
+          },
+          {
+            "filename": "tokenizer_config.json",
+            "size": 1292,
+            "sha256": "0088a6f8bcdd4014184fb068b83ebb12896a9db2bb269a71f73de83fef24bceb",
+            "upstream_hash": {
+              "algorithm": "sha256",
+              "value": "0088a6f8bcdd4014184fb068b83ebb12896a9db2bb269a71f73de83fef24bceb"
+            }
+          },
+          {
+            "filename": "special_tokens_map.json",
+            "size": 125,
+            "sha256": "b6d346be366a7d1d48332dbc9fdf3bf8960b5d879522b7799ddba59e76237ee3",
+            "upstream_hash": {
+              "algorithm": "sha256",
+              "value": "b6d346be366a7d1d48332dbc9fdf3bf8960b5d879522b7799ddba59e76237ee3"
+            }
+          },
+          {
+            "filename": "vocab.txt",
+            "size": 225062,
+            "sha256": "7b36651908a88bc38bda41b728b2a598191e0d3b553cbacf7b1e5f026d5b5b9f",
+            "upstream_hash": {
+              "algorithm": "sha256",
+              "value": "7b36651908a88bc38bda41b728b2a598191e0d3b553cbacf7b1e5f026d5b5b9f"
+            }
+          },
+          {
+            "filename": "README.md",
+            "size": 9726,
+            "sha256": "efc52afe487bf96aad3fb5f0285f680409f74850373c7f7ca05ee87b4494985e",
+            "upstream_hash": {
+              "algorithm": "sha256",
+              "value": "efc52afe487bf96aad3fb5f0285f680409f74850373c7f7ca05ee87b4494985e"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "key": "hugginglil",
+      "directory": "pii-sensitive-ner-german",
+      "descriptor": {
+        "name": "pii-sensitive-ner-german",
+        "version": "6af88facbb75da7be737da55d2c411c7ce79e5a1",
+        "repository": "HuggingLil/pii-sensitive-ner-german",
+        "title": "HuggingLil German PII",
+        "license": null,
+        "model_type": "deberta-v2",
+        "architecture": "DebertaV2ForTokenClassification",
+        "entity_types": [
+          "ACCOUNTNUM",
+          "BUILDINGNUM",
+          "CITY",
+          "CREDITCARDNUMBER",
+          "DATEOFBIRTH",
+          "DRIVERLICENSENUM",
+          "EMAIL",
+          "ETHN",
+          "GIVENNAME",
+          "IDCARDNUM",
+          "PASSWORD",
+          "REL",
+          "SOCIALNUM",
+          "SOR",
+          "STREET",
+          "SURNAME",
+          "TAXNUM",
+          "TELEPHONENUM",
+          "USERNAME",
+          "ZIPCODE"
+        ],
+        "window_tokens": 512,
+        "stride_tokens": 128,
+        "special_tokens": 2,
+        "files": [
+          {
+            "filename": "model.safetensors",
+            "size": 1112964100,
+            "sha256": "2e25bed221b259776269a1664a1716bc17a5c8db17b2fdcece0f30fb6be83edd",
+            "upstream_hash": {
+              "algorithm": "sha256",
+              "value": "2e25bed221b259776269a1664a1716bc17a5c8db17b2fdcece0f30fb6be83edd"
+            }
+          },
+          {
+            "filename": "config.json",
+            "size": 1892,
+            "sha256": "60737346975d3e3ee89a80ace6241bff88931aa462e3a69b13913ee867c9bfb2",
+            "upstream_hash": {
+              "algorithm": "sha256",
+              "value": "60737346975d3e3ee89a80ace6241bff88931aa462e3a69b13913ee867c9bfb2"
+            }
+          },
+          {
+            "filename": "tokenizer.json",
+            "size": 16335781,
+            "sha256": "66dd68f27278061fc1702ba512fb2ec7c41c24eebf27dc5a9cc95d998166f0c7",
+            "upstream_hash": {
+              "algorithm": "sha256",
+              "value": "66dd68f27278061fc1702ba512fb2ec7c41c24eebf27dc5a9cc95d998166f0c7"
+            }
+          },
+          {
+            "filename": "tokenizer_config.json",
+            "size": 19704,
+            "sha256": "289a8d22edf917b3ac09a50de8b4acebf328dc350f5e0b9034a6e71d225c1efa",
+            "upstream_hash": {
+              "algorithm": "sha256",
+              "value": "289a8d22edf917b3ac09a50de8b4acebf328dc350f5e0b9034a6e71d225c1efa"
+            }
+          },
+          {
+            "filename": "special_tokens_map.json",
+            "size": 970,
+            "sha256": "b2f1b2f15f29a6b6d9d6ea4eca1675d2c231a71477f151d48f79cc83a625ba21",
+            "upstream_hash": {
+              "algorithm": "sha256",
+              "value": "b2f1b2f15f29a6b6d9d6ea4eca1675d2c231a71477f151d48f79cc83a625ba21"
+            }
+          },
+          {
+            "filename": "added_tokens.json",
+            "size": 23,
+            "sha256": "fb697283833d25e2c711f1bc37730ecd8b20f4bd5f015db1d84aefe0adc9155a",
+            "upstream_hash": {
+              "algorithm": "sha256",
+              "value": "fb697283833d25e2c711f1bc37730ecd8b20f4bd5f015db1d84aefe0adc9155a"
+            }
+          },
+          {
+            "filename": "spm.model",
+            "size": 4305025,
+            "sha256": "13c8d666d62a7bc4ac8f040aab68e942c861f93303156cc28f5c7e885d86d6e3",
+            "upstream_hash": {
+              "algorithm": "sha256",
+              "value": "13c8d666d62a7bc4ac8f040aab68e942c861f93303156cc28f5c7e885d86d6e3"
+            }
+          },
+          {
+            "filename": "README.md",
+            "size": 2695,
+            "sha256": "beaf666db5822a1e517c5fcbc38bb79d925148cbc6ea51f340afa34dafb9f344",
+            "upstream_hash": {
+              "algorithm": "sha256",
+              "value": "beaf666db5822a1e517c5fcbc38bb79d925148cbc6ea51f340afa34dafb9f344"
+            }
+          }
+        ]
+      }
+    }
+  ]
+}
