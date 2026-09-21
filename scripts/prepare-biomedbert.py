@@ -17,17 +17,13 @@ def prepare(root: Path, key: str) -> ModelDescriptor:
         root,
         descriptor,
         str(uuid4()),
-        lambda job: print(
-            f"{job.stage}: {job.downloaded_bytes}/{job.total_bytes}", flush=True
-        ),
+        lambda job: print(f"{job.stage}: {job.downloaded_bytes}/{job.total_bytes}", flush=True),
     )
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--model", choices=("biomedbert", "hugginglil"), default="biomedbert"
-    )
+    parser.add_argument("--model", choices=("biomedbert", "hugginglil"), default="biomedbert")
     parser.add_argument("--model-dir", type=Path, default=ROOT / "apps/sidecar/models")
     args = parser.parse_args()
     descriptor = prepare(args.model_dir, args.model)

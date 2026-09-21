@@ -30,9 +30,7 @@ class PreparationTests(unittest.TestCase):
                 return descriptor
 
             with tempfile.TemporaryDirectory() as temporary:
-                with patch.object(
-                    model_manager, "install_model", side_effect=install, create=True
-                ):
+                with patch.object(model_manager, "install_model", side_effect=install, create=True):
                     result = self.prepare.prepare(Path(temporary), entry.key)
                 self.assertEqual(result, entry.descriptor)
                 self.assertEqual(list(Path(temporary).iterdir()), [])

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import stat
+import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -35,7 +36,7 @@ def _native_lock(path: Path, *, create: bool, code: str, shared: bool = False) -
     _checked_path(path.parent, path.name)
     if path.exists():
         _regular(path)
-    if os.name == "nt":
+    if sys.platform == "win32":
         import ctypes
         import msvcrt
         from ctypes import wintypes
