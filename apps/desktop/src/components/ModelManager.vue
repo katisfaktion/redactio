@@ -11,10 +11,12 @@ const status = computed(() => ({
   downloading: "Wird heruntergeladen", validating: "Wird geprüft", ready: "Bereit", cancelled: "Abgebrochen",
   failed: "Fehlgeschlagen", removing: "Wird entfernt", removed: "Entfernt",
 }[props.job?.stage ?? "downloading"]));
-const errorText = computed(() => inputError.value || (props.error ? ({
+const errorText = computed(() => props.error ? ({
   storage_read_only: "Der Modellspeicher ist schreibgeschützt. Wählen Sie einen beschreibbaren Speicherort und versuchen Sie es erneut.",
   invalid_model_source: "Die Modelladresse wurde abgelehnt. Prüfen Sie die Hugging-Face-Repository-Adresse.",
-}[props.error.code] ?? "Das Modell konnte nicht verarbeitet werden. Bitte versuchen Sie es erneut.") : ""));
+}[props.error.code] ?? "Das Modell konnte nicht verarbeitet werden. Bitte versuchen Sie es erneut.") : "");
+const downloadable = computed(() => props.checked !== null && props.checked.model.state !== "ready"
+  && !props.models.some(model => model.name === props.checked!.model.name && model.state === "ready"));
 function bytes(value: number) { return new Intl.NumberFormat("de-DE", { style: "unit", unit: "megabyte", maximumFractionDigits: 1 }).format(value / 1_000_000); }
 function state(model: ManagedModel) { return { available: "Verfügbar", ready: "Bereit", invalid: "Ungültig", removing: "Wird entfernt" }[model.state]; }
 function checkUrl() {
@@ -29,14 +31,14 @@ function checkUrl() {
     <OnyxHeadline id="models-heading" is="h2">Modelle</OnyxHeadline>
     <p>Modelle werden lokal geprüft und gespeichert. Dokumente verlassen dabei nicht die App.</p>
     <form class="model-import" @submit.prevent="checkUrl">
-      <OnyxInput v-model="url" data-testid="model-url" label="Hugging-Face-Repository-Adresse" placeholder="https://huggingface.co/anbieter/modell" :disabled="busy" />
+      <OnyxInput v-model="url" data-testid="model-url" label="Hugging-Face-Repository-Adresse" placeholder="https://huggingface.co/anbieter/modell" :disabled="busy" :error="inputError || undefined" />
       <OnyxButton label="Prüfen" type="submit" :disabled="busy" />
     </form>
     <p v-if="errorText" role="alert">{{ errorText }}</p>
     <section v-if="checked" data-testid="checked-model" aria-live="polite">
       <h3>{{ checked.model.title }}</h3>
       <p>Prüfung abgeschlossen. Das Modell wird vor der Bereitstellung lokal validiert.</p>
-      <OnyxButton v-if="checked.model.state !== 'ready'" data-testid="download-model" label="Herunterladen" type="button" :disabled="busy" @click="emit('install', checked.plan_id)" />
+      <OnyxButton v-if="downloadable" data-testid="download-model" label="Herunterladen" type="button" :disabled="busy" @click="emit('install', checked.plan_id)" />
     </section>
     <section v-if="job" class="model-job" aria-live="polite" role="status">
       <strong>{{ status }}</strong>

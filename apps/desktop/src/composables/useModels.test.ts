@@ -1,40 +1,19 @@
 import { effectScope } from "vue";
 import { expect, test, vi } from "vitest";
 import type { ModelApi } from "../lib/modelIpc";
+import { checked, job, managed } from "../test/modelFixture";
 import { useModels } from "./useModels";
 
-const revision = "0123456789abcdef0123456789abcdef01234567";
-const available = {
-  name: `hf:acme/medical-ner@${revision}`,
-  version: revision,
-  repository: "acme/medical-ner",
-  title: "Acme medical NER",
-  license: "apache-2.0",
-  entity_types: ["DATE", "PERSON"],
-  window_tokens: 512,
-  download_bytes: 1024,
-  installed_bytes: 0,
-  state: "available" as const,
-  catalog_key: null,
-  used_by_pairs: [],
-  error: null,
-};
+const available = managed({ state: "available", installed_bytes: 0, used_by_pairs: [] });
 const plan = "22222222-2222-4222-8222-222222222222";
 const current = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const previous = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
-const downloading = {
-  job_id: current,
-  model_name: available.name,
-  stage: "downloading" as const,
-  downloaded_bytes: 1,
-  total_bytes: 2,
-  error: null,
-};
+const downloading = job({ job_id: current, model_name: available.name, downloaded_bytes: 1, total_bytes: 2 });
 
 function api(overrides: Partial<ModelApi> = {}): ModelApi {
   return {
     list: async () => [],
-    check: async () => ({ plan_id: plan, model: available }),
+    check: async () => checked({ plan_id: plan, model: available }),
     install: async () => current,
     cancel: async () => {},
     job: async () => null,
@@ -82,16 +61,55 @@ test("ignores progress belonging to a previous job", async () => {
 });
 
 test("terminal job refreshes the registry before exposing a ready model", async () => {
-  const terminal = { ...downloading, stage: "ready" as const, downloaded_bytes: 2 };
-  const ready = { ...available, state: "ready" as const, installed_bytes: 1024 };
+  const terminal = job({ ...downloading, stage: "ready", downloaded_bytes: 2 });
+  const ready = managed({ state: "ready", installed_bytes: 1024 });
   const scope = effectScope();
   const state = scope.run(() => useModels(api({ job: async () => terminal, list: async () => [ready] })))!;
   try {
-    await state.install(plan);
+    await state.check({ kind: "url", url: "https://huggingface.co/acme/medical-ner" });
+    await state.install(state.checked.value!.plan_id);
     expect(state.busy.value).toBe(false);
+    expect(state.checked.value).toBeNull();
     expect(state.readyModels.value).toEqual([{
       name: ready.name, version: ready.version, compatible: true, entity_types: ready.entity_types,
     }]);
+  } finally { scope.stop(); }
+});
+
+test("terminal completion cannot regress through late progress, polling, or cancellation", async () => {
+  let receive: (value: unknown) => void = () => { throw new Error("not listening"); };
+  let result = null as ReturnType<typeof job> | null;
+  let resolvePoll!: (value: ReturnType<typeof job> | null) => void;
+  let resolveRefresh!: (value: typeof available[]) => void;
+  let deferRefresh = false;
+  let firstPoll = true;
+  const refresh = new Promise<typeof available[]>(resolve => { resolveRefresh = resolve; });
+  const terminal = job({ ...downloading, stage: "cancelled", downloaded_bytes: 2 });
+  const scope = effectScope();
+  const state = scope.run(() => useModels(api({
+    listen: async callback => { receive = callback; return () => {}; },
+    job: async () => firstPoll
+      ? new Promise(resolve => { firstPoll = false; resolvePoll = resolve; })
+      : result,
+    cancel: async () => {},
+    list: async () => deferRefresh ? refresh : [],
+  })))!;
+  try {
+    const installing = state.install(plan);
+    await new Promise(resolve => setTimeout(resolve));
+    deferRefresh = true; result = terminal;
+    receive(terminal);
+    await Promise.resolve();
+    receive(downloading);
+    const cancelling = state.cancel();
+    expect(state.job.value?.stage).toBe("cancelled");
+    resolvePoll(downloading);
+    resolveRefresh([]);
+    await installing;
+    await cancelling;
+    await Promise.resolve();
+    expect(state.job.value?.stage).toBe("cancelled");
+    expect(state.busy.value).toBe(false);
   } finally { scope.stop(); }
 });
 

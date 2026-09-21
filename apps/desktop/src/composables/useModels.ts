@@ -15,6 +15,7 @@ export function useModels(api: ModelApi = modelApi) {
   })));
   let disposed = false, unlisten: (() => void) | null = null;
   let timer: ReturnType<typeof setInterval> | null = null, starting = false, listenerFailed = false;
+  let terminalJobId: string | null = null, reconcilingId: string | null = null;
   const early: ModelJob[] = [];
 
   function clearTimer() { if (timer) clearInterval(timer); timer = null; }
@@ -26,36 +27,43 @@ export function useModels(api: ModelApi = modelApi) {
       return;
     }
     if (parsed.data.job_id !== activeJobId.value) return;
+    if (terminalJobId === parsed.data.job_id) return;
     job.value = parsed.data;
-    if (terminal.has(parsed.data.stage)) void recover(parsed.data.job_id);
+    if (terminal.has(parsed.data.stage)) { terminalJobId = parsed.data.job_id; void recover(parsed.data.job_id); }
   }
   const subscribed = api.listen(acceptProgress).then(dispose => {
     if (disposed) dispose(); else unlisten = dispose;
   }).catch(caught => { listenerFailed = true; error.value = safeError(caught); });
 
-  async function refresh() {
+  async function refresh(): Promise<boolean> {
     try {
       models.value = await api.list();
       error.value = null;
-    } catch (caught) { error.value = safeError(caught); }
+      return true;
+    } catch (caught) { error.value = safeError(caught); return false; }
   }
   async function recover(id: string) {
+    if (reconcilingId === id) return;
     try {
       const result = await api.job(id);
       if (!result || result.job_id !== id || activeJobId.value !== id) return;
+      if (terminalJobId === id && !terminal.has(result.stage)) return;
       job.value = result;
       if (!terminal.has(result.stage)) return;
+      terminalJobId = id; reconcilingId = id;
       clearTimer();
-      await refresh();
+      const refreshed = await refresh();
       if (activeJobId.value === id) {
         if (result.error && !error.value) error.value = result.error;
+        if (result.stage === "ready" && refreshed) checked.value = null;
         activeJobId.value = null; busy.value = false;
       }
     } catch (caught) { if (activeJobId.value === id) error.value = safeError(caught); }
+    finally { if (reconcilingId === id) reconcilingId = null; }
   }
   async function begin(start: () => Promise<string>) {
     if (busy.value) return;
-    error.value = null; job.value = null; busy.value = true; starting = true; early.length = 0;
+    error.value = null; job.value = null; terminalJobId = null; busy.value = true; starting = true; early.length = 0;
     await subscribed;
     if (disposed || listenerFailed) { busy.value = false; starting = false; return; }
     try {
