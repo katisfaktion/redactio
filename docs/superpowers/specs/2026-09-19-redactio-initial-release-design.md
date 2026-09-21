@@ -2,10 +2,10 @@
 
 Status: **approved for implementation planning** · 19 September 2026
 
-Model distribution and download requirements have a proposed amendment in
+Model distribution and download requirements are amended by
 [Model catalog and compatible NER imports](2026-09-21-model-management-design.md).
-That specification is awaiting written review; its status governs when it
-supersedes this document's bundled-default-model and no-runtime-download rules.
+That approved specification supersedes this document's bundled-default-model
+and no-runtime-download rules.
 
 This document defines the intended complete first release. Requirements describe
 the release contract, not claims about what the prototype already delivers.

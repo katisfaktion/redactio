@@ -1,6 +1,9 @@
 # Redactio — model catalog and compatible NER imports
 
-Status: **written for review** · 21 September 2026
+Status: **approved for implementation planning** · 21 September 2026
+
+Approval includes adapting processing windows to each model's validated context
+limit instead of requiring a fixed 512-token window.
 
 ## Purpose and agreed scope
 
@@ -14,7 +17,7 @@ USB demonstration establishes portability as an existing workflow to preserve.
 This design assumes models remain in the app's `models` directory; it does not
 introduce a separate user-profile cache or a model-storage preference.
 
-Once approved, this specification supersedes the initial-release requirements that every
+This specification supersedes the initial-release requirements that every
 distribution bundle a default model and that runtime downloads never occur.
 Only explicitly requested model metadata checks and downloads may use the
 network. Document processing, previews, and review remain local. Opening the app,
@@ -107,7 +110,8 @@ An import must satisfy all of these conditions:
 
 - It is a Transformers token-classification model supported by the packaged
   runtime: initially `bert` / `BertForTokenClassification` or `deberta-v2` /
-  `DebertaV2ForTokenClassification`, with a 512-token position limit.
+  `DebertaV2ForTokenClassification`. Its context limit is validated from the
+  model configuration; it need not equal 512 tokens.
 - Weights are a single `model.safetensors` file. Sharded weights and other weight
   formats are rejected in this first version.
 - It supplies a usable fast tokenizer, including `tokenizer.json` and the
@@ -120,6 +124,18 @@ An import must satisfy all of these conditions:
   reason; no guessed semantic mapping is introduced.
 - A local load and synthetic offset check pass with the same tokenizer,
   aggregation, and overlapping-window behavior used for document processing.
+
+Derive the processing-window size from the supported architecture's actual
+context capacity and any meaningful finite tokenizer limit, using the smaller
+limit when both apply. Treat tokenizer values meaning "unspecified" as absent,
+not as permission to allocate an enormous window. Reject missing, malformed,
+or unusable model limits explicitly. Account for special tokens and keep the
+overlap smaller than the usable content window. For the existing pinned models,
+preserve the current 512-token window and 128-token overlap. For other sizes,
+use a proportional overlap, bounded by the usable content size. Document length
+remains independent of window size: process long text in overlapping windows
+with source-relative offsets. A supported architecture with a larger valid
+context is not rejected solely because its context differs from 512 tokens.
 
 Use `trust_remote_code=False`, `use_safetensors=True`, and local-only loading for
 validation and inference. No automatic dependency installation, pickle fallback,
@@ -142,8 +158,10 @@ checks establish integration correctness, not detection accuracy.
 ### Reuse the host and bundled worker
 
 The Vue frontend uses validated Tauri commands and events; it never downloads
-model files directly. The Rust host owns operation admission, the model-store
-lock, progress forwarding, cancellation, and UI-safe error codes.
+model files directly. The Rust host owns operation admission, model-use
+coordination, progress forwarding, cancellation, and UI-safe error codes. The
+management worker holds the native locks for its mutations until it exits, so
+host termination cannot release a lock while a surviving worker still writes.
 
 Add a distinct model-management mode to the existing bundled Python executable.
 It receives only the app model root and a validated model-management request,
@@ -278,6 +296,10 @@ control the user's running app, or launch its native GUI for verification.
 - Refresh model status while pair settings contain unsaved changes; the draft
   stays intact. Installing an unrelated model leaves pair revisions and saved
   review fingerprints unchanged. Legacy manifests and review replay still work.
+- Test smaller and larger context windows, tokenizer/model limit disagreements,
+  unspecified tokenizer limits, special-token overhead, and invalid capacities.
+  Verify the current models retain their exact window behavior and that long
+  input is neither silently truncated nor assigned offsets relative to a chunk.
 - Validate Unicode and long-text offsets through the installed runtime, then
   process and correct synthetic documents with both current real models.
 - Build a Windows package with no weights and one with preloaded models. Check
