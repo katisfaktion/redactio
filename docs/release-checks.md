@@ -75,6 +75,115 @@ Every row requires recorded outcomes and evidence against the final artifact. St
 | A17 Pair isolation | Use two `doc-0001` records with distinct rules/models. Processing/review/retry/export stay in their owning pair; sidecar switches remove previous custom rules and load the selected local model. | partial |
 | A18 Pair routing | Send unknown/mismatched pair ownership, late replies, and switch with unsaved edits. Host rejects mismatches, late events never populate another pair, and switching requires save/discard. | partial |
 
+## Model-management handoff (2026-09-21)
+
+Status: **automated native acceptance passed**. The standard package starts with
+zero model weights; the demo contains exactly the two catalog models. Catalog and
+compatible-URL installation, explicit pair selection, dynamic windows, legacy
+review compatibility, relocation, and offline frozen inference are verified. Native
+GUI interaction and a physically disconnected USB run remain user acceptance steps.
+
+The final clean packaging source is
+`79c7a3e6e6cb1fc01ebdbebb03c7bb03c08635ad`. The reviewed runtime and desktop source
+is `7636b77f03bbab3ff90c91d6ddc902563eea4f29`; the later commit only corrects the
+PowerShell tokenizer-file filter in `scripts/package-windows.ps1`. Desktop, sidecar,
+locks, build inputs, and freezer specification are unchanged.
+
+| Artifact delivered to Windows Downloads | Bytes | SHA-256 | Preloaded models |
+| --- | ---: | --- | ---: |
+| `C:\Users\katisfaktion\Downloads\redactio-79c7a3e-windows-x64.zip` | 564,245,887 | `5758d333dc0198588cff6eae6b5f45e0e59f29977c21f9b2c72943159d623c13` | 0 |
+| `C:\Users\katisfaktion\Downloads\redactio-demo-79c7a3e-windows-x64.zip` | 2,713,638,843 | `af75e0731e831d653b0341d50688cd46b026eed35f5def5ec1ddcb971599dbd9` | 2 |
+
+Both archives and their `.sha256` sidecars passed post-copy verification. The prior
+`84b110b` ZIP and extracted demo remained unchanged. The desktop executable is
+12,647,424 bytes with SHA-256
+`05aa1ba2a095851b9ae681bac0547e72b9969187a9b2ae8ff5b99a4830a09276`;
+the exact final frozen worker SHA-256 is
+`eec025fce7efa1c0d0b44c8513822deec86277c683f5f5b986b760189224353f`.
+
+Completed automated evidence:
+
+- The frozen worker accepted both catalog models, inspected and deduplicated the
+  live public HuggingLil URL, rejected an incompatible public BERT with
+  `model_incompatible`, and returned `model_not_found` for an empty store. A
+  BiomedBERT transfer cancelled after 1,057,680 bytes and then completed through
+  download, validation, and ready publication on retry.
+- The standard ZIP passed before archiving and after extraction beneath a path with
+  spaces and Unicode with an empty schema-v2 registry. The demo passed both checks
+  with exactly two ready catalog models and reported `models=2 documents=2
+  redactions=2`. Archive integrity, immutable file hashes, static-CRT checks, both
+  tokenizer families, and mutable model receipts passed.
+- After relocation with an initially empty external cache and `HF_HUB_OFFLINE=1`
+  plus `TRANSFORMERS_OFFLINE=1`, the exact final worker produced three detections
+  with each pinned model and left the synthetic DOCX unchanged. These flags do not
+  prove physical network disconnection. Separate source-runtime evidence denied
+  sockets with a cold cache.
+- The non-catalog `SyntheticChecks/german-tiny-ner` fixture used a real BERT model
+  with a 32-token window, 8-token stride, and two special tokens. Exact final frozen
+  inference reached source offset 414 beyond its first window. The separate
+  source-runtime fixture produced 83 detections over 414 code points, also ending
+  at offset 414.
+- Both pinned models' process and corrected-review replies exactly matched the
+  archived `9c0ce09` synthetic baseline before and after installing/removing an
+  unrelated model. Original records stayed unchanged and legacy storage migrated
+  once to schema 2.
+- Python passed 388 regular tests plus both explicit real-model canaries, Ruff
+  check/format, and mypy over 12 source files. The final fixes passed 237 affected
+  manager/store tests; the CDN follow-up passed 135 manager tests and a 27-test
+  focused rerun. The exact CDN allowlist uses no wildcard.
+- Rust passed 215 regular tests plus all six explicit real-model checks, Rustfmt,
+  and all-target Clippy. Native Windows additionally passed 13 host/manager/lock
+  checks and five worker-owned lease cases.
+- Frontend passed the final 208-test suite across 23 files, typecheck, build, and
+  16 actual-App browser checks including delayed legacy metadata and preserved
+  drafts. The existing 530.9 kB Vite chunk advisory is nonblocking.
+- Packaging passed five executed Python cases with one Windows-only skip, then 21
+  native package cases and 20 native build-manifest cases. Final source review
+  approved all model-management findings and the exact-CDN follow-up.
+
+Durable content-free evidence is under `dist/model-management-evidence/`; the native
+handoff is `dist/model-management-windows/handoff.json` and the detailed report is
+`dist/model-management-evidence/task-8-native-report.md`. These ignored artifacts
+must accompany the release record; repository documentation alone is not the proof.
+
+### Manual Windows model and USB procedure
+
+This is user-run native GUI acceptance. Browser tests, command-line checks, and the
+automated native checks above do not mark these steps passed.
+
+1. On Windows 11 x64 as a standard user, verify the selected final ZIP SHA-256 from
+   the artifact table above, then extract the **entire** ZIP to a new writable local
+   folder. Do not start from the
+   ZIP or a network drive. The standard ZIP contains zero model weights.
+2. Start `redactio.exe`, open **Modelle**, and install one catalog model. For a
+   compatible public Hugging Face model, enter its repository URL, choose **Prüfen**,
+   inspect the exact revision, labels, size, and license, then choose
+   **Herunterladen**. This first download needs connectivity; no document processing
+   should generate network traffic.
+3. Create or open an isolated pair containing synthetic DOCX files. Select the exact
+   ready model for that pair, review its entity types, save, process the documents,
+   inspect the replacements, and approve a result. A missing model must remain
+   visibly missing rather than fall back to another ready model.
+4. Exit cleanly. Copy the **entire extracted application folder**, including
+   `models`, `sidecar`, and `webview2`, to the USB drive. Do not copy only the EXE
+   or only a model directory.
+5. On the acceptance Windows machine, copy the whole folder from USB to a new local
+   writable directory, disconnect networking and remove external model caches from
+   the test environment, then launch it. Confirm the installed model is ready and
+   repeat synthetic processing, review, approval, restart, and clean exit without
+   a network attempt.
+6. Also test a read-only copy: already-ready models must remain usable, while install
+   and remove actions fail with the documented storage error and preserve existing
+   files. Record screenshots, safe error codes, app/child network observations, OS
+   build, account type, WebView version, source revision, ZIP hash, and outcome.
+
+Keep the existing working demo from `84b110b` unchanged. The concise operating
+instructions remain in the [Windows quick start](quick-start.de.md#1-entpacken-und-starten),
+with model selection and compatibility details under
+[Erkennung einstellen](quick-start.de.md#3-erkennung-einstellen). Final Task 8
+status and its complete decision record are in the
+[implementation plan](superpowers/plans/2026-09-21-model-management.md#progress-and-evidence).
+
 ## Real-window evidence protocol
 
 Build the candidate from a clean independent native Git clone; WSL-linked worktree Git
@@ -205,3 +314,7 @@ Windows workflow uploads a retained CI artifact; it never publishes a public rel
 
 Primary configuration references: [Windows Sandbox configuration](https://learn.microsoft.com/en-us/windows/security/application-security/application-isolation/windows-sandbox/windows-sandbox-configure-using-wsb-file),
 [setup-node](https://github.com/actions/setup-node), [setup-uv](https://github.com/astral-sh/setup-uv).
+Hugging Face documents the CDN hosts used behind its download service in
+[Downloading behind a proxy or firewall](https://huggingface.co/docs/hub/datasets-downloading#downloading-behind-a-proxy-or-firewall);
+the service also publishes current endpoint metadata at
+[`/.well-known/meta.json`](https://huggingface.co/.well-known/meta.json).

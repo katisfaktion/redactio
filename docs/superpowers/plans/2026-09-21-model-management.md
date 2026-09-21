@@ -141,7 +141,7 @@ The management worker uses a separate process invocation, `--manage-models --mod
 
 **Interfaces:** Produce `Window(tokens: int, stride: int)`, `processing_window(model_limit: object, tokenizer_limit: object, special_tokens: int) -> Window`, and `validate_local_model(path: Path, model_type: str, architecture: str) -> Window`. The latter performs safe loading and the synthetic tokenizer/inference check, raising `EngineError("model_incompatible")` on incompatibility.
 
-- [ ] Add this parameterized regression to `test_model_store.py`:
+- [x] Add this parameterized regression to `test_model_store.py`:
 
 ```python
 import pytest
@@ -168,8 +168,8 @@ def test_invalid_capacity_is_explicit(model, tokenizer, special):
         processing_window(model, tokenizer, special)
 ```
 
-- [ ] Run `rtk proxy uv --directory apps/sidecar run --locked --offline pytest tests/test_model_store.py -q`; confirm it fails because the new function is absent.
-- [ ] Implement the pure calculation, using Transformers' installed sentinel convention without importing Torch into metadata discovery:
+- [x] Run `rtk proxy uv --directory apps/sidecar run --locked --offline pytest tests/test_model_store.py -q`; confirm it fails because the new function is absent.
+- [x] Implement the pure calculation, using Transformers' installed sentinel convention without importing Torch into metadata discovery:
 
 ```python
 from typing import NamedTuple
@@ -196,7 +196,7 @@ def processing_window(model_limit: object, tokenizer_limit: object,
     return Window(limit, min(max(1, limit // 4), content - 1))
 ```
 
-- [ ] Remove `model_max_length=512` and the equality-to-512 check from `_load_pipeline`; after loading the fast tokenizer and model safely, calculate and assign the validated window:
+- [x] Remove `model_max_length=512` and the equality-to-512 check from `_load_pipeline`; after loading the fast tokenizer and model safely, calculate and assign the validated window:
 
 ```python
 window = processing_window(
@@ -209,7 +209,7 @@ tokenizer.model_max_length = window.tokens
 ```
 
   Preserve architecture checks. Check loading information for missing/mismatched classifier weights rather than accepting a randomly initialized head. Leave both existing recognizer wrappers and their identities intact. Update synthetic config fixtures to contain valid architecture/capacity facts instead of relaxing checks for fixtures.
-- [ ] Extend mocked-pipeline tests to assert the exact tokenizer window and stride supplied for 256/512/1024 contexts. Add this local runtime regression; it downloads nothing and requires no particular random-model prediction:
+- [x] Extend mocked-pipeline tests to assert the exact tokenizer window and stride supplied for 256/512/1024 contexts. Add this local runtime regression; it downloads nothing and requires no particular random-model prediction:
 
 ```python
 def test_small_context_keeps_long_unicode_offsets(tmp_path):
@@ -238,7 +238,7 @@ def test_small_context_keeps_long_unicode_offsets(tmp_path):
 ```
 
   Run the same production offset validation with a longer context fixture, and inspect overflow offset coverage rather than relying on the last predicted entity. Expose the check through `validate_local_model`; it must never use real document text.
-- [ ] Run `rtk proxy uv --directory apps/sidecar run --locked --offline pytest tests/test_model_store.py tests/test_biomedbert.py -q`, Ruff, and mypy. Commit as `feat: adapt NER windows to validated model context limits`.
+- [x] Run `rtk proxy uv --directory apps/sidecar run --locked --offline pytest tests/test_model_store.py tests/test_biomedbert.py -q`, Ruff, and mypy. Commit as `feat: adapt NER windows to validated model context limits`.
 
 ## Task 2: Establish the catalog, registry and compatible-model discovery
 
@@ -246,7 +246,7 @@ def test_small_context_keeps_long_unicode_offsets(tmp_path):
 
 **Interfaces:** Python produces `read_registry(root: Path) -> ModelRegistry`, `write_registry(root: Path, registry: ModelRegistry) -> None`, `catalog_models() -> list[CatalogEntry]`, and `selection_name(repository: str, revision: str) -> str`. Rust produces equivalent DTOs, `model_store::list_models(root: &Path) -> Result<Vec<ModelInfo>, AppError>`, and `model_store::list_managed(root: &Path) -> Result<Vec<ManagedModel>, AppError>`. Task 4 fills `used_by_pairs`; storage projection starts with an empty array. Zod exports schemas and inferred types for every management contract above.
 
-- [ ] Write discovery tests for empty/missing stores, both legacy aliases, a new publisher/model with 1024 context, two publishers with the same basename, two revisions, removed receipts, invalid paths, invalid labels and unsupported future schema. Preserve unknown legacy entries in `legacy_unavailable` without advertising them as runnable or deleting their files. Add these concrete identity/empty-store checks:
+- [x] Write discovery tests for empty/missing stores, both legacy aliases, a new publisher/model with 1024 context, two publishers with the same basename, two revisions, removed receipts, invalid paths, invalid labels and unsupported future schema. Preserve unknown legacy entries in `legacy_unavailable` without advertising them as runnable or deleting their files. Add these concrete identity/empty-store checks:
 
 ```python
 from redactio_sidecar.model_store import read_registry, selection_name
@@ -264,12 +264,12 @@ def test_repository_and_revision_are_part_of_new_identity():
 ```
 
   Port the shared fixture to Python/Rust/Zod tests and require identical names, labels, state and window metadata. Add `common::fixture_model_store(root: &Path) -> String` to the existing Rust test helper: write a valid ready fixture record in the `fixture-model` subdirectory, its config/tokenizer metadata, synthetic artifact bytes with matching recorded sizes/hashes, and immutable identity receipt; return its model selection name. It must not load weights. Test malformed variant fields in each boundary parser, not every serialization getter.
-- [ ] Run the new focused tests and confirm failures before adding discovery. Keep the fixture's safetensors validation in Task 1/3; metadata-only discovery must never import model weights.
-- [ ] Implement the schema above with strict Pydantic/serde/Zod validation. Migrate legacy records in memory only; atomic disk migration happens with a successful mutation. Resolve the two legacy aliases from their exact catalog repository/revision. Use `hf:<repository>@<commit>` for new selections and a generated hash-based directory name. Retain one immutable `redactio-model.json` identity receipt in every installed directory; Task 4 uses it for read-only model-use leases.
-- [ ] Consolidate the existing catalog inputs, preserving every current file hash/revision. Supplement each entry with its key, title, license metadata, native labels, window facts, and verified file sizes from the pinned source. Project each descriptor's artifact list to the existing packaging `files` hash map until Task 7 changes packaging shape; do not store a second source copy. Python reads package data via `importlib.resources`; Rust embeds the same JSON with `include_str!`; the setup script imports the shared catalog. Update all old input-path references in the same commit so existing packaging checks continue to work.
-- [ ] Replace `MODEL_SPECS` and Rust `SUPPORTED` repository gating with validated registry descriptors plus supported architecture checks. Keep legacy constants/wrappers as compatibility aliases to catalog-derived descriptors. Generic models use `TransformersNerRecognizer`; add exactly that public name to `frontmatter.py`, never arbitrary remote names. Engine configuration must require explicit native labels for all nonlegacy imports, not just HuggingLil.
-- [ ] Let `resolve_packaged` return `<app>/models` when it does not yet exist, while retaining ancestor/link checks and required sidecar/WebView2 validation. Distinguish a missing store from a malformed existing manifest. An unrelated incomplete model must not prevent a different ready model from being discovered.
-- [ ] Run Python store/engine/frontmatter tests, `rtk cargo test --locked --offline --manifest-path apps/desktop/src-tauri/Cargo.toml --test model_store --test resources`, and `rtk pnpm --filter @redactio/desktop test src/lib/modelContracts.test.ts`. Run the existing preparation/packaging script checks. Commit as `feat: discover catalog and imported models through a portable registry`.
+- [x] Run the new focused tests and confirm failures before adding discovery. Keep the fixture's safetensors validation in Task 1/3; metadata-only discovery must never import model weights.
+- [x] Implement the schema above with strict Pydantic/serde/Zod validation. Migrate legacy records in memory only; atomic disk migration happens with a successful mutation. Resolve the two legacy aliases from their exact catalog repository/revision. Use `hf:<repository>@<commit>` for new selections and a generated hash-based directory name. Retain one immutable `redactio-model.json` identity receipt in every installed directory; Task 4 uses it for read-only model-use leases.
+- [x] Consolidate the existing catalog inputs, preserving every current file hash/revision. Supplement each entry with its key, title, license metadata, native labels, window facts, and verified file sizes from the pinned source. Project each descriptor's artifact list to the existing packaging `files` hash map until Task 7 changes packaging shape; do not store a second source copy. Python reads package data via `importlib.resources`; Rust embeds the same JSON with `include_str!`; the setup script imports the shared catalog. Update all old input-path references in the same commit so existing packaging checks continue to work.
+- [x] Replace `MODEL_SPECS` and Rust `SUPPORTED` repository gating with validated registry descriptors plus supported architecture checks. Keep legacy constants/wrappers as compatibility aliases to catalog-derived descriptors. Generic models use `TransformersNerRecognizer`; add exactly that public name to `frontmatter.py`, never arbitrary remote names. Engine configuration must require explicit native labels for all nonlegacy imports, not just HuggingLil.
+- [x] Let `resolve_packaged` return `<app>/models` when it does not yet exist, while retaining ancestor/link checks and required sidecar/WebView2 validation. Distinguish a missing store from a malformed existing manifest. An unrelated incomplete model must not prevent a different ready model from being discovered.
+- [x] Run Python store/engine/frontmatter tests, `rtk cargo test --locked --offline --manifest-path apps/desktop/src-tauri/Cargo.toml --test model_store --test resources`, and `rtk pnpm --filter @redactio/desktop test src/lib/modelContracts.test.ts`. Run the existing preparation/packaging script checks. Commit as `feat: discover catalog and imported models through a portable registry`.
 
 ## Task 3: Implement explicit preflight and installation in the bundled worker
 
@@ -277,7 +277,7 @@ def test_repository_and_revision_are_part_of_new_identity():
 
 **Interfaces:** Consume Task 1 validation and Task 2 descriptors/registry. Produce `parse_repository_url(url: str) -> str`, `preflight(source: ModelSource, root: Path) -> ModelDescriptor`, `install_model(root: Path, descriptor: ModelDescriptor, job_id: str, emit: Callable[[ModelJob], None]) -> ModelDescriptor`, `remove_model(root: Path, name: str) -> ModelRecord`, `mutation_lock(root: Path) -> ContextManager[None]`, `exclusive_model_lock(root: Path, name: str) -> ContextManager[None]`, and `main(argv: list[str] | None = None) -> None`. Install/removal acquire their own native guards; removal additionally holds the exclusive per-model receipt lock. The standalone preparation command calls these same operations and generates a UUID for progress. Mutation locks use persistent `.redactio-models-lock` without unlinking it. Use POSIX `flock` and Windows native byte-range locking that conflicts with Rust's shared receipt lock; Task 4 proves contention rather than assuming it. Locks belong to the mutating process so a host crash cannot release them before a surviving worker exits.
 
-- [ ] Start with URL and object-identity tests:
+- [x] Start with URL and object-identity tests:
 
 ```python
 import hashlib
@@ -302,11 +302,11 @@ def test_repository_url_and_git_object_identity():
 ```
 
   Define `object_digest(data: bytes, algorithm: str) -> str` for bounded metadata tests; stream the equivalent algorithm for large files, never load weights into a byte string to hash them.
-- [ ] Run `rtk proxy uv --directory apps/sidecar run --locked --offline pytest tests/test_model_manager.py -q`; confirm missing-function failures.
-- [ ] Implement repository parsing with `urllib.parse`, strict component patterns, and no embedded credentials/ports/query/fragment. Obtain an immutable revision, then fetch the config and file-tree metadata at that revision using Hugging Face's official API. Use the existing installed `huggingface_hub` metadata types where useful, but no automatic cache download or credential discovery. Verify current official API/hash fields during implementation. Reject mismatched architecture, anonymous/malformed labels, remote-code requirements, gated access, unsafe weights, or missing tokenizer artifacts with specific safe error codes.
-- [ ] Implement one checked stdlib HTTP opener: HTTPS, certificate verification, at most five redirects, 30-second connection/read timeouts, bounded JSON/config responses, and approved Hugging Face/CDN destinations. Validate every redirect and destination before connecting; public-address checks must apply to the addresses actually used, not just a preliminary DNS lookup. Use the packaged trusted CA data on Windows. Reject malformed sizes, ambiguous object hashes, and files outside the fixed config/tokenizer/weights allowlist. Never forward credentials or log signed URLs.
-- [ ] With a fake transport at the opener boundary, return commit A for inspection then change the simulated default branch to B. Assert installation still requests only A. Add hash mismatch, truncated stream, larger-than-declared stream, redirect-to-private-host, malformed JSON, slow/stalled response, unavailable repo and source-ID mismatch cases. The test transport supplies bytes and headers only; it must not disable production URL/path checks.
-- [ ] Stage under a generated `.model-<identity>` directory. Check `shutil.disk_usage`, verify each complete file using its upstream hash and catalog SHA256 when present, record SHA256, then call `validate_local_model`. Emit monotonic byte progress with the same job ID. A retry rechecks complete staged files and restarts an incomplete file. Before loading, validate actual config, tokenizer, head dimensions, native labels and window against the checked descriptor. Cancellation kills the separate worker; its staging stays unavailable and recoverable.
+- [x] Run `rtk proxy uv --directory apps/sidecar run --locked --offline pytest tests/test_model_manager.py -q`; confirm missing-function failures.
+- [x] Implement repository parsing with `urllib.parse`, strict component patterns, and no embedded credentials/ports/query/fragment. Obtain an immutable revision, then fetch the config and file-tree metadata at that revision using Hugging Face's official API. Use the existing installed `huggingface_hub` metadata types where useful, but no automatic cache download or credential discovery. Verify current official API/hash fields during implementation. Reject mismatched architecture, anonymous/malformed labels, remote-code requirements, gated access, unsafe weights, or missing tokenizer artifacts with specific safe error codes.
+- [x] Implement one checked stdlib HTTP opener: HTTPS, certificate verification, at most five redirects, 30-second connection/read timeouts, bounded JSON/config responses, and approved Hugging Face/CDN destinations. Validate every redirect and destination before connecting; public-address checks must apply to the addresses actually used, not just a preliminary DNS lookup. Use the packaged trusted CA data on Windows. Reject malformed sizes, ambiguous object hashes, and files outside the fixed config/tokenizer/weights allowlist. Never forward credentials or log signed URLs.
+- [x] With a fake transport at the opener boundary, return commit A for inspection then change the simulated default branch to B. Assert installation still requests only A. Add hash mismatch, truncated stream, larger-than-declared stream, redirect-to-private-host, malformed JSON, slow/stalled response, unavailable repo and source-ID mismatch cases. The test transport supplies bytes and headers only; it must not disable production URL/path checks.
+- [x] Stage under a generated `.model-<identity>` directory. Check `shutil.disk_usage`, verify each complete file using its upstream hash and catalog SHA256 when present, record SHA256, then call `validate_local_model`. Emit monotonic byte progress with the same job ID. A retry rechecks complete staged files and restarts an incomplete file. Before loading, validate actual config, tokenizer, head dimensions, native labels and window against the checked descriptor. Cancellation kills the separate worker; its staging stays unavailable and recoverable.
 
 ```python
 # Publication order after all files and the runtime have been verified:
@@ -318,9 +318,9 @@ write_registry(root, registry)
 ```
 
   Before that sequence, require an absent or positively identified manager-owned destination. On retry after a rename/registry-write interruption, verify the orphan destination instead of overwriting it or treating it as ready. Release loaded validation objects before renaming on Windows.
-- [ ] Test install/verify/publication failures by injecting transport, validation and atomic-write failures. Assert the previous manifest bytes and ready model files stay unchanged; test cancel after a complete file and during validation, and retry after rename-before-registry. Removal persists `state="removing"` first, deletes only owned paths, then retains an available receipt with `path=null`; deletion failure remains retryable and reports remaining usage. Check symlinks and Windows reparse points in both staging and removal.
-- [ ] Route the new CLI flag in both development and frozen entry points before importing the document engine. Keep existing document IPC unchanged and unable to dispatch management commands. The setup script becomes a thin catalog/source adapter to these functions, preserving its current `--model` choices. Its standalone mutation lock must contend with the Rust host's lock; verify that in Task 4.
-- [ ] Run manager tests, existing IPC tests and `rtk proxy apps/sidecar/.venv/bin/python scripts/test_prepare_biomedbert.py`; run Ruff and mypy. Commit as `feat: install compatible NER models through an isolated worker`.
+- [x] Test install/verify/publication failures by injecting transport, validation and atomic-write failures. Assert the previous manifest bytes and ready model files stay unchanged; test cancel after a complete file and during validation, and retry after rename-before-registry. Removal persists `state="removing"` first, deletes only owned paths, then retains an available receipt with `path=null`; deletion failure remains retryable and reports remaining usage. Check symlinks and Windows reparse points in both staging and removal.
+- [x] Route the new CLI flag in both development and frozen entry points before importing the document engine. Keep existing document IPC unchanged and unable to dispatch management commands. The setup script becomes a thin catalog/source adapter to these functions, preserving its current `--model` choices. Its standalone mutation lock must contend with the Rust host's lock; verify that in Task 4.
+- [x] Run manager tests, existing IPC tests and `rtk proxy apps/sidecar/.venv/bin/python scripts/test_prepare_biomedbert.py`; run Ruff and mypy. Commit as `feat: install compatible NER models through an isolated worker`.
 
 ## Task 4: Supervise model jobs and protect model use in the host
 
@@ -328,8 +328,8 @@ write_registry(root, registry)
 
 **Interfaces:** Implement the six management commands and `model-progress` contract above. Add `ModelManager::new(resources: ResourcePaths) -> ModelManager`, job storage and child ownership to `AppState`. Add `ModelUseGuard::acquire(root: &Path, name: &str) -> Result<ModelUseGuard, AppError>` for inference lifetime. The worker owns the exclusive removal lock. Keep `resources::list_models` as the compatibility-facing entry point delegating to Task 2.
 
-- [ ] Add a fake worker accepting the specified request envelope. For install it emits downloading and validating messages followed by a result; selectable test modes block, exit early, send malformed/oversized JSON, or send a different ID. Tests must prove every failure releases the operation guard and never reports ready without a verified result and registry refresh. Use a real subprocess for cancellation and lock-lifetime tests.
-- [ ] Add a read-only lease check using a synthetic legacy directory and its existing `redactio-model.json`. Holding an inference lease in one process must block removal in another; releasing the process permits removal. A second writer must fail while the root mutation lock is held, including a standalone Python preparation process. Verify no new file is required merely to read a legacy installation.
+- [x] Add a fake worker accepting the specified request envelope. For install it emits downloading and validating messages followed by a result; selectable test modes block, exit early, send malformed/oversized JSON, or send a different ID. Tests must prove every failure releases the operation guard and never reports ready without a verified result and registry refresh. Use a real subprocess for cancellation and lock-lifetime tests.
+- [x] Add a read-only lease check using a synthetic legacy directory and its existing `redactio-model.json`. Holding an inference lease in one process must block removal in another; releasing the process permits removal. A second writer must fail while the root mutation lock is held, including a standalone Python preparation process. Verify no new file is required merely to read a legacy installation.
 
 ```rust
 mod common;
@@ -348,8 +348,8 @@ fn model_use_lease_blocks_removal_until_released() {
     receipt.unlock().unwrap();
 }
 ```
-- [ ] Run `rtk cargo test --locked --offline --manifest-path apps/desktop/src-tauri/Cargo.toml --test model_manager --test model_store`; confirm the new behavior is absent.
-- [ ] Implement the controller using existing Tokio process/IO support and `RunController::try_operation()`. Bound messages and drain stderr without forwarding it. Use `AppState::shutdown_sidecar()` before model validation/removal. Acquire app operation and config lock when inspecting pair references; the worker then acquires its mutation lock and exclusive receipt lock for removal, in that fixed order. Release through owned guards on all exits. Lock the immutable per-model identity receipt for inference so read-only stores work, and validate the receipt/path again after acquiring the lease. Read leases use `File::try_lock_shared`; the Python worker's exclusive lock must conflict with them on both platforms.
+- [x] Run `rtk cargo test --locked --offline --manifest-path apps/desktop/src-tauri/Cargo.toml --test model_manager --test model_store`; confirm the new behavior is absent.
+- [x] Implement the controller using existing Tokio process/IO support and `RunController::try_operation()`. Bound messages and drain stderr without forwarding it. Use `AppState::shutdown_sidecar()` before model validation/removal. Acquire app operation and config lock when inspecting pair references; the worker then acquires its mutation lock and exclusive receipt lock for removal, in that fixed order. Release through owned guards on all exits. Lock the immutable per-model identity receipt for inference so read-only stores work, and validate the receipt/path again after acquiring the lease. Read leases use `File::try_lock_shared`; the Python worker's exclusive lock must conflict with them on both platforms.
 
 ```rust
 let operation = state.runs.try_operation()?;
@@ -359,9 +359,9 @@ state.shutdown_sidecar().await;
 ```
 
   Model-use leases must survive as long as the cached inference process can access files, including idle time; shutdown releases them. Pair addition/configuration must share admission protection with removal so a model cannot become selected during deletion. Include all saved pairs in `used_by_pairs`, not just the active one.
-- [ ] Keep one active management job and one checked plan. `start_model_install` captures the plan by ID; a different ID fails without spawning anything. Job progress must match the active ID/model and remain within declared byte totals. Store terminal state before emitting it; `get_model_job` recovers a terminal event missed by the UI. Cancel kills/reaps only that worker, then reconciles the registry before releasing locks. If atomic publication already succeeded, report ready rather than claiming a cancelled nonexistent installation.
-- [ ] Add safe error codes for absent models, incompatible model metadata, inaccessible repository, model-store read-only, insufficient space, model in use, hash mismatch and interrupted installation. Expose no raw paths, private settings, document content or signed URLs. `list_managed_models` works without starting a document engine; missing model directories return catalog entries. Malformed existing stores remain visible as an explicit error.
-- [ ] Run the focused tests including the Python/Rust lock contention check, then existing resource, sidecar, pair and review-command regressions. Commit as `feat: supervise model downloads and protect active installations`.
+- [x] Keep one active management job and one checked plan. `start_model_install` captures the plan by ID; a different ID fails without spawning anything. Job progress must match the active ID/model and remain within declared byte totals. Store terminal state before emitting it; `get_model_job` recovers a terminal event missed by the UI. Cancel kills/reaps only that worker, then reconciles the registry before releasing locks. If atomic publication already succeeded, report ready rather than claiming a cancelled nonexistent installation.
+- [x] Add safe error codes for absent models, incompatible model metadata, inaccessible repository, model-store read-only, insufficient space, model in use, hash mismatch and interrupted installation. Expose no raw paths, private settings, document content or signed URLs. `list_managed_models` works without starting a document engine; missing model directories return catalog entries. Malformed existing stores remain visible as an explicit error.
+- [x] Run the focused tests including the Python/Rust lock contention check, then existing resource, sidecar, pair and review-command regressions. Commit as `feat: supervise model downloads and protect active installations`.
 
 ## Task 5: Build the global Models page with reliable progress
 
@@ -369,7 +369,7 @@ state.shutdown_sidecar().await;
 
 **Interfaces:** `modelApi` exposes `list(): Promise<ManagedModel[]>`, `check(source: ModelSource): Promise<CheckedModel>`, `install(planId: string): Promise<string>`, `cancel(jobId: string): Promise<void>`, `job(jobId: string): Promise<ModelJob | null>`, `remove(name: string): Promise<string>`, and `listen(receive: (value: unknown) => void): Promise<() => void>`. These map to the exact commands above; export `ModelApi = typeof modelApi`. `useModels(api: ModelApi = modelApi)` returns `models`, `readyModels`, `checked`, `job`, `busy`, `error`, `refresh()`, `check(source)`, `install(planId)`, `cancel()`, and `remove(name)`. `readyModels` projects unchanged `ModelInfo` objects. `ModelManager` receives `{models, checked, job, busy, error}` and emits `check(ModelSource)`, `install(planId)`, `cancel()`, `remove(name)`.
 
-- [ ] Add IPC validation and state tests: offline catalog visible with no pair; URL inspection does not start installation; ready requires a terminal job plus refreshed registry; stale progress from job A cannot overwrite job B; unmount cleans event listeners; missing completion is recovered from `get_model_job`. Construct complete `ManagedModel`/`ModelJob` data from Task 2's shared fixture rather than permissive partial mocks.
+- [x] Add IPC validation and state tests: offline catalog visible with no pair; URL inspection does not start installation; ready requires a terminal job plus refreshed registry; stale progress from job A cannot overwrite job B; unmount cleans event listeners; missing completion is recovered from `get_model_job`. Construct complete `ManagedModel`/`ModelJob` data from Task 2's shared fixture rather than permissive partial mocks.
 
 ```ts
 import { effectScope } from "vue";
@@ -401,8 +401,8 @@ test("ignores progress belonging to a previous job", async () => {
   } finally { scope.stop(); }
 });
 ```
-- [ ] Run `rtk pnpm --filter @redactio/desktop test src/composables/useModels.test.ts src/components/ModelManager.test.ts` and confirm failures before implementing.
-- [ ] Implement wrappers using the exact command names, Zod parsing, and existing `safeError`. Subscribe before starting jobs, retain the returned job ID, and reconcile completion through `get_model_job` using the same listener/summary pattern as `useRun`. Preserve current data on failed refresh; show the failure. Initialize once independently of pair selection.
+- [x] Run `rtk pnpm --filter @redactio/desktop test src/composables/useModels.test.ts src/components/ModelManager.test.ts` and confirm failures before implementing.
+- [x] Implement wrappers using the exact command names, Zod parsing, and existing `safeError`. Subscribe before starting jobs, retain the returned job ID, and reconcile completion through `get_model_job` using the same listener/summary pattern as `useRun`. Preserve current data on failed refresh; show the failure. Initialize once independently of pair selection.
 
 ```ts
 function acceptProgress(value: unknown) {
@@ -413,9 +413,9 @@ function acceptProgress(value: unknown) {
 ```
 
   `activeJobId` is a local `ref<string | null>` initialized to null and set from install/remove results. Buffer an event received before the start call resolves, or immediately query that returned job ID; do not lose a very fast completion.
-- [ ] Build the page with existing installed Onyx components; verify their actual exports/props locally before choosing a progress component. Show source/revision, size, labels, license or **Nicht angegeben**, status, and one state-appropriate action per model. Import uses a labeled URL field, **Prüfen**, then a result with **Herunterladen**. Show **Wird geprüft** during local validation and make cancel reachable while busy. Use existing typography/spacing tokens and accessible status text, keyboard focus and narrow-screen layout.
-- [ ] Add component tests that an invalid import shows its specific rejection, a ready entry cannot be downloaded twice, removal shows affected pairs, and malicious repository text is rendered as text. No third-party card HTML, generic spinners without stage text, or model-quality promises. Give read-only storage an actionable German message.
-- [ ] Run focused Vitest checks and `rtk pnpm typecheck`. Commit as `feat: add catalog and compatible-model import controls`.
+- [x] Build the page with existing installed Onyx components; verify their actual exports/props locally before choosing a progress component. Show source/revision, size, labels, license or **Nicht angegeben**, status, and one state-appropriate action per model. Import uses a labeled URL field, **Prüfen**, then a result with **Herunterladen**. Show **Wird geprüft** during local validation and make cancel reachable while busy. Use existing typography/spacing tokens and accessible status text, keyboard focus and narrow-screen layout.
+- [x] Add component tests that an invalid import shows its specific rejection, a ready entry cannot be downloaded twice, removal shows affected pairs, and malicious repository text is rendered as text. No third-party card HTML, generic spinners without stage text, or model-quality promises. Give read-only storage an actionable German message.
+- [x] Run focused Vitest checks and `rtk pnpm typecheck`. Commit as `feat: add catalog and compatible-model import controls`.
 
 ## Task 6: Connect model management to pairs without losing settings drafts
 
@@ -423,7 +423,7 @@ function acceptProgress(value: unknown) {
 
 **Interfaces:** Extend pair creation to `addPair(name, sourceFolder, targetFolder, createTarget, modelName)` in Vue/IPC and the Rust `add_pair` command; require a ready named model. Pass the global `readyModels` to detection/review components. Remove model fetching from `useDetection`; it retains pair-specific refresh/save/preview and stale-request protection.
 
-- [ ] Write the regression in `DetectionSettings.test.ts` using its existing mount fixture: change the selected model, toggle a native label and edit a custom rule, then replace `models` with equivalent refreshed metadata plus another newly installed model. Assert the save event contains the draft verbatim. Add a separate test that changing the actual selected pair resets to that pair's config.
+- [x] Write the regression in `DetectionSettings.test.ts` using its existing mount fixture: change the selected model, toggle a native label and edit a custom rule, then replace `models` with equivalent refreshed metadata plus another newly installed model. Assert the save event contains the draft verbatim. Add a separate test that changing the actual selected pair resets to that pair's config.
 
 ```ts
 test("model discovery refresh preserves unsaved settings", async () => {
@@ -445,11 +445,11 @@ test("model discovery refresh preserves unsaved settings", async () => {
 ```
 
   This code uses the existing `setup`, `models`, and `hugginglil` fixtures in `DetectionSettings.test.ts`. Add assertions for label choices cached while switching between models. Metadata refresh is not a form reset trigger.
-- [ ] Test first launch with zero models, one model, and two models. The Models tab is accessible with no pair, exactly one usable model is selected visibly for creation, multiple models require an explicit choice, and no-ready-model creation links to Models. A missing model in an existing pair is shown as missing rather than replaced by the first option. Preview/save/run/review actions needing it stay explanatory; users can still inspect the pair.
-- [ ] Run the focused App, PairManager, DetectionSettings and composable tests, then implement the wiring. Add `models` to the view union and exact nav active-state conditions; hide the pair selector on the app-wide Models page. Retain the unsaved-review navigation/close guard and include management job activity in operation admission without disabling its own Cancel button.
-- [ ] Reset detection drafts only when pair identity or saved config changes. Reconcile available options separately; do not deep-watch transient progress. Keep the pair's settings component mounted with `v-show` when navigating to Models so that visiting the download page also preserves its draft; cover that round trip in `App.test.ts`. Stop the old pair watcher from clearing global models or trying to refresh inference when its required model is absent. A model becoming ready can refresh that pair's availability without saving a changed config or clearing a draft.
-- [ ] At the host boundary, validate `modelName` under the existing operation guard, then call `native_default_config` for that exact model. Remove the hardcoded HuggingLil-only native-label rule and require native selections for all nonlegacy imports. Test a concurrent removal attempt and an unavailable supplied name; neither may create a pair using a fallback model.
-- [ ] Run frontend tests/typecheck/build and focused Rust pair/detection/review-command tests. Commit as `feat: connect installed models to pair setup and preserve detection drafts`.
+- [x] Test first launch with zero models, one model, and two models. The Models tab is accessible with no pair, exactly one usable model is selected visibly for creation, multiple models require an explicit choice, and no-ready-model creation links to Models. A missing model in an existing pair is shown as missing rather than replaced by the first option. Preview/save/run/review actions needing it stay explanatory; users can still inspect the pair.
+- [x] Run the focused App, PairManager, DetectionSettings and composable tests, then implement the wiring. Add `models` to the view union and exact nav active-state conditions; hide the pair selector on the app-wide Models page. Retain the unsaved-review navigation/close guard and include management job activity in operation admission without disabling its own Cancel button.
+- [x] Reset detection drafts only when pair identity or saved config changes. Reconcile available options separately; do not deep-watch transient progress. Keep the pair's settings component mounted with `v-show` when navigating to Models so that visiting the download page also preserves its draft; cover that round trip in `App.test.ts`. Stop the old pair watcher from clearing global models or trying to refresh inference when its required model is absent. A model becoming ready can refresh that pair's availability without saving a changed config or clearing a draft.
+- [x] At the host boundary, validate `modelName` under the existing operation guard, then call `native_default_config` for that exact model. Remove the hardcoded HuggingLil-only native-label rule and require native selections for all nonlegacy imports. Test a concurrent removal attempt and an unavailable supplied name; neither may create a pair using a fallback model.
+- [x] Run frontend tests/typecheck/build and focused Rust pair/detection/review-command tests. Commit as `feat: connect installed models to pair setup and preserve detection drafts`.
 
 ## Task 7: Ship a model-free Windows package with optional preloading
 
@@ -457,8 +457,8 @@ test("model discovery refresh preserves unsaved settings", async () => {
 
 **Interfaces:** Packaging adds `[string[]]$PreloadModels = @()` with allowed catalog keys. Build manifest records `inputs.models` as an array rather than a mandatory single model. Default ZIP has no weights; optional preloads use the same registry and installation logic as the app. Package validation separates immutable shipped runtime hashes from mutable model-store receipts.
 
-- [ ] Update negative packaging tests first: zero-model package is accepted, a declared preload missing/corrupt files is rejected, two preloads are both checked, and a model installed after extraction does not invalidate immutable runtime-file verification. Keep rejection of unexpected files outside the mutable model store. Run `rtk proxy apps/sidecar/.venv/bin/python scripts/test_packaging.py`; confirm the old mandatory-BiomedBERT assumptions fail.
-- [ ] Change the build default and preserve explicit preloading:
+- [x] Update negative packaging tests first: zero-model package is accepted, a declared preload missing/corrupt files is rejected, two preloads are both checked, and a model installed after extraction does not invalidate immutable runtime-file verification. Keep rejection of unexpected files outside the mutable model store. Run `rtk proxy apps/sidecar/.venv/bin/python scripts/test_packaging.py`; confirm the old mandatory-BiomedBERT assumptions fail.
+- [x] Change the build default and preserve explicit preloading:
 
 ```powershell
 param([string]$DesktopExecutable, [string]$DesktopNotices,
@@ -470,10 +470,10 @@ foreach ($model in $PreloadModels) {
 ```
 
   With no preloads, validate the frozen worker's catalog/listing and model-free host resources. With preloads, loop over every ready model and run local synthetic processing/replay. Do not require a particular NER result as proof of successful loading; use explicit synthetic custom rules for deterministic redaction assertions.
-- [ ] Bundle the canonical catalog, both Transformers implementations, tokenizer support, trusted CA data, `spacy_legacy`, and `spacy_loggers` in the frozen runtime. Incorporate the verified tokenizers license supplement from the earlier USB build into reproducible source inputs; do not leave fixes solely in ignored `dist/usb-demo` scripts. Preserve the portable desktop CRT treatment from that build. Verify dynamic imports in the frozen executable before attempting a full model run.
-- [ ] Update build-manifest provenance and checks for zero/multiple preloads. Runtime file checks remain immutable; model entries validate through registry receipts and allow explicit later installations/removals. Ensure docs distinguish a first download requiring connectivity from an optionally preloaded offline demonstration. Document copying the entire folder, model location, read-only behavior, supported import contract and exact-revision reinstall.
-- [ ] Keep regular PR CI's real-model preparation explicit and existing single-trigger policy (`push` on main, `pull_request`, manual). Add manager tests to existing jobs; do not create duplicate feature-branch push checks. Windows release remains manual and defaults to the model-free package; optional preload input is a fixed catalog-key choice.
-- [ ] Run Python packaging checks and native PowerShell negative/build-manifest checks. Commit as `build: ship model-free Windows packages with optional preloads`.
+- [x] Bundle the canonical catalog, both Transformers implementations, tokenizer support, trusted CA data, `spacy_legacy`, and `spacy_loggers` in the frozen runtime. Incorporate the verified tokenizers license supplement from the earlier USB build into reproducible source inputs; do not leave fixes solely in ignored `dist/usb-demo` scripts. Preserve the portable desktop CRT treatment from that build. Verify dynamic imports in the frozen executable before attempting a full model run.
+- [x] Update build-manifest provenance and checks for zero/multiple preloads. Runtime file checks remain immutable; model entries validate through registry receipts and allow explicit later installations/removals. Ensure docs distinguish a first download requiring connectivity from an optionally preloaded offline demonstration. Document copying the entire folder, model location, read-only behavior, supported import contract and exact-revision reinstall.
+- [x] Keep regular PR CI's real-model preparation explicit and existing single-trigger policy (`push` on main, `pull_request`, manual). Add manager tests to existing jobs; do not create duplicate feature-branch push checks. Windows release remains manual and defaults to the model-free package; optional preload input is a fixed catalog-key choice.
+- [x] Run Python packaging checks and native PowerShell negative/build-manifest checks. Commit as `build: ship model-free Windows packages with optional preloads`.
 
 ## Task 8: Integrate, verify old reviews, and prepare the manual handoff
 
@@ -481,8 +481,8 @@ foreach ($model in $PreloadModels) {
 
 **Interfaces:** All commands, worker events and registry types above must agree. `ModelInfo` and legacy review metadata remain compatible with the pre-change app.
 
-- [ ] Before relying on new-engine replay, generate a synthetic legacy review using the pre-feature engine at commit `9c0ce09` in an isolated temporary checkout and the exact existing local models. Keep its source/output hashes, config, decisions, Markdown and fingerprint as temporary evidence. Replay through the new engine; compare them exactly. Installing/removing an unrelated model must not alter that pair's processing revision or result.
-- [ ] Run the normal checks once against the combined result:
+- [x] Before relying on new-engine replay, generate a synthetic legacy review using the pre-feature engine at commit `9c0ce09` in an isolated temporary checkout and the exact existing local models. Keep its source/output hashes, config, decisions, Markdown and fingerprint as temporary evidence. Replay through the new engine; compare them exactly. Installing/removing an unrelated model must not alter that pair's processing revision or result.
+- [x] Run the normal checks once against the combined result:
 
 ```sh
 rtk pnpm typecheck
@@ -498,14 +498,171 @@ rtk cargo test --locked --offline --manifest-path apps/desktop/src-tauri/Cargo.t
 ```
 
   Use existing prepared models and the documented real-sidecar environment variables for ignored integration checks. Do not silently skip them and claim real-model validation. Repeat only affected checks after fixes; avoid repeated full matrices without a new reason.
-- [ ] Exercise the frozen Windows management worker: catalog install for each current model, URL inspection/import, cancelled download followed by retry, incompatible import, and offline processing with a cold external HF cache. Test a locally generated compatible model with a different context limit and a repository identity absent from the catalog through the controlled transport; verify source-relative spans past its first window. The remote URL test may use an existing catalog repository, but that alone does not prove arbitrary compatible repositories work.
-- [ ] Produce the default no-weights ZIP and a preloaded demonstration variant from the final committed source. Check archive contents, hashes, notices, worker loading, and model discovery after extraction/relocation. Report the exact commit and distinguish automated checks from manual GUI acceptance.
-- [ ] Use browser-based synthetic UI tests for Onyx layout, focus, progress/cancel, empty state, draft preservation and narrow screens. Do not launch the native GUI. Give the user concise native Windows steps for download/import, processing and USB verification; preserve the existing working demo and launcher unless explicitly replacing an identified artifact.
-- [ ] Request a whole-change review focused on registry atomicity, imported-model validation, cancellation races, native file locks, dynamic windows and legacy replay. Fix actionable findings, rerun affected checks, commit and push to existing PR #1, and attach that PR to the task. Do not merge.
+- [x] Exercise the frozen Windows management worker: catalog install for each current model, URL inspection/import, cancelled download followed by retry, incompatible import, and offline processing with a cold external HF cache. Test a locally generated compatible model with a different context limit and a repository identity absent from the catalog through the controlled transport; verify source-relative spans past its first window. The remote URL test may use an existing catalog repository, but that alone does not prove arbitrary compatible repositories work.
+- [x] Produce the default no-weights ZIP and a preloaded demonstration variant from the final committed source. Check archive contents, hashes, notices, worker loading, and model discovery after extraction/relocation. Report the exact commit and distinguish automated checks from manual GUI acceptance.
+- [x] Use browser-based synthetic UI tests for Onyx layout, focus, progress/cancel, empty state, draft preservation and narrow screens. Do not launch the native GUI. Give the user concise native Windows steps for download/import, processing and USB verification; preserve the existing working demo and launcher unless explicitly replacing an identified artifact.
+- [x] Request a whole-change review focused on registry atomicity, imported-model validation, cancellation races, native file locks, dynamic windows and legacy replay. Fix actionable findings, rerun affected checks, commit and push to existing PR #1, and attach that PR to the task. Do not merge.
 
 ## Progress and evidence
 
-This document is an implementation plan. The specification is approved; the plan
-is awaiting review. No task above has been implemented or verified by writing
-this plan. Record implementation commits and actual test evidence here during
-execution, including any unavailable native/manual checks.
+The model-management implementation and automated Task 8 verification are complete.
+All scoped and whole-change source reviews passed. Native GUI interaction and a
+physically disconnected USB run remain user-owned release acceptance steps rather
+than automated implementation claims.
+
+The final clean packaging source is
+`79c7a3e6e6cb1fc01ebdbebb03c7bb03c08635ad`. Reviewed runtime and desktop source is
+`7636b77f03bbab3ff90c91d6ddc902563eea4f29`; the later commit only joins the
+PowerShell tokenizer-file filter into one valid command. Desktop, sidecar, locks,
+build inputs, and freezer specification are unchanged.
+
+### Execution status
+
+- [x] Task 1: adaptable context and local validation — `7b792c4`, `f53f31a`,
+  `d86b862`.
+- [x] Task 2: catalog, registry, discovery, and shared contracts — `672ac77`,
+  `52f6eda`, `cbf51c9`, `722230f`, `1ed9485`, `aadbd75`, `e3a449b`,
+  `30b68ca`, `c59aac1`, `277a014`.
+- [x] Task 3: isolated installation worker — `2d489a7`, `53701ba`.
+- [x] Task 4: Rust model management and cross-process leases — `b9c6bc1`,
+  `1fba270`.
+- [x] Task 5: Vue model management — `fa5a0ae`, `2910c1b`, `ab9f752`,
+  `8e8dac0`.
+- [x] Task 6: pair/model integration and draft preservation — `ef87930`,
+  `4972edb`.
+- [x] Task 7: model-free Windows packaging and optional preloads — `e943dc5`,
+  `8f023fe`.
+- [x] Task 8: integration, legacy replay, final source review, browser acceptance,
+  frozen worker acceptance, and standard/demo ZIP verification and delivery.
+
+### Completed verification
+
+- Python: 388 regular tests passed with two explicit real-model tests skipped in
+  that run; both skipped canaries were then run explicitly and passed against the
+  pinned offline models. Ruff check/format passed and mypy checked 12 source files.
+- Rust: 215 regular tests passed with six real-model tests ignored in that run;
+  all six were then run explicitly and passed (one sidecar, one sync, two detection,
+  and two review cases). Rustfmt and all-target Clippy passed. `d44166f` corrects
+  only the real-sync fixture's selected model.
+- Frontend: the full 203-test suite, typecheck, and production build passed. The
+  Task 6 watcher fix then passed 26 affected tests across three files, typecheck,
+  build, and 13 browser checks against the actual App. The existing Vite chunk-size
+  advisory is nonblocking. The final review fix passed the expanded full suite of
+  208 tests across 23 files, typecheck, and build. The corrected legacy browser
+  fixture selected BiomedBERT and deferred model metadata; it reproduced RED against
+  `4972edb` and passed 16 actual-App checks against `a865032`.
+- Final review fix: 237 affected Python manager/store tests, mypy over all 12 source
+  files, and scoped Ruff passed for `a865032`. The CDN extension in `7636b77` then
+  passed 135 manager tests, a 27-test focused rerun, Ruff, and mypy. Final source
+  re-review approved all three P2 fixes and the exact-CDN follow-up.
+- Packaging: the Python packaging suite reported six cases with one Windows-only
+  skip, meaning five cases executed and passed. Native PowerShell passed 21 package
+  cases and 20 build-manifest cases after the review fix.
+- Compatibility: exact process and corrected-review replies from both pinned
+  models still match the archived `9c0ce09` baseline before and after installing
+  and removing an unrelated model. Original model records were unchanged; legacy
+  storage migrated once to schema 2.
+- Non-catalog import: `SyntheticChecks/german-tiny-ner` used a real BERT model with
+  a 32-token window, 8-token stride, and two special tokens. Controlled HTTP,
+  hashes, staging, runtime validation, copied-store relocation, denied sockets,
+  and cold-cache offline processing passed on Linux and native Windows. The
+  414-code-point document produced 83 detections whose last offset was 414.
+- Native lock/host checks: 13 host/manager/lock cases and five worker-owned lease
+  cases passed on Windows, including a child surviving its launcher and a
+  read-only ready model.
+- Frozen Windows: both catalog installs, public URL inspection/import, incompatible
+  rejection, empty-store rejection, cancel/retry, Unicode-and-spaces relocation,
+  cold-cache offline inference, and the unknown 32-token model passed. Offline
+  flags do not claim physical network disconnection. The exact final worker SHA-256
+  is `eec025fce7efa1c0d0b44c8513822deec86277c683f5f5b986b760189224353f`.
+- Final artifacts: the zero-model `redactio-79c7a3e-windows-x64.zip` is 564,245,887
+  bytes with SHA-256
+  `5758d333dc0198588cff6eae6b5f45e0e59f29977c21f9b2c72943159d623c13`;
+  the two-model `redactio-demo-79c7a3e-windows-x64.zip` is 2,713,638,843 bytes with
+  SHA-256 `af75e0731e831d653b0341d50688cd46b026eed35f5def5ec1ddcb971599dbd9`.
+  Both passed before-archive, post-extraction, archive-integrity, and delivered-hash
+  checks. The prior `84b110b` demo remained unchanged.
+
+The reproducible procedures and remaining boundaries are in
+[Windows release acceptance](../../release-checks.md#model-management-handoff-2026-09-21).
+Durable automated evidence is under `dist/model-management-evidence/`, with native
+handoff details in `dist/model-management-windows/handoff.json`. The native GUI flow
+and physical disconnected-USB procedure remain explicitly unverified until the user
+performs them.
+
+### Execution rulings
+
+These rulings are the chronological decision record. They explain coordination
+choices and their stated correction cost; they are not remaining work items.
+
+1. Use parallel implementation for Tasks 3–5 with disjoint file ownership: the
+   user and approved plan explicitly requested it, overriding the skill's generic
+   serial-implementer rule. If wrong, the cost was integration/conflict repair,
+   not overwritten user work.
+2. Track only `tests/fixtures/model-management.json` with a precise `.gitignore`
+   exception in Task 2: the approved synthetic contract fixture would otherwise
+   remain untracked. If wrong, the cost was removing that one nonsensitive fixture.
+3. Start Task 2 frontend schemas alongside Task 1: their exact wire contract was
+   approved and their two TypeScript files did not share loader state. If wrong,
+   the cost was schema reconciliation before the Task 2 gate; Python/Rust registry
+   work still waited for Task 1 review.
+4. Preserve safe nested paths in retained legacy entries while constraining new
+   installation paths to one generated component: migration must not reject
+   otherwise valid old manifests. If wrong, the cost was stricter validation of
+   unavailable legacy metadata; those paths are never loaded or deleted.
+5. Start independent Task 2 Rust DTO/discovery work while Task 1 offset validation
+   completed: Rust metadata-only paths did not depend on the Python loader. If
+   wrong, the cost was metadata-contract reconciliation before integration;
+   Python catalog/store integration and the Task 2 gate still waited.
+6. Begin the Task 2 canonical catalog and packaging projection while Task 1 final
+   offset review ran: those files did not touch the Python loader. If wrong, the
+   cost was catalog projection correction before the combined Task 2 review.
+7. Begin the Task 5 Models UI after frontend contract review, alongside the Task 2
+   registry: command/type interfaces were approved and its five new files did not
+   overlap registry work. If wrong, the cost was API/fixture reconciliation before
+   integrated checks; real integration remained gated.
+8. Reuse the idle `/root/model_context` worker for Task 5 after Task 1 passed review:
+   new and other idle-agent resumes hit the platform thread limit. If wrong, the
+   cost was context distraction; a different agent reviewed Task 5.
+9. Keep `README.md` as an allowlisted passive catalog artifact in Task 3: both
+   original pinned inputs include its hash and Task 2 had to preserve every file
+   identity. If wrong, the cost was a small optional metadata download; it is never
+   executed or rendered as HTML.
+10. Start isolated Task 3 URL/hash/transport/worker-envelope work during Task 2
+    review: those new-file boundaries did not depend on unfinished registry
+    internals. If wrong, the cost was adapting new worker code before integration;
+    store mutation integration still waited for Task 2 approval.
+11. Align the management error-code grammar with existing Rust `AppError` and the
+    opaque-name limit with the then-assumed Zod UTF-16 semantics: this preserved
+    backend errors and existing frontend wire acceptance. If wrong, the cost was
+    revising management validators; generated and pinned IDs are ASCII.
+12. Correct ruling 11's length unit to 512 Unicode code points: an installed-Zod
+    probe disproved the UTF-16 assumption and matched Python `len`; Rust alone had
+    to stop counting UTF-8 bytes. If wrong, the cost was revising uncommon opaque
+    names; generated and pinned IDs remain ASCII. Only the length-unit portion of
+    ruling 11 was superseded.
+13. Release Task 3 store integration after its Python/catalog dependency passed
+    re-review: remaining Task 2 findings were isolated Rust metadata/DTO work. If
+    wrong, the cost was worker/host boundary reconciliation; Task 4 stayed gated.
+14. Extend Task 4 synthetic fake-sidecar fixtures to the selected-model lease
+    contract: configure-time leases must stay alive for the cached process rather
+    than lock every installed model. If wrong, the cost was fixture updates;
+    negative and legacy-review assertions had to remain.
+15. Start Task 7 packaging alongside the Task 3 security fix and Task 4 host: files
+    were disjoint and the installer API existed. If wrong, the cost was packaging
+    integration correction before Task 8; full frozen validation stayed gated.
+16. Add a narrow inference-worker shared-receipt lease to Task 4 after Task 3 loader
+    review: host hard death can release host handles before a live inference child
+    exits, while the specification requires live-worker protection. If wrong, the
+    cost was one shared lock per cached model and reuse of the existing lock helper;
+    no network, protocol, or user-flow change was introduced.
+17. Start Task 6 frontend integration during Task 4 combined review: ready-model and
+    command contracts were stable and frontend files were disjoint. If wrong, the
+    cost was frontend reconciliation before integrated checks; Rust pair validation
+    remained gated until Task 4 approval.
+18. Add only the two exact documented AWS/GCP CDN edge hostnames to the existing
+    delivery allowlist within the active final fix wave: real frozen installs exposed
+    a current upstream routing change, and official Hugging Face documentation and
+    live metadata verify both hosts. If wrong, this expands outbound hostname
+    permission unnecessarily and costs reverting two entries; public-address, TLS,
+    redirect, and artifact-hash checks remain enforced.
