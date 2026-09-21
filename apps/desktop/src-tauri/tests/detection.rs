@@ -34,6 +34,10 @@ impl Fixture {
             fs::create_dir(&target).unwrap();
             settings.add(name, &source, &target).unwrap();
         }
+        let model_name = common::fixture_model_store(root.path());
+        for pair in &mut settings.sync_pairs {
+            pair.config.model = model_name.clone();
+        }
         let path = config.join("settings.json");
         save_settings(&path, &settings).unwrap();
         Self {
@@ -65,6 +69,7 @@ fn runtime() -> tokio::runtime::Runtime {
 }
 fn rules(pattern: &str) -> ProcessingConfig {
     ProcessingConfig {
+        model: common::fixture_model_name(),
         enabled_entities: vec![],
         custom_rules: vec![CustomRule::Regex {
             id: Uuid::new_v4(),

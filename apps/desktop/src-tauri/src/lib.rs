@@ -1,6 +1,7 @@
 mod commands;
 pub mod domain;
 pub mod error;
+pub mod model_manager;
 pub mod model_store;
 pub mod protocol;
 pub mod resources;
@@ -29,6 +30,12 @@ pub fn run() {
             commands::refresh_processing_config,
             commands::preview_rules,
             commands::list_models,
+            commands::list_managed_models,
+            commands::check_model,
+            commands::start_model_install,
+            commands::remove_model,
+            commands::cancel_model_job,
+            commands::get_model_job,
             commands::open_review,
             commands::save_review,
             commands::export_approved,
@@ -42,9 +49,7 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|app, event| {
             if matches!(event, tauri::RunEvent::Exit) {
-                tauri::async_runtime::block_on(
-                    app.state::<commands::AppState>().shutdown_sidecar(),
-                );
+                tauri::async_runtime::block_on(app.state::<commands::AppState>().shutdown());
             }
         });
 }

@@ -38,6 +38,10 @@ impl Fixture {
             sync_pair_id: settings.sync_pairs[0].id,
             doc_id: "doc-0001".into(),
         };
+        let model_name = common::fixture_model_store(root.path());
+        for pair in &mut settings.sync_pairs {
+            pair.config.model = model_name.clone();
+        }
         let path = config.join("settings.json");
         save_settings(&path, &settings).unwrap();
         Self {

@@ -30,6 +30,10 @@ impl Fixture {
             fs::create_dir(&target).unwrap();
             settings.add(label, &source, &target).unwrap();
         }
+        let model_name = common::fixture_model_store(root.path());
+        for pair in &mut settings.sync_pairs {
+            pair.config.model = model_name.clone();
+        }
         let path = config.join("settings.json");
         save_settings(&path, &settings).unwrap();
         let controller = RunController::new(path.clone());

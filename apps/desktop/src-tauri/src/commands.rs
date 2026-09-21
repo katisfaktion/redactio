@@ -27,9 +27,33 @@ pub struct AppState {
     app_config_root: PathBuf,
     runs: RunController,
     sidecar: Mutex<Option<Sidecar>>,
+    models: Mutex<Option<crate::model_manager::ModelManager>>,
 }
 
 impl AppState {
+    fn models(&self) -> Result<crate::model_manager::ModelManager, AppError> {
+        let mut models = self
+            .models
+            .lock()
+            .map_err(|_| AppError::new("state_unavailable"))?;
+        if models.is_none() {
+            *models = Some(crate::model_manager::ModelManager::new(
+                crate::resources::resolve()?,
+            ));
+        }
+        Ok(models.as_ref().unwrap().clone())
+    }
+    fn cached_sidecar(&self) -> Option<Sidecar> {
+        self.sidecar.lock().ok().and_then(|saved| saved.clone())
+    }
+    pub async fn shutdown(&self) {
+        let models = self.models.lock().ok().and_then(|models| models.clone());
+        if let Some(models) = models {
+            models.shutdown().await;
+        }
+        self.shutdown_sidecar().await;
+    }
+
     fn sidecar(&self) -> Result<Sidecar, AppError> {
         let mut saved = self
             .sidecar
@@ -57,6 +81,7 @@ impl AppState {
             app_config_root: app_config_root.clone(),
             runs: RunController::new(app_config_root.join("settings.json")),
             sidecar: Mutex::new(None),
+            models: Mutex::new(None),
         })
     }
 
@@ -146,12 +171,14 @@ pub fn add_pair(
     target_folder: String,
     create_target: bool,
 ) -> Result<UiSettings, AppError> {
-    let resources = crate::resources::resolve()?;
-    let model = crate::resources::list_models(&resources.model_root)?
-        .into_iter()
-        .find(|model| model.compatible)
-        .ok_or_else(|| AppError::new("setup_incomplete"))?;
     mutate(&state, |settings| {
+        let resources = crate::resources::resolve()?;
+        let model = crate::resources::list_models(&resources.model_root)?
+            .into_iter()
+            .find(|model| model.compatible)
+            .ok_or_else(|| AppError::new("setup_incomplete"))?;
+        let _lease =
+            crate::model_store::ModelUseGuard::acquire(&resources.model_root, &model.name)?;
         let source = Path::new(&source_folder);
         let target = Path::new(&target_folder);
         let mut other_roots = settings.roots();
@@ -452,4 +479,67 @@ pub fn open_audit_folder(state: State<'_, AppState>) -> Result<(), AppError> {
         let _ = child.wait();
     });
     Ok(())
+}
+
+#[tauri::command]
+pub fn list_managed_models(
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::model_store::ManagedModel>, AppError> {
+    state.models()?.list(&state.settings_path)
+}
+#[tauri::command]
+pub async fn check_model(
+    state: State<'_, AppState>,
+    source: crate::model_store::ModelSource,
+) -> Result<crate::model_store::CheckedModel, AppError> {
+    state.models()?.check(source, &state.runs).await
+}
+#[tauri::command]
+pub async fn start_model_install(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    plan_id: Uuid,
+) -> Result<Uuid, AppError> {
+    state
+        .models()?
+        .start_install(
+            plan_id,
+            &state.runs,
+            &state.app_config_root,
+            state.cached_sidecar(),
+            move |job| {
+                let _ = app.emit("model-progress", job);
+            },
+        )
+        .await
+}
+#[tauri::command]
+pub async fn remove_model(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    name: String,
+) -> Result<Uuid, AppError> {
+    state
+        .models()?
+        .remove(
+            &name,
+            &state.runs,
+            &state.app_config_root,
+            state.cached_sidecar(),
+            move |job| {
+                let _ = app.emit("model-progress", job);
+            },
+        )
+        .await
+}
+#[tauri::command]
+pub async fn cancel_model_job(state: State<'_, AppState>, job_id: Uuid) -> Result<(), AppError> {
+    state.models()?.cancel(job_id).await
+}
+#[tauri::command]
+pub fn get_model_job(
+    state: State<'_, AppState>,
+    job_id: Uuid,
+) -> Result<Option<crate::model_store::ModelJob>, AppError> {
+    state.models()?.get_job(job_id)
 }

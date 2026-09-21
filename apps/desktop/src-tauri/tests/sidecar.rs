@@ -26,7 +26,7 @@ fn fake(mode: &str) -> Sidecar {
     Sidecar::new(
         PathBuf::from(python),
         vec![script.into_os_string(), OsString::from(mode)],
-        PathBuf::from("."),
+        common::fixture_model_root(),
     )
 }
 
@@ -41,7 +41,7 @@ fn fake_with_marker(mode: &str, marker: &std::path::Path) -> Sidecar {
             OsString::from(mode),
             marker.as_os_str().to_owned(),
         ],
-        PathBuf::from("."),
+        common::fixture_model_root(),
     )
 }
 
@@ -50,7 +50,7 @@ fn configuration(pair: &str, revision: &str) -> serde_json::Value {
         "sync_pair_id": pair,
         "processing_revision": revision,
         "config": {
-            "model": "de_core_news_sm",
+            "model": common::fixture_model_name(),
             "enabled_entities": ["PERSON", "EMAIL_ADDRESS"],
             "custom_rules": [],
             "include_positions": false
@@ -403,7 +403,7 @@ fn document_retry_replays_the_complete_successful_configuration() {
                 "sync_pair_id": pair,
                 "processing_revision": revision,
                 "config": {
-                    "model": "de_core_news_sm",
+                    "model": common::fixture_model_name(),
                     "enabled_entities": ["PERSON", "EMAIL_ADDRESS"],
                     "custom_rules": [{
                         "id": "00000000-0000-0000-0000-000000000005",
@@ -437,7 +437,7 @@ fn document_retry_replays_the_complete_successful_configuration() {
                 .await
                 .unwrap();
 
-            assert_eq!(response["configured_model"], "de_core_news_sm");
+            assert_eq!(response["configured_model"], common::fixture_model_name());
             let replayed: Vec<_> = std::fs::read_to_string(marker.with_extension("configs"))
                 .unwrap()
                 .lines()
@@ -491,7 +491,7 @@ fn fresh_process_restores_configuration_after_timeout_and_ping() {
                 )
                 .await
                 .unwrap();
-            assert_eq!(processed["configured_model"], "de_core_news_sm");
+            assert_eq!(processed["configured_model"], common::fixture_model_name());
             assert_eq!(
                 std::fs::read_to_string(marker.with_extension("configs"))
                     .unwrap()
@@ -573,7 +573,7 @@ fn first_exit_during_initial_replay_uses_the_single_restart_budget() {
                 )
                 .await
                 .unwrap();
-            assert_eq!(processed["configured_model"], "de_core_news_sm");
+            assert_eq!(processed["configured_model"], common::fixture_model_name());
             assert_eq!(
                 std::fs::read_to_string(marker.with_extension("configs"))
                     .unwrap()
@@ -913,6 +913,8 @@ fn resource_resolution_uses_explicit_development_process_arguments() {
     std::env::set_var("REDACTIO_MODEL_DIR", model_root.path());
 
     let resolved = resources::resolve();
+    std::env::set_var("REDACTIO_MODEL_DIR", model_root.path().join("absent"));
+    let absent = resources::resolve();
     std::env::set_var("REDACTIO_SIDECAR_ARGS_JSON", "not-json");
     let malformed = resources::resolve();
     std::env::remove_var("REDACTIO_MODEL_DIR");
@@ -923,6 +925,7 @@ fn resource_resolution_uses_explicit_development_process_arguments() {
     std::env::remove_var("REDACTIO_SIDECAR_EXECUTABLE");
     std::env::remove_var("REDACTIO_SIDECAR_ARGS_JSON");
     std::env::remove_var("REDACTIO_MODEL_DIR");
+    assert!(absent.is_ok());
     assert!(malformed.is_err());
     assert!(incomplete.is_err());
     assert!(relative.is_err());
@@ -1290,5 +1293,118 @@ fn reviewed_cli_roundtrips_through_the_bundled_model() {
                 .any(|detection| detection.entity_type
                     == redactio_lib::domain::settings::EntityType::Location));
             child.shutdown().await;
+        });
+}
+
+#[test]
+fn configured_model_lease_survives_idle_until_child_shutdown() {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let root = tempfile::tempdir().unwrap();
+            let name = common::fixture_model_store(root.path());
+            let child = Sidecar::new(
+                std::env::var_os("REDACTIO_TEST_PYTHON").unwrap().into(),
+                vec![
+                    common::manifest_dir()
+                        .join("tests/fake_sidecar.py")
+                        .into_os_string(),
+                    "ok".into(),
+                ],
+                root.path().into(),
+            );
+            let mut payload =
+                configuration(&Uuid::new_v4().to_string(), &Uuid::new_v4().to_string());
+            payload["config"]["model"] = name.into();
+            let _: ConfigureResult = child
+                .request("configure", &payload, Duration::from_secs(5))
+                .await
+                .unwrap();
+            let receipt =
+                std::fs::File::open(root.path().join("fixture-model/redactio-model.json")).unwrap();
+            assert!(
+                receipt.try_lock().is_err(),
+                "idle process must retain model lease"
+            );
+            child.shutdown().await;
+            receipt.try_lock().unwrap();
+        });
+}
+
+#[test]
+fn model_leases_survive_aborted_requests_and_shutdown_futures_until_reaping() {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            for mode in ["abort-request", "abort-shutdown", "timeout"] {
+                let root = tempfile::tempdir().unwrap();
+                let name = common::fixture_model_store(root.path());
+                let child = Sidecar::new(
+                    std::env::var_os("REDACTIO_TEST_PYTHON").unwrap().into(),
+                    vec![
+                        common::manifest_dir()
+                            .join("tests/fake_model_worker.py")
+                            .into_os_string(),
+                        "inference".into(),
+                    ],
+                    root.path().into(),
+                );
+                let mut payload =
+                    configuration(&Uuid::new_v4().to_string(), &Uuid::new_v4().to_string());
+                payload["config"]["model"] = name.into();
+                let _: ConfigureResult = child
+                    .request("configure", &payload, Duration::from_secs(5))
+                    .await
+                    .unwrap();
+                let receipt =
+                    std::fs::File::open(root.path().join("fixture-model/redactio-model.json"))
+                        .unwrap();
+                assert!(receipt.try_lock().is_err());
+                let worker = child.clone();
+                if mode == "abort-shutdown" {
+                    let shutdown = tokio::spawn(async move {
+                        worker.shutdown().await;
+                    });
+                    wait_for_marker(&root.path().join("eof")).await;
+                    assert!(receipt.try_lock().is_err());
+                    shutdown.abort();
+                    let _ = shutdown.await;
+                } else {
+                    let request = tokio::spawn(async move {
+                        worker
+                            .request::<_, serde_json::Value>(
+                                "ping",
+                                &serde_json::json!({}),
+                                if mode == "timeout" {
+                                    Duration::from_millis(500)
+                                } else {
+                                    Duration::from_secs(10)
+                                },
+                            )
+                            .await
+                    });
+                    wait_for_marker(&root.path().join("started")).await;
+                    assert!(receipt.try_lock().is_err());
+                    if mode == "abort-request" {
+                        request.abort();
+                        assert!(request.await.unwrap_err().is_cancelled());
+                    } else {
+                        assert_eq!(request.await.unwrap().unwrap_err().code, "engine_timeout");
+                    }
+                }
+                drop(child);
+                tokio::time::timeout(Duration::from_secs(5), async {
+                    while receipt.try_lock().is_err() {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                })
+                .await
+                .unwrap();
+                receipt.unlock().unwrap();
+            }
         });
 }

@@ -325,7 +325,7 @@ fn open_regular_file_with(path: &Path, update: bool) -> Result<File, AppError> {
     Ok(file)
 }
 
-fn snapshot_file(file: &File) -> Result<FileSnapshot, AppError> {
+pub(crate) fn snapshot_file(file: &File) -> Result<FileSnapshot, AppError> {
     let metadata = file.metadata()?;
     if is_link(&metadata) || !metadata.is_file() {
         return Err(AppError::new("unsafe_object"));

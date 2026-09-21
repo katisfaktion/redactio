@@ -24,9 +24,14 @@ pub fn resolve() -> Result<ResourcePaths, AppError> {
             if !executable.is_absolute()
                 || !executable.is_file()
                 || !model_root.is_absolute()
-                || !model_root.is_dir()
+                || (model_root.exists() && !model_root.is_dir())
             {
                 return Err(setup_error());
+            }
+            paths::reject_links(model_root.parent().ok_or_else(setup_error)?)
+                .map_err(|_| setup_error())?;
+            if fs::symlink_metadata(&model_root).is_ok() {
+                resource(model_root.clone(), true)?;
             }
             let arguments: Vec<String> = match arguments {
                 Ok(value) => serde_json::from_str(&value).map_err(|_| setup_error())?,

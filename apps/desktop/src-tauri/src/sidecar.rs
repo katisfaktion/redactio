@@ -1,4 +1,4 @@
-use crate::{error::AppError, protocol::ConfigureResult};
+use crate::{error::AppError, model_store::ModelUseGuard, protocol::ConfigureResult};
 use serde::{de::DeserializeOwned, Serialize};
 use std::{
     ffi::OsString,
@@ -48,6 +48,7 @@ struct Running {
     stdout: Mutex<BufReader<tokio::process::ChildStdout>>,
     child: Mutex<Option<Child>>,
     configured_identity: StdMutex<Option<(String, String)>>,
+    model_leases: StdMutex<std::collections::HashMap<String, ModelUseGuard>>,
 }
 
 struct AttemptGuard {
@@ -225,6 +226,22 @@ impl Sidecar {
             .ensure_started(cancellation)
             .map_err(AttemptError::Public)?;
         let mut guard = AttemptGuard::new(self.inner.clone(), running.clone());
+        if kind == "configure" {
+            let name = payload
+                .get("config")
+                .and_then(|config| config.get("model"))
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| AttemptError::Public(AppError::new("invalid_sidecar_request")))?;
+            let mut leases = running
+                .model_leases
+                .lock()
+                .map_err(|_| AttemptError::Public(AppError::new("state_unavailable")))?;
+            if !leases.contains_key(name) {
+                let lease = ModelUseGuard::acquire(&self.inner.model_root, name)
+                    .map_err(AttemptError::Public)?;
+                leases.insert(name.to_owned(), lease);
+            }
+        }
         let id = Uuid::new_v4().to_string();
         let mut bytes = serde_json::to_vec(&RequestEnvelope {
             id: &id,
@@ -376,6 +393,7 @@ impl Sidecar {
             )),
             child: Mutex::new(Some(child)),
             configured_identity: StdMutex::new(None),
+            model_leases: StdMutex::new(std::collections::HashMap::new()),
         });
         let mut state = self
             .inner
@@ -477,6 +495,13 @@ async fn read_response(
 }
 
 async fn read_frame(reader: &mut (impl AsyncBufRead + Unpin)) -> Result<Option<Vec<u8>>, AppError> {
+    read_frame_limit(reader, MAX_MESSAGE_BYTES).await
+}
+
+pub(crate) async fn read_frame_limit(
+    reader: &mut (impl AsyncBufRead + Unpin),
+    limit: usize,
+) -> Result<Option<Vec<u8>>, AppError> {
     let mut frame = Vec::new();
     loop {
         let available = reader
@@ -491,14 +516,14 @@ async fn read_frame(reader: &mut (impl AsyncBufRead + Unpin)) -> Result<Option<V
             };
         }
         if let Some(newline) = available.iter().position(|byte| *byte == b'\n') {
-            if frame.len() + newline > MAX_MESSAGE_BYTES {
+            if frame.len() + newline > limit {
                 return Err(AppError::new("message_too_large"));
             }
             frame.extend_from_slice(&available[..newline]);
             reader.consume(newline + 1);
             return Ok(Some(frame));
         }
-        if frame.len() + available.len() > MAX_MESSAGE_BYTES {
+        if frame.len() + available.len() > limit {
             return Err(AppError::new("message_too_large"));
         }
         let consumed = available.len();
@@ -552,57 +577,87 @@ impl Running {
     }
 
     async fn shutdown(&self) {
-        let stdin_closed = if let Ok(mut stdin) = self.stdin.try_lock() {
+        let graceful = if let Ok(mut stdin) = self.stdin.try_lock() {
             stdin.take();
             true
         } else {
             false
         };
         let child = self.child.lock().await.take();
-        let Some(mut child) = child else {
-            return;
-        };
-        if stdin_closed
-            && tokio::time::timeout(SHUTDOWN_GRACE, child.wait())
-                .await
-                .is_ok()
-        {
-            return;
+        if let Some(child) = child {
+            let completed = reap_child(child, self.take_leases(), graceful);
+            let _ = completed.await;
         }
-        let _ = child.start_kill();
-        let _ = child.wait().await;
+    }
+
+    fn take_leases(&self) -> std::collections::HashMap<String, ModelUseGuard> {
+        self.model_leases
+            .lock()
+            .map(|mut leases| std::mem::take(&mut *leases))
+            .unwrap_or_default()
     }
 
     async fn kill_and_reap(&self) {
         if let Ok(mut stdin) = self.stdin.try_lock() {
             stdin.take();
         }
-        if let Some(mut child) = self.child.lock().await.take() {
-            let _ = child.start_kill();
-            let _ = child.wait().await;
+        let child = self.child.lock().await.take();
+        if let Some(child) = child {
+            let completed = reap_child(child, self.take_leases(), false);
+            let _ = completed.await;
         }
     }
 
     fn abort_background(&self) {
-        let Ok(mut child_slot) = self.child.try_lock() else {
-            return;
-        };
-        let Some(mut child) = child_slot.take() else {
-            return;
-        };
-        let _ = child.start_kill();
-        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-            runtime.spawn(async move {
-                let _ = child.wait().await;
-            });
+        if let Ok(mut child_slot) = self.child.try_lock() {
+            if let Some(child) = child_slot.take() {
+                let _completed = reap_child(child, self.take_leases(), false);
+            }
         }
     }
 }
 
 impl Drop for Running {
     fn drop(&mut self) {
-        if let Some(mut child) = self.child.get_mut().take() {
-            let _ = child.start_kill();
-        }
+        self.abort_background();
     }
+}
+
+fn reap_child(
+    mut child: Child,
+    leases: std::collections::HashMap<String, ModelUseGuard>,
+    graceful: bool,
+) -> tokio::sync::oneshot::Receiver<()> {
+    let (complete, completed) = tokio::sync::oneshot::channel();
+    if !graceful {
+        let _ = child.start_kill();
+    }
+    // Own both child and leases outside request/shutdown futures, including runtime teardown.
+    std::thread::spawn(move || {
+        let waited = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map(|runtime| {
+                runtime.block_on(async {
+                    if graceful
+                        && matches!(
+                            tokio::time::timeout(SHUTDOWN_GRACE, child.wait()).await,
+                            Ok(Ok(_))
+                        )
+                    {
+                        return true;
+                    }
+                    let _ = child.start_kill();
+                    child.wait().await.is_ok()
+                })
+            })
+            .unwrap_or(false);
+        if waited {
+            drop(leases);
+        } else {
+            std::mem::forget(leases);
+        }
+        let _ = complete.send(());
+    });
+    completed
 }

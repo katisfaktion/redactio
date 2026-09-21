@@ -927,8 +927,9 @@ pub fn list_managed(root: &Path) -> Result<Vec<ManagedModel>, AppError> {
         let installed = record
             .path
             .as_deref()
-            .filter(|_| compatible.is_some())
-            .map(|path| installed_bytes(&root.join(path)))
+            .map(|path| root.join(path))
+            .filter(|path| directory_on_disk(path))
+            .map(|path| installed_bytes(&path))
             .unwrap_or(0);
         let catalog_key = catalog
             .iter()
@@ -947,7 +948,7 @@ pub fn list_managed(root: &Path) -> Result<Vec<ManagedModel>, AppError> {
     Ok(models)
 }
 
-fn managed(
+pub(crate) fn managed(
     descriptor: &ModelDescriptor,
     catalog_key: Option<CatalogKey>,
     state: ManagedState,
@@ -1148,7 +1149,7 @@ fn installed_bytes(path: &Path) -> u64 {
         .flatten()
         .filter_map(|entry| entry.ok())
         .filter_map(|entry| entry.metadata().ok())
-        .filter(|metadata| metadata.is_file())
+        .filter(|metadata| metadata.is_file() && !crate::domain::paths::is_link(metadata))
         .map(|metadata| metadata.len())
         .sum()
 }
@@ -1290,4 +1291,64 @@ fn legacy_path(value: &str) -> bool {
         && Path::new(value)
             .components()
             .all(|component| matches!(component, Component::Normal(part) if !part.is_empty()))
+}
+
+/// A read-only lease on the immutable installation receipt. No lock file is created.
+#[derive(Debug)]
+pub struct ModelUseGuard {
+    _receipt: fs::File,
+}
+impl ModelUseGuard {
+    pub fn acquire(root: &Path, name: &str) -> Result<Self, AppError> {
+        use std::io::Read;
+        let catalog = catalog_models()?;
+        let (registry, legacy) = read_store(root, &catalog)?;
+        let record = registry
+            .models
+            .iter()
+            .find(|record| record.descriptor.name == name && record.state == ModelState::Ready)
+            .ok_or_else(|| AppError::new("model_not_found"))?;
+        let model = root.join(
+            record
+                .path
+                .as_ref()
+                .ok_or_else(|| AppError::new("model_not_found"))?,
+        );
+        crate::domain::paths::reject_links(&model)
+            .map_err(|_| AppError::new("model_path_unsafe"))?;
+        let path = model.join("redactio-model.json");
+        if !regular_file(&path) {
+            return Err(AppError::new("model_incompatible"));
+        }
+        let mut receipt = fs::File::open(&path).map_err(|_| AppError::new("model_not_found"))?;
+        receipt
+            .try_lock_shared()
+            .map_err(|_| AppError::new("model_in_use"))?;
+        let mut bytes = Vec::new();
+        (&mut receipt)
+            .take(4097)
+            .read_to_end(&mut bytes)
+            .map_err(|_| AppError::new("model_incompatible"))?;
+        let held = crate::domain::storage::snapshot_file(&receipt)
+            .map_err(|_| AppError::new("model_path_unsafe"))?;
+        let named = crate::domain::storage::file_snapshot(&path)
+            .map_err(|_| AppError::new("model_path_unsafe"))?;
+        let (current, current_legacy) = read_store(root, &catalog)?;
+        if held != named
+            || bytes.len() > 4096
+            || !receipt_matches(&bytes, &record.descriptor)
+            || !current.models.contains(record)
+            || current_legacy != legacy
+            || compatibility(root, record, legacy, &catalog).is_none()
+        {
+            return Err(AppError::new("model_incompatible"));
+        }
+        Ok(Self { _receipt: receipt })
+    }
+}
+
+impl Drop for ModelUseGuard {
+    fn drop(&mut self) {
+        let _ = self._receipt.unlock();
+    }
 }

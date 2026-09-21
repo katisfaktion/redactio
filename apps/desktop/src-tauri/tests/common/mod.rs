@@ -53,3 +53,25 @@ pub fn manifest_dir() -> PathBuf {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")))
 }
+
+#[allow(dead_code)]
+pub fn fixture_model_name() -> String {
+    serde_json::from_str::<serde_json::Value>(include_str!(
+        "../../../../../tests/fixtures/model-management.json"
+    ))
+    .unwrap()["descriptor"]["name"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+#[allow(dead_code)]
+pub fn fixture_model_root() -> PathBuf {
+    static ROOT: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
+    ROOT.get_or_init(|| {
+        let root = tempfile::tempdir().unwrap();
+        fixture_model_store(root.path());
+        root
+    })
+    .path()
+    .into()
+}
