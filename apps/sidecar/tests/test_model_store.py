@@ -40,16 +40,23 @@ def test_invalid_capacity_is_explicit(model, tokenizer, special):
 
 
 class _ValidationTokenizer:
-    def __init__(self) -> None:
+    def __init__(self, invalid_offset: tuple[object, object] | None = None) -> None:
         self.calls: list[tuple[str, dict[str, object]]] = []
+        self.invalid_offset = invalid_offset
 
     def __call__(self, text: str, **kwargs: object) -> dict[str, object]:
         self.calls.append((text, kwargs))
+        if kwargs.get("add_special_tokens") is False:
+            return {"input_ids": [1, 2]}
+        first = [(0, 0), (0, 4), (5, len(text) - 4)]
+        if self.invalid_offset is not None:
+            first.append(self.invalid_offset)
         return {
             "offset_mapping": [
-                [(0, 0), (0, 4), (5, 12)],
+                first,
                 [(0, 0), (len(text) - 4, len(text))],
-            ]
+            ],
+            "special_tokens_mask": [[1, 0, 0] + ([0] if self.invalid_offset else []), [1, 0]],
         }
 
 
@@ -85,14 +92,16 @@ def test_validation_runs_unicode_overflow_through_shared_pipeline(
         model_store.validate_local_model(Path("unused"), "bert", "BertForTokenClassification")
         == window
     )
-    text, kwargs = tokenizer.calls[0]
+    text, kwargs = tokenizer.calls[-1]
     assert "😀\r\n" in text
+    assert len(text) > window.tokens
     assert kwargs == {
         "truncation": True,
         "max_length": window.tokens,
         "stride": window.stride,
         "return_overflowing_tokens": True,
         "return_offsets_mapping": True,
+        "return_special_tokens_mask": True,
     }
     assert captured == {"model": model, "tokenizer": tokenizer, "window": window}
 
@@ -119,6 +128,64 @@ def test_validation_rejects_invalid_truncated_and_reset_offsets(monkeypatch, det
         "_token_classification_pipeline",
         lambda *_: lambda text: detections(text),
     )
+
+    with pytest.raises(EngineError, match="^model_incompatible$"):
+        model_store.validate_local_model(Path("unused"), "bert", "BertForTokenClassification")
+
+
+@pytest.mark.parametrize("invalid_offset", [(-1, 4), (0, 0), ("0", 4)])
+def test_validation_rejects_malformed_tokenizer_offsets(monkeypatch, invalid_offset):
+    from redactio_sidecar import model_store
+
+    monkeypatch.setattr(
+        model_store,
+        "_load_local_model",
+        lambda *_: (_ValidationTokenizer(invalid_offset), _NoRawForward(), Window(32, 8)),
+    )
+    monkeypatch.setattr(model_store, "_token_classification_pipeline", lambda *_: lambda _: [])
+
+    with pytest.raises(EngineError, match="^model_incompatible$"):
+        model_store.validate_local_model(Path("unused"), "bert", "BertForTokenClassification")
+
+
+def test_validation_rejects_reset_overflow_offsets(monkeypatch):
+    from redactio_sidecar import model_store
+
+    class ResetTokenizer(_ValidationTokenizer):
+        def __call__(self, text: str, **kwargs: object) -> dict[str, object]:
+            encoded = super().__call__(text, **kwargs)
+            if "offset_mapping" in encoded:
+                encoded["offset_mapping"][1] = [(0, 0), (0, 4)]
+            return encoded
+
+    monkeypatch.setattr(
+        model_store,
+        "_load_local_model",
+        lambda *_: (ResetTokenizer(), _NoRawForward(), Window(32, 8)),
+    )
+    monkeypatch.setattr(model_store, "_token_classification_pipeline", lambda *_: lambda _: [])
+
+    with pytest.raises(EngineError, match="^model_incompatible$"):
+        model_store.validate_local_model(Path("unused"), "bert", "BertForTokenClassification")
+
+
+def test_validation_rejects_dropped_non_whitespace_offsets(monkeypatch):
+    from redactio_sidecar import model_store
+
+    class DroppedTokenizer(_ValidationTokenizer):
+        def __call__(self, text: str, **kwargs: object) -> dict[str, object]:
+            encoded = super().__call__(text, **kwargs)
+            if "offset_mapping" in encoded:
+                encoded["offset_mapping"][0] = [(0, 0), (0, 4)]
+                encoded["special_tokens_mask"][0] = [1, 0]
+            return encoded
+
+    monkeypatch.setattr(
+        model_store,
+        "_load_local_model",
+        lambda *_: (DroppedTokenizer(), _NoRawForward(), Window(32, 8)),
+    )
+    monkeypatch.setattr(model_store, "_token_classification_pipeline", lambda *_: lambda _: [])
 
     with pytest.raises(EngineError, match="^model_incompatible$"):
         model_store.validate_local_model(Path("unused"), "bert", "BertForTokenClassification")

@@ -5,7 +5,7 @@ from typing import Any, NamedTuple, cast
 
 from .ipc import EngineError
 
-_VALIDATION_TEXT = ("Hans München 😀\r\n" * 640) + "Ende"
+_VALIDATION_UNIT = "Hans München 😀\r\n"
 
 
 class Window(NamedTuple):
@@ -77,35 +77,79 @@ def _token_classification_pipeline(model: Any, tokenizer: Any, window: Window) -
     )
 
 
+def _validation_text(tokenizer: Any, window: Window) -> str:
+    input_ids = tokenizer(_VALIDATION_UNIT, add_special_tokens=False)["input_ids"]
+    if not isinstance(input_ids, list) or not input_ids:
+        raise ValueError("unusable synthetic tokenizer")
+    return (_VALIDATION_UNIT * (window.tokens // len(input_ids) + 1)) + "Ende"
+
+
 def validate_local_model(path: Path, model_type: str, architecture: str) -> Window:
     try:
         tokenizer, model, window = _load_local_model(path, model_type, architecture)
+        text = _validation_text(tokenizer, window)
         encoded = tokenizer(
-            _VALIDATION_TEXT,
+            text,
             truncation=True,
             max_length=window.tokens,
             stride=window.stride,
             return_overflowing_tokens=True,
             return_offsets_mapping=True,
+            return_special_tokens_mask=True,
         )
         offsets = encoded["offset_mapping"]
-        spans = {
-            (start, end)
-            for chunk in offsets
-            for start, end in chunk
-            if type(start) is int and type(end) is int and 0 <= start < end <= len(_VALIDATION_TEXT)
-        }
-        if len(offsets) < 2 or not spans or max(end for _, end in spans) != len(_VALIDATION_TEXT):
+        masks = encoded["special_tokens_mask"]
+        if not isinstance(offsets, list) or not isinstance(masks, list) or len(offsets) < 2:
             raise ValueError("incomplete synthetic offsets")
+        spans: set[tuple[int, int]] = set()
+        previous_first = previous_last = -1
+        for chunk, mask in zip(offsets, masks, strict=True):
+            if not isinstance(chunk, list) or not isinstance(mask, list) or len(chunk) != len(mask):
+                raise ValueError("malformed synthetic offsets")
+            chunk_spans: list[tuple[int, int]] = []
+            for offset, special in zip(chunk, mask, strict=True):
+                if (
+                    not isinstance(offset, (list, tuple))
+                    or len(offset) != 2
+                    or type(offset[0]) is not int
+                    or type(offset[1]) is not int
+                    or type(special) is not int
+                    or special not in (0, 1)
+                ):
+                    raise ValueError("malformed synthetic offsets")
+                start, end = offset
+                if start == end == 0:
+                    if special != 1:
+                        raise ValueError("malformed synthetic offsets")
+                    continue
+                if special != 0 or not 0 <= start < end <= len(text):
+                    raise ValueError("malformed synthetic offsets")
+                chunk_spans.append((start, end))
+                spans.add((start, end))
+            if not chunk_spans:
+                raise ValueError("incomplete synthetic offsets")
+            first, last = chunk_spans[0][0], chunk_spans[-1][1]
+            if first <= previous_first or last <= previous_last:
+                raise ValueError("reset synthetic offsets")
+            previous_first, previous_last = first, last
+        if max(end for _, end in spans) != len(text):
+            raise ValueError("incomplete synthetic offsets")
+        covered = 0
+        for start, end in sorted(spans):
+            if start > covered and text[covered:start].strip():
+                raise ValueError("dropped synthetic offsets")
+            covered = max(covered, end)
+        if text[covered:].strip():
+            raise ValueError("dropped synthetic offsets")
         starts = {start for start, _ in spans}
         ends = {end for _, end in spans}
         seen: set[tuple[int, int]] = set()
-        for detection in _token_classification_pipeline(model, tokenizer, window)(_VALIDATION_TEXT):
+        for detection in _token_classification_pipeline(model, tokenizer, window)(text):
             start, end = detection.get("start"), detection.get("end")
             if (
                 type(start) is not int
                 or type(end) is not int
-                or not 0 <= start < end <= len(_VALIDATION_TEXT)
+                or not 0 <= start < end <= len(text)
                 or start not in starts
                 or end not in ends
                 or (start, end) in seen
