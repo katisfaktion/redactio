@@ -131,8 +131,7 @@ try {
             throw "Frozen sidecar resource missing: $required"
         }
     }
-    if (-not @(Get-ChildItem -LiteralPath (Join-Path $package 'sidecar/_internal/tokenizers')
-                 -Filter '*.pyd' -File).Count) { throw 'Frozen tokenizer support missing' }
+    if (-not @(Get-ChildItem -LiteralPath (Join-Path $package 'sidecar/_internal/tokenizers') -Filter '*.pyd' -File).Count) { throw 'Frozen tokenizer support missing' }
     $modelRoot = Join-Path $package 'models'
     Invoke-Checked $python @('-c', 'from pathlib import Path; from redactio_sidecar.model_store import ModelRegistry, write_registry; write_registry(Path(__import__("sys").argv[1]), ModelRegistry(schema_version=2, models=[], legacy_unavailable=[]))', $modelRoot)
     foreach ($model in $PreloadModels) {
