@@ -59,6 +59,9 @@ HOSTS = frozenset(
         "cdn-lfs-us-1.hf.co",
         "cdn-lfs-eu-1.hf.co",
         "cas-bridge.xethub.hf.co",
+        # Documented CDN edges: https://huggingface.co/.well-known/meta.json
+        "us.aws.cdn.hf.co",
+        "us.gcp.cdn.hf.co",
     }
 )
 FILES = frozenset(

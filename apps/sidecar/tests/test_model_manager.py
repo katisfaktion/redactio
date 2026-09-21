@@ -148,6 +148,8 @@ def test_preflight_rejects_untrusted_metadata(monkeypatch, tmp_path, change, cod
         "https://huggingface.co.evil.invalid/a",
         "https://huggingface.co:443/a",
         "https://x@huggingface.co/a",
+        "https://us.aws.cdn.hf.co.evil.invalid/a",
+        "https://us.gcp.cdn.hf.co.evil.invalid/a",
     ],
 )
 def test_transport_checks_every_redirect(monkeypatch, url):
@@ -156,6 +158,17 @@ def test_transport_checks_every_redirect(monkeypatch, url):
         with manager.open_checked("https://huggingface.co/a"):
             pass
     assert requests == ["https://huggingface.co/a"]
+
+
+@pytest.mark.parametrize("host", ["us.aws.cdn.hf.co", "us.gcp.cdn.hf.co"])
+def test_transport_accepts_documented_cdn_redirect(monkeypatch, host):
+    target = f"https://{host}/artifact"
+    requests = transport(
+        monkeypatch, [Response(b"", 302, {"Location": target}), Response(b"verified payload")]
+    )
+    with manager.open_checked("https://huggingface.co/a") as reply:
+        assert b"".join(manager._chunks(reply, 100)) == b"verified payload"
+    assert requests == ["https://huggingface.co/a", target]
 
 
 @pytest.mark.parametrize(
@@ -175,7 +188,8 @@ def test_bounded_json_errors_are_safe(monkeypatch, reply, code):
 @pytest.mark.parametrize(
     "address", ["127.0.0.1", "10.0.0.1", "169.254.169.254", "::1", "::ffff:127.0.0.1", "224.0.0.1"]
 )
-def test_connection_rejects_nonpublic_dns_before_connect(monkeypatch, address):
+@pytest.mark.parametrize("host", ["huggingface.co", "us.aws.cdn.hf.co", "us.gcp.cdn.hf.co"])
+def test_connection_rejects_nonpublic_dns_before_connect(monkeypatch, address, host):
     monkeypatch.setattr(
         manager.socket,
         "getaddrinfo",
@@ -185,7 +199,7 @@ def test_connection_rejects_nonpublic_dns_before_connect(monkeypatch, address):
     )
     monkeypatch.setattr(manager.socket, "socket", lambda *a: pytest.fail("unsafe socket opened"))
     with pytest.raises(EngineError, match="model_network_unsafe"):
-        manager._PublicHTTPSConnection("huggingface.co").connect()
+        manager._PublicHTTPSConnection(host).connect()
 
 
 def test_connection_uses_checked_ip_and_tls_hostname(monkeypatch):
