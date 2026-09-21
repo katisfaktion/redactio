@@ -5,7 +5,6 @@ const RevisionSchema = z.string().regex(/^[0-9a-f]{40}$/);
 const Sha256Schema = z.string().regex(/^[0-9a-f]{64}$/);
 const BytesSchema = z.int().nonnegative();
 const OpaqueIdSchema = z.string().min(1).max(512).refine(value => !/[\u0000-\u001f\u007f-\u009f]/.test(value));
-const PlainTextSchema = z.string().min(1).max(512).refine(value => !/[\u0000-\u001f\u007f-\u009f]/.test(value));
 const RepositoryComponentSchema = z.string().min(1).max(96)
   .regex(/^[A-Za-z0-9_][A-Za-z0-9_.-]*$/)
   .refine(value => !/[.-]$/.test(value) && !value.includes("..") && !value.includes("--"));
@@ -45,7 +44,7 @@ const ModelDescriptorObject = z.object({
   name: OpaqueIdSchema,
   version: RevisionSchema,
   repository: RepositorySchema,
-  title: PlainTextSchema,
+  title: z.string(),
   license: z.string().nullable(),
   model_type: z.enum(["bert", "deberta-v2"]),
   architecture: z.enum(["BertForTokenClassification", "DebertaV2ForTokenClassification"]),
@@ -53,7 +52,7 @@ const ModelDescriptorObject = z.object({
   window_tokens: z.int().min(2),
   stride_tokens: z.int().positive(),
   special_tokens: z.int().nonnegative().nullable(),
-  files: z.array(ArtifactSchema).min(1),
+  files: z.array(ArtifactSchema),
 }).strict();
 
 export const ModelDescriptorSchema = ModelDescriptorObject.superRefine((descriptor, ctx) => {
@@ -119,7 +118,7 @@ const ManagedModelObject = z.object({
   name: OpaqueIdSchema,
   version: RevisionSchema,
   repository: RepositorySchema,
-  title: PlainTextSchema,
+  title: z.string(),
   license: z.string().nullable(),
   entity_types: ModelEntityTypesSchema,
   window_tokens: z.int().min(2).nullable(),

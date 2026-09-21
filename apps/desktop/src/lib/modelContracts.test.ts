@@ -110,7 +110,6 @@ test("descriptors enforce revisions, supported runtime pairs, entity order, and 
     { ...descriptor, entity_types: ["PERSON", "DATE"] },
     { ...descriptor, entity_types: ["PERSON", "PERSON"] },
     { ...descriptor, entity_types: ["LABEL_0"] },
-    { ...descriptor, files: [] },
     { ...descriptor, window_tokens: 1, stride_tokens: 1 },
     { ...descriptor, stride_tokens: 127 },
     { ...descriptor, window_tokens: 5, stride_tokens: 2, special_tokens: 3 },
@@ -124,6 +123,13 @@ test("descriptors enforce revisions, supported runtime pairs, entity order, and 
     architecture: "DebertaV2ForTokenClassification",
     special_tokens: null,
   }).success).toBe(true);
+});
+
+test("wire titles and artifact arrays remain unconstrained beyond their declared types", () => {
+  for (const title of ["", "x".repeat(513), "line\u0000break"]) {
+    expect(ModelDescriptorSchema.safeParse({ ...descriptor, title, files: [] }).success).toBe(true);
+    expect(ManagedModelSchema.safeParse({ ...managed, title }).success).toBe(true);
+  }
 });
 
 test("model IDs stay opaque while imported Hugging Face IDs bind to repository and revision", () => {
