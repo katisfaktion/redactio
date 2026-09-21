@@ -312,26 +312,32 @@ fn tokenizer_metadata_requires_an_object_and_ignores_hf_unbounded_sentinels() {
     let mut manifest: serde_json::Value =
         serde_json::from_slice(&fs::read(root.join("manifest.json")).unwrap()).unwrap();
 
-    let sentinel = r#"{"model_max_length":1000000000000000019884624838656}"#;
-    fs::write(root.join("fixture-model/tokenizer_config.json"), sentinel).unwrap();
-    manifest["models"][0]["descriptor"]["files"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|file| file["filename"] == "tokenizer_config.json")
-        .unwrap()["size"] = serde_json::json!(sentinel.len());
-    fs::write(
-        root.join("manifest.json"),
-        serde_json::to_vec(&manifest).unwrap(),
-    )
-    .unwrap();
-    assert!(model_store::list_models(root).unwrap()[0].compatible);
+    for integer in [
+        r#"{"model_max_length":1000000000000000019884624838656}"#,
+        r#"{"model_max_length":18446744073709551616}"#,
+    ] {
+        fs::write(root.join("fixture-model/tokenizer_config.json"), integer).unwrap();
+        manifest["models"][0]["descriptor"]["files"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|file| file["filename"] == "tokenizer_config.json")
+            .unwrap()["size"] = serde_json::json!(integer.len());
+        fs::write(
+            root.join("manifest.json"),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+        assert!(model_store::list_models(root).unwrap()[0].compatible);
+    }
 
     for invalid in [
         "[]",
         "null",
         "1",
         r#"{"model_max_length":512.0}"#,
+        r#"{"model_max_length":1e30}"#,
+        r#"{"model_max_length":1000000000000000019884624838656.0}"#,
         r#"{"model_max_length":true}"#,
         r#"{"model_max_length":0}"#,
     ] {

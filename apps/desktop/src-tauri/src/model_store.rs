@@ -9,6 +9,12 @@ use std::{
 const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 const CATALOG: &str = include_str!("../../../sidecar/src/redactio_sidecar/model_catalog.json");
 
+#[derive(Deserialize)]
+struct TokenizerConfig<'a> {
+    #[serde(borrow)]
+    model_max_length: Option<&'a serde_json::value::RawValue>,
+}
+
 struct Nullable<T>(Option<T>);
 impl<'de, T: Deserialize<'de>> Deserialize<'de> for Nullable<T> {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
@@ -1051,8 +1057,8 @@ fn native_metadata(
 ) -> Option<Vec<EntityType>> {
     let config: serde_json::Value =
         serde_json::from_slice(&fs::read(model.join("config.json")).ok()?).ok()?;
-    let tokenizer: serde_json::Value =
-        serde_json::from_slice(&fs::read(model.join("tokenizer_config.json")).ok()?).ok()?;
+    let tokenizer_bytes = fs::read(model.join("tokenizer_config.json")).ok()?;
+    let tokenizer: TokenizerConfig<'_> = serde_json::from_slice(&tokenizer_bytes).ok()?;
     let architecture = match descriptor.architecture {
         Architecture::BertForTokenClassification => "BertForTokenClassification",
         Architecture::DebertaV2ForTokenClassification => "DebertaV2ForTokenClassification",
@@ -1062,14 +1068,16 @@ fn native_metadata(
         ModelType::DebertaV2 => "deberta-v2",
     };
     let model_limit = config.get("max_position_embeddings")?.as_u64()?;
-    let tokenizer = tokenizer.as_object()?;
-    let tokenizer_limit = match tokenizer.get("model_max_length") {
-        None | Some(serde_json::Value::Null) => model_limit,
-        Some(value) => match value.as_u64() {
-            Some(limit) if limit > 0 => limit.min(model_limit),
-            _ if value.as_f64().is_some_and(|limit| limit >= 1e20) => model_limit,
-            _ => return None,
-        },
+    let tokenizer_limit = match tokenizer.model_max_length {
+        None => model_limit,
+        Some(raw) if raw.get() == "null" => model_limit,
+        Some(raw) => {
+            let raw = raw.get();
+            if !raw.bytes().all(|byte| byte.is_ascii_digit()) || raw == "0" {
+                return None;
+            }
+            raw.parse::<u64>().unwrap_or(model_limit).min(model_limit)
+        }
     };
     let special = descriptor.special_tokens?;
     let content = tokenizer_limit.checked_sub(special)?;
