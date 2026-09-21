@@ -34,6 +34,7 @@ from .model_store import (
     ModelSource,
     Repository,
     UpstreamHash,
+    _load_local_tokenizer,
     _safe_path,
     catalog_models,
     directory_name,
@@ -41,6 +42,7 @@ from .model_store import (
     read_registry,
     selection_name,
     validate_local_model,
+    validate_tokenizer_config,
     write_registry,
 )
 
@@ -302,6 +304,7 @@ def _config(
     try:
         if config.get("auto_map") or tokenizer.get("auto_map"):
             raise EngineError("model_remote_code_unsupported")
+        validate_tokenizer_config(config, tokenizer)
         family = config["model_type"]
         architecture = {
             "bert": "BertForTokenClassification",
@@ -405,6 +408,7 @@ def preflight(source: ModelSource, root: Path) -> ModelDescriptor:
             _resolve(repository, revision, "tokenizer_config.json"),
             by_name["tokenizer_config.json"],
         )
+        validate_tokenizer_config(config, tokenizer, set(by_name))
         family, architecture, entities, window, stride = _config(config, tokenizer)
         card = info.get("cardData") or {}
         license_name = card.get("license")
@@ -521,13 +525,7 @@ def _local_json(path: Path) -> dict[str, Any]:
 
 
 def _tokenizer_overhead(path: Path) -> int:
-    from transformers import AutoTokenizer
-
-    tokenizer = cast(Any, AutoTokenizer).from_pretrained(
-        str(path), local_files_only=True, trust_remote_code=False, use_fast=True
-    )
-    if not tokenizer.is_fast:
-        raise EngineError("model_incompatible")
+    tokenizer = _load_local_tokenizer(path)
     count = tokenizer.num_special_tokens_to_add(pair=False)
     if type(count) is not int or count < 0:
         raise EngineError("model_incompatible")
@@ -855,6 +853,12 @@ def install_model(
                         stream.flush()
                         os.fsync(stream.fileno())
                     staging.rename(path)
+        if not orphan:
+            for artifact in descriptor.files:
+                partial = _checked_path(path, artifact.filename + ".part")
+                if partial.exists():
+                    _regular(partial)
+                    partial.unlink()
         verified = [_verified_file(path / file.filename, file) for file in descriptor.files]
         if orphan and any(file is None for file in verified):
             raise EngineError("model_hash_mismatch")
@@ -876,12 +880,6 @@ def install_model(
                 )
                 downloaded += artifact.size
             complete.append(checked)
-        if not orphan:
-            for artifact in descriptor.files:
-                partial = _checked_path(path, artifact.filename + ".part")
-                if partial.exists():
-                    _regular(partial)
-                    partial.unlink()
         progress("validating", total)
         verified_descriptor = _validate_downloaded(
             path, descriptor.model_copy(update={"files": complete})

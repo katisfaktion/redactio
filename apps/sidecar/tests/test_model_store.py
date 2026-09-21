@@ -706,3 +706,173 @@ def test_safe_path_handles_relative_roots_without_following_links(tmp_path, monk
     assert _safe_path(Path("models"), "manifest.json") == root / "manifest.json"
     with pytest.raises(ValueError, match="links"):
         _safe_path(Path("linked"), "manifest.json")
+
+
+@pytest.mark.parametrize("family", ["bert", "deberta-v2"])
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"tokenizer_file": "/synthetic/outside/tokenizer.json"},
+        {"tokenizer_file": "../tokenizer.json"},
+        {"vocab_file": "/synthetic/outside/vocab.txt", "from_slow": True},
+        {"from_slow": True},
+        {"fast_tokenizer_files": ["../tokenizer.4.0.json"]},
+        {"gguf_file": "/synthetic/outside/model.gguf"},
+        {"sp_model_kwargs": {"model_file": "/synthetic/outside/spm.model"}},
+        {"init_inputs": ["/synthetic/outside/vocab.txt"]},
+        {"tokenizer_class": "GPT2Tokenizer"},
+        {"tokenizer_object": {}},
+    ],
+)
+def test_runtime_tokenizer_rejects_loader_controls_before_construction(
+    tmp_path, monkeypatch, family, options
+):
+    import json
+
+    import transformers
+
+    from redactio_sidecar import model_store
+
+    (tmp_path / "config.json").write_text(json.dumps({"model_type": family}))
+    (tmp_path / "tokenizer_config.json").write_text(
+        json.dumps(
+            {
+                "tokenizer_class": "BertTokenizer" if family == "bert" else "DebertaV2Tokenizer",
+                "added_tokens_decoder": {},
+                **options,
+            }
+        )
+    )
+    (tmp_path / "tokenizer.json").write_text("{}")
+    for name in ("BertTokenizerFast", "DebertaV2TokenizerFast", "BertTokenizer"):
+        cls = getattr(transformers, name)
+        monkeypatch.setattr(cls, "__init__", lambda *a, **kw: pytest.fail("tokenizer constructed"))
+    # Guard Python auxiliary reads as well as the native read inside the intercepted constructors.
+    import builtins
+    import io
+
+    def guarded_open(original):
+        def read(file, *args, **kwargs):
+            if isinstance(file, (str, Path)):
+                target = Path(file).resolve()
+                if target.name in {"tokenizer.json", "vocab.txt", "spm.model", "model.gguf"}:
+                    assert target.is_relative_to(tmp_path), "external tokenizer asset read"
+            return original(file, *args, **kwargs)
+
+        return read
+
+    monkeypatch.setattr(builtins, "open", guarded_open(builtins.open))
+    monkeypatch.setattr(io, "open", guarded_open(io.open))
+    with pytest.raises(EngineError, match="model_incompatible"):
+        model_store._load_local_tokenizer(tmp_path, family)
+
+
+def test_special_token_map_cannot_inject_loader_controls(tmp_path, monkeypatch):
+    import json
+
+    from redactio_sidecar import model_store
+
+    (tmp_path / "config.json").write_text('{"model_type":"bert"}')
+    (tmp_path / "tokenizer_config.json").write_text('{"tokenizer_class":"BertTokenizer"}')
+    (tmp_path / "tokenizer.json").write_text("{}")
+    (tmp_path / "special_tokens_map.json").write_text(
+        json.dumps({"from_slow": True, "vocab_file": "/synthetic/outside/vocab.txt"})
+    )
+    with pytest.raises(EngineError, match="model_incompatible"):
+        model_store._load_local_tokenizer(tmp_path, "bert")
+
+
+@pytest.mark.parametrize("family", ["bert", "deberta-v2"])
+def test_shared_fast_loader_preserves_native_token_metadata(tmp_path, monkeypatch, family):
+    import json
+
+    import transformers
+
+    from redactio_sidecar import model_store
+
+    vocab = tmp_path / "vocab.txt"
+    vocab.write_text("[PAD]\n[UNK]\n[CLS]\n[SEP]\n[MASK]\nhans\nende\n", encoding="utf-8")
+    original = transformers.BertTokenizerFast(vocab_file=str(vocab), model_max_length=32)
+    original.save_pretrained(tmp_path)
+    config_path = tmp_path / "tokenizer_config.json"
+    config = json.loads(config_path.read_text())
+    config["tokenizer_class"] = "BertTokenizer" if family == "bert" else "DebertaV2Tokenizer"
+    config["tokenizer_file"] = "tokenizer.json"
+    config_path.write_text(json.dumps(config))
+    (tmp_path / "config.json").write_text(json.dumps({"model_type": family}))
+    # These auxiliary links must never be scanned by the fixed asset map.
+    (tmp_path / "chat_templates").symlink_to(tmp_path / "outside", target_is_directory=True)
+    monkeypatch.setattr(
+        transformers.BertTokenizer,
+        "__init__",
+        lambda *a, **kw: pytest.fail("slow tokenizer constructed"),
+    )
+    loaded = model_store._load_local_tokenizer(tmp_path, family)
+    text = "Hans Ende 😀"
+    assert loaded(text, return_offsets_mapping=True) == original(text, return_offsets_mapping=True)
+    assert loaded.num_special_tokens_to_add(pair=False) == 2
+    assert loaded.model_max_length == 32
+    assert loaded.__class__.__name__ == config["tokenizer_class"] + "Fast"
+
+
+@pytest.mark.parametrize("consumer", ["worker", "inference"])
+def test_worker_and_inference_use_shared_tokenizer_boundary(tmp_path, monkeypatch, consumer):
+    import json
+
+    import transformers
+
+    from redactio_sidecar import model_manager, model_store
+
+    (tmp_path / "config.json").write_text('{"model_type":"bert"}')
+    (tmp_path / "tokenizer_config.json").write_text(
+        json.dumps(
+            {
+                "tokenizer_class": "BertTokenizer",
+                "tokenizer_file": "/synthetic/outside/tokenizer.json",
+            }
+        )
+    )
+    (tmp_path / "tokenizer.json").write_text("{}")
+    monkeypatch.setattr(
+        transformers.BertTokenizerFast,
+        "__init__",
+        lambda *a, **kw: pytest.fail("tokenizer constructed"),
+    )
+    monkeypatch.setattr(
+        transformers.AutoModelForTokenClassification,
+        "from_pretrained",
+        lambda *a, **kw: pytest.fail("model constructed"),
+    )
+    with pytest.raises(EngineError, match="model_incompatible"):
+        if consumer == "worker":
+            model_manager._tokenizer_overhead(tmp_path)
+        else:
+            model_store._load_local_model(tmp_path, "bert", "BertForTokenClassification")
+
+
+@pytest.mark.parametrize("present", [False, True])
+def test_missing_or_invalid_fast_serialization_never_uses_slow_fallback(
+    tmp_path, monkeypatch, present
+):
+    import transformers
+
+    from redactio_sidecar import model_store
+
+    (tmp_path / "config.json").write_text('{"model_type":"bert"}')
+    (tmp_path / "tokenizer_config.json").write_text(
+        '{"tokenizer_class":"BertTokenizer","added_tokens_decoder":{}}'
+    )
+    if present:
+        (tmp_path / "tokenizer.json").write_text("{}")
+    monkeypatch.setattr(
+        transformers.BertTokenizer,
+        "_from_pretrained",
+        lambda *a, **kw: pytest.fail("slow tokenizer resolved"),
+    )
+    monkeypatch.setattr(
+        transformers.BertTokenizer,
+        "__init__",
+        lambda *a, **kw: pytest.fail("slow tokenizer constructed"),
+    )
+    with pytest.raises(Exception):
+        model_store._load_local_tokenizer(tmp_path, "bert")

@@ -452,7 +452,7 @@ def test_model_load_failure_does_not_activate_pair(bert_root, monkeypatch) -> No
 
 @pytest.mark.parametrize("context", [256, 512, 1024])
 def test_pipeline_uses_model_context_for_tokenizer_and_stride(monkeypatch, context: int) -> None:
-    from redactio_sidecar import biomedbert
+    from redactio_sidecar import biomedbert, model_store
 
     tokenizer = SimpleNamespace(
         is_fast=True,
@@ -487,6 +487,7 @@ def test_pipeline_uses_model_context_for_tokenizer_and_stride(monkeypatch, conte
         ),
     )
 
+    monkeypatch.setattr(model_store, "_load_local_tokenizer", lambda *_: tokenizer)
     biomedbert._load_pipeline(Path("unused"))
 
     assert tokenizer.model_max_length == context

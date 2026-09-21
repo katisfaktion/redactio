@@ -48,17 +48,120 @@ def processing_window(model_limit: object, tokenizer_limit: object, special_toke
     return Window(limit, min(max(1, limit // 4), content - 1))
 
 
-def _load_local_model(path: Path, model_type: str, architecture: str) -> tuple[Any, Any, Window]:
-    from transformers import AutoModelForTokenClassification, AutoTokenizer
+_TOKENIZER_FAMILIES = {
+    "bert": ("BertTokenizer", "vocab.txt"),
+    "deberta-v2": ("DebertaV2Tokenizer", "spm.model"),
+}
 
-    tokenizer = cast(Any, AutoTokenizer).from_pretrained(
+
+def validate_tokenizer_config(
+    config: dict[str, Any], tokenizer: dict[str, Any], filenames: set[str] | None = None
+) -> dict[str, str]:
+    """Validate publisher controls and return the only tokenizer inputs the loader may open."""
+    model_type = config.get("model_type")
+    if not isinstance(model_type, str) or model_type not in _TOKENIZER_FAMILIES:
+        raise EngineError("model_incompatible")
+    family, vocab = _TOKENIZER_FAMILIES[model_type]
+    file_fields = {
+        "tokenizer_file": "tokenizer.json",
+        "vocab_file": vocab,
+        "tokenizer_config_file": "tokenizer_config.json",
+        "added_tokens_file": "added_tokens.json",
+        "special_tokens_map_file": "special_tokens_map.json",
+    }
+    for metadata in (config, tokenizer):
+        if metadata.get("auto_map"):
+            raise EngineError("model_remote_code_unsupported")
+        if metadata.get("tokenizer_class") not in (None, family, family + "Fast"):
+            raise EngineError("model_incompatible")
+        for key, value in metadata.items():
+            if key in file_fields:
+                if value is not None and (
+                    value != file_fields[key] or filenames is not None and value not in filenames
+                ):
+                    raise EngineError("model_incompatible")
+            elif key == "fast_tokenizer_files":
+                if value not in (None, [], ["tokenizer.json"]):
+                    raise EngineError("model_incompatible")
+            elif key.endswith(("_file", "_files")) and value is not None:
+                raise EngineError("model_incompatible")
+        if (
+            metadata.get("from_slow") is not None
+            and metadata["from_slow"] is not False
+            or metadata.get("init_inputs") not in (None, [])
+            or metadata.get("sp_model_kwargs") not in (None, {})
+            or metadata.get("tokenizer_object") is not None
+            or metadata.get("__slow_tokenizer") is not None
+        ):
+            raise EngineError("model_incompatible")
+    return file_fields
+
+
+def _load_local_tokenizer(path: Path, model_type: str | None = None) -> Any:
+    def metadata(filename: str) -> dict[str, Any]:
+        source = _safe_path(path, filename)
+        with source.open("rb") as stream:
+            data = stream.read(2 * 1024 * 1024 + 1)
+        if len(data) > 2 * 1024 * 1024:
+            raise EngineError("model_incompatible")
+        value = json.loads(data)
+        if not isinstance(value, dict):
+            raise EngineError("model_incompatible")
+        return value
+
+    config = metadata("config.json")
+    if model_type is not None and config.get("model_type") != model_type:
+        raise EngineError("model_incompatible")
+    tokenizer = metadata("tokenizer_config.json")
+    files = validate_tokenizer_config(config, tokenizer)
+    family, _ = _TOKENIZER_FAMILIES[config["model_type"]]
+    resolved = {}
+    for key, filename in files.items():
+        source = _safe_path(path, filename)
+        resolved[key] = str(source) if source.is_file() else None
+    if resolved["tokenizer_file"] is None:
+        raise EngineError("model_incompatible")
+    validate_tokenizer_config(
+        config, tokenizer, {files[key] for key, value in resolved.items() if value is not None}
+    )
+    if resolved["special_tokens_map_file"] is not None:
+        special = metadata("special_tokens_map.json")
+        if not set(special) <= {
+            "bos_token",
+            "eos_token",
+            "unk_token",
+            "sep_token",
+            "pad_token",
+            "cls_token",
+            "mask_token",
+            "additional_special_tokens",
+        }:
+            raise EngineError("model_incompatible")
+    import transformers
+
+    # The public resolver scans auxiliary paths and can fall back to a slow tokenizer. This
+    # pinned private entry point retains HF token metadata handling with only our fixed file map.
+    cls = cast(Any, getattr(transformers, family + "Fast"))
+    result = cls._from_pretrained(
+        resolved.copy(),
         str(path),
+        {},
         local_files_only=True,
         trust_remote_code=False,
-        use_fast=True,
+        _is_local=True,
+        from_slow=False,
+        tokenizer_file=resolved["tokenizer_file"],
+        vocab_file=resolved["vocab_file"],
     )
-    if not tokenizer.is_fast:
-        raise ValueError("fast tokenizer required")
+    if not getattr(result, "is_fast", False):
+        raise EngineError("model_incompatible")
+    return result
+
+
+def _load_local_model(path: Path, model_type: str, architecture: str) -> tuple[Any, Any, Window]:
+    from transformers import AutoModelForTokenClassification
+
+    tokenizer = _load_local_tokenizer(path, model_type)
     model, loading_info = AutoModelForTokenClassification.from_pretrained(
         str(path),
         local_files_only=True,

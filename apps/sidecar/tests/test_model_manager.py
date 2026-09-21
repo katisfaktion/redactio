@@ -859,3 +859,45 @@ def test_shared_inference_receipt_blocks_removal_process(monkeypatch, tmp_path):
         assert response["type"] == "error" and response["payload"]["code"] == "model_in_use"
         assert manager.read_registry(tmp_path).models[0].state == "ready"
     assert manager.remove_model(tmp_path, descriptor.name).state == "available"
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"tokenizer_file": "/outside/tokenizer.json"},
+        {"vocab_file": "../vocab.txt"},
+        {"from_slow": True},
+        {"tokenizer_class": "GPT2Tokenizer"},
+        {"sp_model_kwargs": {"model_file": "/outside/spm.model"}},
+    ],
+)
+def test_preflight_rejects_tokenizer_loader_controls(options):
+    with pytest.raises(EngineError, match="model_incompatible"):
+        manager._config(CONFIG, options)
+
+
+def test_retry_reclaims_owned_partial_before_measuring_free_space(monkeypatch, tmp_path):
+    descriptor, data = install_fixture(monkeypatch)
+    transport(monkeypatch, lambda url: Response(data[url.rsplit("/", 1)[1]]))
+
+    def cancel(job):
+        if job.downloaded_bytes == descriptor.files[0].size:
+            raise KeyboardInterrupt()
+
+    with pytest.raises(KeyboardInterrupt):
+        manager.install_model(tmp_path, descriptor, JOB, cancel)
+    stage = next(tmp_path.glob(".model-*"))
+    partial = stage / "model.safetensors.part"
+    partial.write_bytes(b"incomplete transfer")
+    complete = (stage / "config.json").read_bytes()
+    monkeypatch.setattr(
+        manager.shutil,
+        "disk_usage",
+        lambda _: type(
+            "Usage", (), {"free": 0 if partial.exists() else 100 * manager.JSON_LIMIT}
+        )(),
+    )
+    manager.install_model(tmp_path, descriptor, JOB, lambda _: None)
+    record = manager.read_registry(tmp_path).models[0]
+    assert (tmp_path / record.path / "config.json").read_bytes() == complete
+    assert record.state == "ready"
