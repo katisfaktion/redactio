@@ -52,10 +52,10 @@ export function useModels(api: ModelApi = modelApi) {
       if (!terminal.has(result.stage)) return;
       terminalJobId = id; reconcilingId = id;
       clearTimer();
-      const refreshed = await refresh();
+      await refresh();
       if (activeJobId.value === id) {
         if (result.error && !error.value) error.value = result.error;
-        if (result.stage === "ready" && refreshed) checked.value = null;
+        if (result.stage === "ready") checked.value = null;
         activeJobId.value = null; busy.value = false;
       }
     } catch (caught) { if (activeJobId.value === id) error.value = safeError(caught); }

@@ -96,7 +96,7 @@ function checkUrl() {
         <div>
           <div class="model-title"><strong>{{ model.title }}</strong><OnyxTag :label="state(model)" /></div>
           <small>Quelle: <a :href="sourceUrl(model)" target="_blank" rel="noopener noreferrer">{{ model.repository }}</a> · Revision: {{ model.version }}</small>
-          <small>{{ model.state === 'ready' ? 'Belegt' : 'Noch herunterzuladen' }}: {{ bytes(model.state === 'ready' ? model.installed_bytes : model.download_bytes) }} · Labels: {{ model.entity_types.join(', ') }}</small>
+          <small>{{ model.state === 'ready' || model.state === 'removing' ? 'Belegt' : 'Noch herunterzuladen' }}: {{ bytes(model.state === 'ready' || model.state === 'removing' ? model.installed_bytes : model.download_bytes) }} · Labels: {{ model.entity_types.join(', ') }}</small>
           <small>Lizenz: <a v-if="model.license" :href="sourceUrl(model)" target="_blank" rel="noopener noreferrer">{{ model.license }}</a><strong v-else>Nicht angegeben</strong></small>
           <small v-if="model.error" role="status">{{ errorMessage(model.error) }}</small>
           <small v-if="model.used_by_pairs.length">Wird verwendet von: {{ model.used_by_pairs.map(pair => pair.name).join(', ') }}</small>

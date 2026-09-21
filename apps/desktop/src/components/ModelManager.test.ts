@@ -79,10 +79,11 @@ test("invalid receipts show a repair action and a German compatibility reason", 
 });
 
 test("interrupted removal can resume with the existing removal command", async () => {
-  const removing = managed({ state: "removing", used_by_pairs: [] });
+  const removing = managed({ state: "removing", download_bytes: 2_000, used_by_pairs: [] });
   const wrapper = mountManager([removing]);
 
   expect(wrapper.text()).toContain("wurde unterbrochen");
+  expect(wrapper.text()).toContain("Belegt: 1 kB");
   await wrapper.get('[data-testid="resume-removal"]').trigger("click");
   expect(wrapper.emitted("remove")).toEqual([[removing.name]]);
 });

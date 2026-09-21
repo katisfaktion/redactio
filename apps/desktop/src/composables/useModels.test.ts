@@ -76,6 +76,28 @@ test("terminal job refreshes the registry before exposing a ready model", async 
   } finally { scope.stop(); }
 });
 
+test("ready completion consumes its checked plan when the registry refresh fails", async () => {
+  let failRefresh = false;
+  const terminal = job({ ...downloading, stage: "ready", downloaded_bytes: 2 });
+  const scope = effectScope();
+  const state = scope.run(() => useModels(api({
+    job: async () => terminal,
+    list: async () => {
+      if (failRefresh) throw { code: "model_store_read_only", retryable: true };
+      return [available];
+    },
+  })))!;
+  try {
+    await state.refresh();
+    await state.check({ kind: "url", url: "https://huggingface.co/acme/medical-ner" });
+    failRefresh = true;
+    await state.install(state.checked.value!.plan_id);
+    expect(state.checked.value).toBeNull();
+    expect(state.models.value).toEqual([available]);
+    expect(state.error.value?.code).toBe("model_store_read_only");
+  } finally { scope.stop(); }
+});
+
 test("terminal completion cannot regress through late progress, polling, or cancellation", async () => {
   let receive: (value: unknown) => void = () => { throw new Error("not listening"); };
   let result = null as ReturnType<typeof job> | null;
