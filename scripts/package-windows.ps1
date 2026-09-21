@@ -46,6 +46,17 @@ function Get-VerifiedArtifact($Artifact) {
     }
     return $file
 }
+function Test-StaticCrtImports([string[]]$Imports) {
+    foreach ($name in $Imports) {
+        $lowerName = $name.ToLowerInvariant()
+        if ($lowerName.StartsWith('vcruntime') -or
+            $lowerName.StartsWith('msvcp') -or
+            $lowerName -eq 'ucrtbase.dll' -or
+            $lowerName.StartsWith('api-ms-win-crt-')) {
+            throw 'dynamic_desktop_crt'
+        }
+    }
+}
 Push-Location $root
 try {
     $source = Get-SourceIdentity $root
@@ -91,7 +102,9 @@ try {
     }
     if (-not $DesktopNotices -or -not (Test-Path -LiteralPath $DesktopExecutable -PathType Leaf) -or
         -not (Test-Path -LiteralPath $DesktopNotices -PathType Leaf)) { throw 'Desktop executable and complete desktop notices required' }
-    Invoke-Checked $python @('-c', 'import pefile,sys; p=pefile.PE(sys.argv[1]); names=[e.dll.decode().lower() for e in p.DIRECTORY_ENTRY_IMPORT]; p.close(); assert not any(n.startswith(("vcruntime", "msvcp")) for n in names), names', $DesktopExecutable)
+    $desktopImportsJson = & $python -c 'import json,pefile,sys; p=pefile.PE(sys.argv[1]); print(json.dumps([e.dll.decode().lower() for e in p.DIRECTORY_ENTRY_IMPORT])); p.close()' $DesktopExecutable
+    if ($LASTEXITCODE) { throw 'Desktop import inspection failed' }
+    Test-StaticCrtImports @($desktopImportsJson | ConvertFrom-Json)
     $tools.desktop_crt = 'static'
     $cab = Get-VerifiedArtifact $inputs.webview2
     Invoke-Checked $python @('-m', 'PyInstaller', '--noconfirm', '--clean', '--distpath', (Join-Path $work 'frozen'),
@@ -101,7 +114,9 @@ try {
     $archiveContents = & $viewer -r -b $frozenExecutable
     if ($LASTEXITCODE) { throw 'Frozen sidecar import inspection failed' }
     foreach ($module in @('transformers.models.bert.modeling_bert',
+                           'transformers.models.bert.tokenization_bert_fast',
                            'transformers.models.deberta_v2.modeling_deberta_v2',
+                           'transformers.models.deberta_v2.tokenization_deberta_v2_fast',
                            'spacy_legacy', 'spacy_loggers')) {
         if (-not ($archiveContents -match [regex]::Escape($module))) {
             throw "Frozen sidecar import missing: $module"

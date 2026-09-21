@@ -60,8 +60,8 @@ function Test-ModelStore([string]$Root, $BuildManifest) {
             if ((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant() -cne
                 $artifact.sha256) { throw 'model_checksum_mismatch' }
         }
-        foreach ($file in Get-ChildItem -LiteralPath $directory -File -Force) {
-            if (-not $files.Contains($file.Name)) { throw 'invalid_model_receipt' }
+        foreach ($item in Get-ChildItem -LiteralPath $directory -Force) {
+            if ($item.PSIsContainer -or -not $files.Contains($item.Name)) { throw 'invalid_model_receipt' }
         }
     }
     foreach ($preload in @($BuildManifest.inputs.models)) {
@@ -91,7 +91,16 @@ function Test-ModelStore([string]$Root, $BuildManifest) {
         }
     }
     foreach ($item in Get-ChildItem -LiteralPath $store -Force) {
-        if ($item.Name -cne 'manifest.json' -and -not $directories.Contains($item.Name)) {
+        if ($item.Name -ceq 'manifest.json') { continue }
+        if ($item.Name -ceq '.redactio-models-lock') {
+            if ($item.PSIsContainer -or
+                $item.Attributes -band [IO.FileAttributes]::ReparsePoint -or
+                $item.LinkType) {
+                throw 'invalid_model_receipt'
+            }
+            continue
+        }
+        if (-not $directories.Contains($item.Name)) {
             throw 'invalid_model_receipt'
         }
     }

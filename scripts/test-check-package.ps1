@@ -71,6 +71,18 @@ try {
     $emptyBuild = [pscustomobject]@{ inputs = [pscustomobject]@{ models = @() } }
     Set-TestRegistry $modelStore @()
     Test-ModelStore $modelPackage $emptyBuild | Out-Null
+    [IO.File]::WriteAllText((Join-Path $modelStore '.redactio-models-lock'), '')
+    Test-ModelStore $modelPackage $emptyBuild | Out-Null
+    Remove-Item -LiteralPath (Join-Path $modelStore '.redactio-models-lock')
+    New-Item -ItemType Directory -Path (Join-Path $modelStore '.redactio-models-lock') | Out-Null
+    Expect-ModelFailure 'invalid_model_receipt' { Test-ModelStore $modelPackage $emptyBuild }
+    Remove-Item -LiteralPath (Join-Path $modelStore '.redactio-models-lock')
+    $lockTarget = Join-Path $modelPackage 'lock-target'
+    [IO.File]::WriteAllText($lockTarget, '')
+    New-Item -ItemType HardLink -Path (Join-Path $modelStore '.redactio-models-lock') -Target $lockTarget | Out-Null
+    Expect-ModelFailure 'invalid_model_receipt' { Test-ModelStore $modelPackage $emptyBuild }
+    Remove-Item -LiteralPath (Join-Path $modelStore '.redactio-models-lock'), $lockTarget
+    [IO.File]::WriteAllText((Join-Path $modelStore '.redactio-models-lock'), '')
 
     $revision1 = '1' * 40
     $revision2 = '2' * 40
@@ -85,6 +97,10 @@ try {
     $record2 = New-ReadyModel $modelStore $descriptor2 'model-two' 'second model'
     Set-TestRegistry $modelStore @($record1, $record2)
     Test-ModelStore $modelPackage $preloaded | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $modelStore 'model-two/extra') | Out-Null
+    [IO.File]::WriteAllText((Join-Path $modelStore 'model-two/extra/payload.dll'), 'unexpected')
+    Expect-ModelFailure 'invalid_model_receipt' { Test-ModelStore $modelPackage $preloaded }
+    Remove-Item -LiteralPath (Join-Path $modelStore 'model-two/extra') -Recurse -Force
     [IO.File]::WriteAllText((Join-Path $modelStore 'model-two/model.safetensors'), 'second modeX',
         [Text.UTF8Encoding]::new($false))
     Expect-ModelFailure 'model_checksum_mismatch' { Test-ModelStore $modelPackage $preloaded }
@@ -160,7 +176,7 @@ try {
     @{ schema_version = 1; inputs = $runtimeInputs; files = $entries } | ConvertTo-Json -Depth 5 |
         Set-Content -LiteralPath (Join-Path $temporary 'build-manifest.json')
     Expect-Failure 'invalid_build_manifest' $corpus
-    Write-Output 'package_check_negative_tests_ok checks=17'
+    Write-Output 'package_check_negative_tests_ok checks=21'
 } finally {
     Remove-Item -LiteralPath $temporary -Recurse -Force
     if (Test-Path -LiteralPath $corpus) { Remove-Item -LiteralPath $corpus -Recurse -Force }

@@ -39,6 +39,11 @@ class PackagingTests(unittest.TestCase):
         self.assertIn("[string[]]$PreloadModels = @()", package_script)
         self.assertIn("'--model', $model", package_script)
         self.assertIn("target-feature=+crt-static", package_script)
+        for module in (
+            "transformers.models.bert.tokenization_bert_fast",
+            "transformers.models.deberta_v2.tokenization_deberta_v2_fast",
+        ):
+            self.assertIn(module, package_script)
 
         spec = (ROOT / "packaging/sidecar.spec").read_text()
         for package in ("certifi", "spacy_legacy", "spacy_loggers", "tokenizers"):
@@ -46,6 +51,8 @@ class PackagingTests(unittest.TestCase):
         for module in (
             "transformers.models.bert.modeling_bert",
             "transformers.models.deberta_v2.modeling_deberta_v2",
+            "transformers.models.bert.tokenization_bert_fast",
+            "transformers.models.deberta_v2.tokenization_deberta_v2_fast",
         ):
             self.assertIn(repr(module), spec)
 

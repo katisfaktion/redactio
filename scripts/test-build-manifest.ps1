@@ -12,6 +12,11 @@ $function = $script.Find({ param($node)
 }, $true)
 if (-not $function) { throw 'Missing source identity validation' }
 . ([scriptblock]::Create($function.Extent.Text))
+$crtCheck = $script.Find({ param($node)
+    $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Test-StaticCrtImports'
+}, $true)
+if (-not $crtCheck) { throw 'Missing static CRT import validation' }
+. ([scriptblock]::Create($crtCheck.Extent.Text))
 $temporary = Join-Path ([IO.Path]::GetTempPath()) ('redactio-manifest-test-' + [guid]::NewGuid())
 New-Item -ItemType Directory -Path $temporary | Out-Null
 function Invoke-TestGit([string[]]$Arguments) {
@@ -24,6 +29,13 @@ function Expect-Failure([string]$Code, [string]$Path = $temporary) {
     throw "Expected failure: $Code"
 }
 try {
+    Test-StaticCrtImports @('kernel32.dll', 'user32.dll')
+    foreach ($runtime in @('vcruntime140.dll', 'msvcp140.dll', 'ucrtbase.dll',
+                            'api-ms-win-crt-runtime-l1-1-0.dll')) {
+        try { Test-StaticCrtImports @('kernel32.dll', $runtime) }
+        catch { if ($_.Exception.Message.Contains('dynamic_desktop_crt')) { continue }; throw }
+        throw "Expected dynamic CRT rejection: $runtime"
+    }
     Expect-Failure 'clean_git_checkout_required'
     Invoke-TestGit @('init', '--quiet')
     [IO.File]::WriteAllText((Join-Path $temporary '.gitignore'), "dist/`n")
@@ -77,5 +89,5 @@ try {
                 $manifest.observed_tools.python -cne 'Python 3.13.13') { throw 'incorrect_manifest_provenance' }
         }
     }
-    Write-Output 'build_manifest_tests_ok checks=15'
+    Write-Output 'build_manifest_tests_ok checks=20'
 } finally { Remove-Item -LiteralPath $temporary -Recurse -Force }
