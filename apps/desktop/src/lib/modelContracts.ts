@@ -1,6 +1,10 @@
 import { z } from "zod";
 import { EntityTypeSchema, SafeErrorSchema } from "./contracts";
 
+const ManagementSafeErrorSchema = SafeErrorSchema.extend({
+  code: z.string().regex(/^[a-z][a-z0-9_]{0,127}$/).refine(code => code.trim() === code),
+});
+
 const RevisionSchema = z.string().regex(/^[0-9a-f]{40}$/);
 const Sha256Schema = z.string().regex(/^[0-9a-f]{64}$/);
 const BytesSchema = z.int().nonnegative();
@@ -127,7 +131,7 @@ const ManagedModelObject = z.object({
   state: z.enum(["available", "ready", "invalid", "removing"]),
   catalog_key: z.enum(["biomedbert", "hugginglil"]).nullable(),
   used_by_pairs: z.array(UsedByPairSchema),
-  error: SafeErrorSchema.nullable(),
+  error: ManagementSafeErrorSchema.nullable(),
 }).strict();
 
 export const ManagedModelSchema = ManagedModelObject.superRefine((model, ctx) => {
@@ -162,8 +166,10 @@ export const ModelJobSchema = z.object({
   stage: z.enum(["downloading", "validating", "ready", "cancelled", "failed", "removing", "removed"]),
   downloaded_bytes: BytesSchema,
   total_bytes: BytesSchema,
-  error: SafeErrorSchema.nullable(),
-}).strict();
+  error: ManagementSafeErrorSchema.nullable(),
+}).strict().refine(job => job.downloaded_bytes <= job.total_bytes, {
+  path: ["downloaded_bytes"], message: "Downloaded bytes exceed total",
+});
 
 export type Artifact = z.infer<typeof ArtifactSchema>;
 export type ModelDescriptor = z.infer<typeof ModelDescriptorSchema>;

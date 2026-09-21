@@ -544,7 +544,8 @@ def test_registry_never_follows_model_or_manifest_links(tmp_path):
         store.read_registry(root)
 
 
-def test_invalid_labels_in_one_model_do_not_hide_another(tmp_path):
+@pytest.mark.parametrize("label", ["B-invalid", "B-LABEL_0"])
+def test_invalid_labels_in_one_model_do_not_hide_another(tmp_path, label):
     import json
 
     from redactio_sidecar import model_store as store
@@ -558,7 +559,7 @@ def test_invalid_labels_in_one_model_do_not_hide_another(tmp_path):
     )
     config = tmp_path / records[0].path / "config.json"
     raw = json.loads(config.read_text())
-    raw["id2label"]["1"] = "B-invalid"
+    raw["id2label"]["1"] = label
     config.write_text(json.dumps(raw))
     assert [m.compatible for m in Engine(tmp_path).available_models()] == [False, True]
 
@@ -585,3 +586,123 @@ def test_write_refuses_future_registry_without_replacing_it(tmp_path):
             tmp_path, store.ModelRegistry(schema_version=2, models=[], legacy_unavailable=[])
         )
     assert (tmp_path / "manifest.json").read_bytes() == before
+
+
+@pytest.mark.parametrize("location", ["ancestor", "root", "manifest", "model", "artifact"])
+def test_windows_reparse_attributes_are_rejected_before_discovery(tmp_path, monkeypatch, location):
+    import stat
+    from types import SimpleNamespace
+
+    from redactio_sidecar import model_store as store
+    from redactio_sidecar.engine import Engine
+
+    root = tmp_path / "models"
+    record = fixture_ready_model(root)
+    store.write_registry(
+        root, store.ModelRegistry(schema_version=2, models=[record], legacy_unavailable=[])
+    )
+    model_path = root / record.path
+    redirect = {
+        "ancestor": tmp_path,
+        "root": root,
+        "manifest": root / "manifest.json",
+        "model": model_path,
+        "artifact": model_path / "config.json",
+    }[location]
+    original_lstat = Path.lstat
+
+    def lstat(path, *args, **kwargs):
+        attributes = original_lstat(path, *args, **kwargs)
+        if path == redirect:
+            return SimpleNamespace(
+                st_mode=attributes.st_mode, st_file_attributes=stat.FILE_ATTRIBUTE_REPARSE_POINT
+            )
+        return attributes
+
+    monkeypatch.setattr(Path, "lstat", lstat)
+    if location in {"ancestor", "root", "manifest"}:
+        with pytest.raises(EngineError, match="invalid_model_manifest"):
+            store.read_registry(root)
+    else:
+        assert not Engine(root).available_models()[0].compatible
+        assert not store.compatible_descriptor(model_path, record.descriptor)
+
+
+@pytest.mark.parametrize("location", ["root", "ancestor", "dangling_manifest"])
+def test_registry_rejects_linked_roots_ancestors_and_dangling_manifests(tmp_path, location):
+    from redactio_sidecar.model_store import read_registry
+
+    root = tmp_path / "real" / "models"
+    root.mkdir(parents=True)
+    if location == "dangling_manifest":
+        (root / "manifest.json").symlink_to(tmp_path / "missing.json")
+    else:
+        link = tmp_path / "linked"
+        link.symlink_to(root if location == "root" else root.parent, target_is_directory=True)
+        root = link if location == "root" else link / "models"
+    with pytest.raises(EngineError, match="invalid_model_manifest"):
+        read_registry(root)
+
+
+def test_management_boundaries_match_unicode_labels_progress_and_error_codes():
+    import json
+
+    from pydantic import TypeAdapter
+
+    from redactio_sidecar import model_store as store
+    from redactio_sidecar.schemas import EntityType
+
+    fixture = json.loads(
+        (Path(__file__).parents[3] / "tests/fixtures/model-management.json").read_text()
+    )
+    for schema, key in [
+        (store.ModelDescriptor, "descriptor"),
+        (store.ManagedModel, "managed_model"),
+    ]:
+        for title in ["", "line\x00break"]:
+            assert schema.model_validate({**fixture[key], "title": title}).title == title
+        assert schema.model_validate({**fixture[key], "name": "😀" * 257}).name == "😀" * 257
+    assert TypeAdapter(EntityType).validate_python("LABEL_0") == "LABEL_0"
+    for code in ["model_invalid", "a" * 128]:
+        assert store.SafeError(code=code, retryable=False).code == code
+
+
+@pytest.mark.parametrize(
+    "schema,key,override",
+    [
+        ("ModelDescriptor", "descriptor", {"entity_types": ["LABEL_0"]}),
+        ("ManagedModel", "managed_model", {"entity_types": ["LABEL_123"]}),
+        ("ModelDescriptor", "descriptor", {"name": "😀" * 513}),
+        ("ManagedModel", "managed_model", {"name": "😀" * 513}),
+        ("ModelJob", "job", {"downloaded_bytes": 1025}),
+        *[
+            ("SafeError", "error", {"code": code})
+            for code in ["", "Model", "private path", "a" * 129, "bad\n"]
+        ],
+    ],
+)
+def test_management_contract_rejection_variants(schema, key, override):
+    import json
+
+    from pydantic import ValidationError
+
+    from redactio_sidecar import model_store as store
+
+    fixture = json.loads(
+        (Path(__file__).parents[3] / "tests/fixtures/model-management.json").read_text()
+    )
+    fixture["error"] = {"code": "model_invalid", "retryable": False}
+    with pytest.raises(ValidationError):
+        getattr(store, schema).model_validate({**fixture[key], **override})
+
+
+def test_safe_path_handles_relative_roots_without_following_links(tmp_path, monkeypatch):
+    from redactio_sidecar.model_store import _safe_path
+
+    root = tmp_path / "models"
+    root.mkdir()
+    (tmp_path / "linked").symlink_to(root, target_is_directory=True)
+    monkeypatch.chdir(tmp_path)
+    assert _safe_path(Path("models"), "manifest.json") == root / "manifest.json"
+    with pytest.raises(ValueError, match="links"):
+        _safe_path(Path("linked"), "manifest.json")

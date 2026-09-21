@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import tempfile
 from importlib.resources import files
 from pathlib import Path
@@ -20,7 +21,7 @@ from pydantic import (
 )
 
 from .ipc import EngineError
-from .schemas import EntityType, NonEmptyString, Sha256, StrictModel, UuidString
+from .schemas import EntityType, NonEmptyString, SafeCode, Sha256, StrictModel, UuidString
 
 _VALIDATION_UNIT = "Hans München 😀\r\n"
 
@@ -238,6 +239,8 @@ def _legacy_path(value: str) -> str:
 
 
 def _entities(value: list[str]) -> list[str]:
+    if any(re.fullmatch(r"LABEL_[0-9]+", label) for label in value):
+        raise ValueError("anonymous model labels are unsupported")
     if not value or value != sorted(set(value)):
         raise ValueError("entities must be nonempty, sorted and unique")
     return value
@@ -355,7 +358,7 @@ class ModelRegistry(StrictModel):
 
 
 class SafeError(StrictModel):
-    code: str
+    code: SafeCode
     retryable: bool
 
 
@@ -426,6 +429,12 @@ class ModelJob(StrictModel):
     total_bytes: ByteCount
     error: SafeError | None
 
+    @model_validator(mode="after")
+    def progress_within_total(self) -> Self:
+        if self.downloaded_bytes > self.total_bytes:
+            raise ValueError("downloaded bytes exceed total")
+        return self
+
 
 def _matching_name(name: str, repository: str, revision: str) -> None:
     if name.startswith("hf:") and name != f"hf:{repository}@{revision}":
@@ -470,12 +479,21 @@ def model_entity_types(path: Path) -> tuple[str, ...]:
         return ()
 
 
+def _is_link(path: Path) -> bool:
+    try:
+        attributes = path.lstat()
+    except FileNotFoundError:
+        return False
+    return stat.S_ISLNK(attributes.st_mode) or bool(
+        getattr(attributes, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT
+    )
+
+
 def _safe_path(root: Path, relative: str) -> Path:
+    root = root.absolute()
     path = root / relative
-    for part in (root, *root.parents, path, *path.relative_to(root).parents):
-        # Check each component below root separately as relative parents are not absolute.
-        candidate = part if part.is_absolute() else root / part
-        if candidate.is_symlink():
+    for candidate in reversed((path, *path.parents)):
+        if _is_link(candidate):
             raise ValueError("model path must not contain links")
     if not path.resolve().is_relative_to(root.resolve()):
         raise ValueError("model path escapes store")
@@ -484,6 +502,7 @@ def _safe_path(root: Path, relative: str) -> Path:
 
 def compatible_descriptor(path: Path, descriptor: ModelDescriptor, *, legacy: bool = False) -> bool:
     try:
+        path = _safe_path(path.parent, path.name)
         if descriptor.name != selection_name(descriptor.repository, descriptor.version):
             return False
         required = {
@@ -493,7 +512,7 @@ def compatible_descriptor(path: Path, descriptor: ModelDescriptor, *, legacy: bo
             "tokenizer_config.json",
             "redactio-model.json",
         }
-        if any((path / name).is_symlink() or not (path / name).is_file() for name in required):
+        if any(_is_link(path / name) or not (path / name).is_file() for name in required):
             return False
         identity = json.loads((path / "redactio-model.json").read_text(encoding="utf-8"))
         if identity != {
@@ -525,7 +544,7 @@ def compatible_descriptor(path: Path, descriptor: ModelDescriptor, *, legacy: bo
             list(labels) == descriptor.entity_types
             and required - {"redactio-model.json"} <= {file.filename for file in descriptor.files}
             and all(
-                not (path / file.filename).is_symlink()
+                not _is_link(path / file.filename)
                 and (path / file.filename).is_file()
                 and (path / file.filename).stat().st_size == file.size
                 for file in descriptor.files

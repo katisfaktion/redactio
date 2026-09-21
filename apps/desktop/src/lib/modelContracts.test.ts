@@ -221,3 +221,27 @@ test("ready registry records require a local path, tokenizer overhead, and verif
     state: "available",
   }).success).toBe(true);
 });
+
+test("management errors use safe codes without changing inference errors", async () => {
+  const { SafeErrorSchema } = await import("./contracts");
+  for (const code of ["model_invalid", "a".repeat(128)]) {
+    const error = { code, retryable: false };
+    expect(ManagedModelSchema.safeParse({ ...managed, error }).success).toBe(true);
+    expect(ModelJobSchema.safeParse({ ...fixture.job, error }).success).toBe(true);
+  }
+  for (const code of ["", "Model", "private path", "a".repeat(129), "bad\n", "bad\r", "bad\u2028"]) {
+    const error = { code, retryable: false };
+    expect(ManagedModelSchema.safeParse({ ...managed, error }).success).toBe(false);
+    expect(ModelJobSchema.safeParse({ ...fixture.job, error }).success).toBe(false);
+  }
+  expect(SafeErrorSchema.safeParse({ code: "private path", retryable: false }).success).toBe(true);
+});
+
+test("management names count Unicode code points and progress cannot exceed total", () => {
+  for (const [name, valid] of [["😀".repeat(257), true], ["😀".repeat(513), false]] as const) {
+    expect(ModelDescriptorSchema.safeParse({ ...descriptor, name }).success).toBe(valid);
+    expect(ManagedModelSchema.safeParse({ ...managed, name }).success).toBe(valid);
+  }
+  expect(ModelJobSchema.safeParse({ ...fixture.job, downloaded_bytes: 1024 }).success).toBe(true);
+  expect(ModelJobSchema.safeParse({ ...fixture.job, downloaded_bytes: 1025 }).success).toBe(false);
+});
