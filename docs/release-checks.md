@@ -89,6 +89,15 @@ is `7636b77f03bbab3ff90c91d6ddc902563eea4f29`; the later commit only corrects th
 PowerShell tokenizer-file filter in `scripts/package-windows.ps1`. Desktop, sidecar,
 locks, build inputs, and freezer specification are unchanged.
 
+The later CI-only commit `a382ddb1af40f1ab60383ced4a7aa9b482f6d500`
+expresses the existing Windows lock guard as `sys.platform == "win32"` so mypy can
+narrow the native imports, and formats two preparation scripts. Pinned Windows and
+Linux branch probes, both-platform mypy over 12 source files, ten focused Linux
+lock/lease tests, and five native lock/lease cases confirmed equivalent supported
+runtime behavior. The delivered ZIPs remain the verified `79c7a3e` artifacts and
+retain the hashes below; they were not rebuilt from the CI-only commit. A fresh
+hosted CI run follows the source and documentation push and is not claimed here.
+
 | Artifact delivered to Windows Downloads | Bytes | SHA-256 | Preloaded models |
 | --- | ---: | --- | ---: |
 | `C:\Users\katisfaktion\Downloads\redactio-79c7a3e-windows-x64.zip` | 564,245,887 | `5758d333dc0198588cff6eae6b5f45e0e59f29977c21f9b2c72943159d623c13` | 0 |

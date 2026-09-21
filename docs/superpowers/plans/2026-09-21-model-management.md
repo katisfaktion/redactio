@@ -516,6 +516,14 @@ The final clean packaging source is
 PowerShell tokenizer-file filter into one valid command. Desktop, sidecar, locks,
 build inputs, and freezer specification are unchanged.
 
+The later CI-only commit `a382ddb1af40f1ab60383ced4a7aa9b482f6d500`
+spells the equivalent native guard as `sys.platform == "win32"` for static type
+narrowing and formats two preparation scripts. Both-platform mypy over 12 source
+files, Ruff/format, ten focused Linux lock/lease tests, pinned Windows/Linux branch
+probes, and five native lock/lease cases passed. The verified `79c7a3e` ZIPs were
+not rebuilt and retain their recorded source and hashes. The fresh hosted CI run
+after push is not yet an accepted result.
+
 ### Execution status
 
 - [x] Task 1: adaptable context and local validation — `7b792c4`, `f53f31a`,
@@ -666,3 +674,10 @@ choices and their stated correction cost; they are not remaining work items.
     live metadata verify both hosts. If wrong, this expands outbound hostname
     permission unnecessarily and costs reverting two entries; public-address, TLS,
     redirect, and artifact-hash checks remain enforced.
+19. Reuse the verified `79c7a3e` Windows packages after confirming that the
+    type-checker-visible `sys.platform` guard selects the same native locking branch
+    as `os.name` on pinned Windows and Linux, with current-source native receipt and
+    worker-lease checks passing: the remaining script edits are formatting only and
+    the delivered package source and hashes remain explicit. If wrong, a newly
+    supported platform could select different locking behavior and would require
+    rebuilding and revalidation.
