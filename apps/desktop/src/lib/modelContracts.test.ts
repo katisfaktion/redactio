@@ -1,4 +1,5 @@
 import { expect, test } from "vitest";
+import fixture from "../../../../tests/fixtures/model-management.json";
 import {
   ArtifactSchema,
   CatalogEntrySchema,
@@ -88,6 +89,18 @@ test("all model-management variants accept complete payloads and round trip unch
     [CheckedModelSchema, checked],
     [ModelJobSchema, job],
   ] as const) expect(schema.parse(value)).toEqual(value);
+});
+
+test("the shared cross-language fixture parses without frontend-specific reshaping", () => {
+  expect(ArtifactSchema.parse(fixture.artifact)).toEqual(fixture.artifact);
+  expect(ModelDescriptorSchema.parse(fixture.descriptor)).toEqual(fixture.descriptor);
+  expect(ModelCatalogSchema.parse(fixture.catalog)).toEqual(fixture.catalog);
+  expect(CatalogEntrySchema.parse(fixture.catalog_entry)).toEqual(fixture.catalog_entry);
+  expect(ModelRegistrySchema.parse(fixture.registry)).toEqual(fixture.registry);
+  expect(ManagedModelSchema.parse(fixture.managed_model)).toEqual(fixture.managed_model);
+  fixture.sources.forEach(source => expect(ModelSourceSchema.parse(source)).toEqual(source));
+  expect(CheckedModelSchema.parse(fixture.checked_model)).toEqual(fixture.checked_model);
+  expect(ModelJobSchema.parse(fixture.job)).toEqual(fixture.job);
 });
 
 test("strict objects and discriminated unions reject unknown or malformed fields", () => {
