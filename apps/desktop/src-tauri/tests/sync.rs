@@ -205,6 +205,7 @@ fn real_two_pair_batches_cover_errors_cancellation_and_rule_isolation() {
         let python = std::env::var_os("REDACTIO_TEST_PYTHON").unwrap();
         for (index, term) in ["CanaryAlpha", "CanaryBeta"].iter().enumerate() {
             let pair = &mut f.settings.sync_pairs[index];
+            pair.config.model = "OpenMed-PII-German-BiomedBERT-Large-340M-v1".into();
             pair.config.enabled_entities.clear();
             pair.config.custom_rules.push(CustomRule::Words { id: uuid::Uuid::new_v4(), entity_type: EntityType::Custom, enabled: true, words: vec![(*term).into()] });
             for name in ["a.docx", "b.docx"] {
