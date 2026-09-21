@@ -173,10 +173,13 @@ impl TryFrom<ModelDescriptorWire> for ModelDescriptor {
             || value.stride_tokens != expected_stride
             || value.entity_types.is_empty()
             || sorted != value.entity_types
-            || value.entity_types.iter().any(|label| !entity(label))
+            || value
+                .entity_types
+                .iter()
+                .any(|label| !entity(label) || generic_label(label))
             || filenames.len() != value.files.len()
             || (value.name.starts_with("hf:")
-                && value.name != selection_name(&value.repository, &value.version))
+                && value.name != format!("hf:{}@{}", value.repository, value.version))
         {
             return Err("invalid model descriptor".into());
         }
@@ -565,7 +568,10 @@ impl TryFrom<ManagedModelWire> for ManagedModel {
             || !repository(&value.repository)
             || value.entity_types.is_empty()
             || sorted != value.entity_types
-            || value.entity_types.iter().any(|label| !entity(label))
+            || value
+                .entity_types
+                .iter()
+                .any(|label| !entity(label) || generic_label(label))
             || value
                 .window_tokens
                 .0
@@ -573,7 +579,7 @@ impl TryFrom<ManagedModelWire> for ManagedModel {
             || value.download_bytes > MAX_SAFE_INTEGER
             || value.installed_bytes > MAX_SAFE_INTEGER
             || (value.name.starts_with("hf:")
-                && value.name != selection_name(&value.repository, &value.version))
+                && value.name != format!("hf:{}@{}", value.repository, value.version))
         {
             return Err("invalid managed model".into());
         }
@@ -854,19 +860,18 @@ fn read_store(root: &Path, catalog: &[CatalogEntry]) -> Result<(ModelRegistry, b
                 path: Some(legacy.path.clone()),
                 state: ModelState::Ready,
             };
-            if directory(record.path.as_deref().unwrap())
-                && compatibility(root, &record, true, catalog).is_some()
-            {
-                let mut record = record;
-                record.descriptor.entity_types = compatibility(root, &record, true, catalog)
-                    .unwrap()
-                    .into_iter()
-                    .map(|label| label.as_str().to_owned())
-                    .collect();
-                registry.models.push(record);
-            } else {
-                registry.legacy_unavailable.push(legacy);
+            if directory(record.path.as_deref().unwrap()) {
+                if let Some(labels) = compatibility(root, &record, true, catalog) {
+                    let mut record = record;
+                    record.descriptor.entity_types = labels
+                        .into_iter()
+                        .map(|label| label.as_str().to_owned())
+                        .collect();
+                    registry.models.push(record);
+                    continue;
+                }
             }
+            registry.legacy_unavailable.push(legacy);
         } else {
             registry.legacy_unavailable.push(legacy);
         }
@@ -1057,9 +1062,14 @@ fn native_metadata(
         ModelType::DebertaV2 => "deberta-v2",
     };
     let model_limit = config.get("max_position_embeddings")?.as_u64()?;
+    let tokenizer = tokenizer.as_object()?;
     let tokenizer_limit = match tokenizer.get("model_max_length") {
         None | Some(serde_json::Value::Null) => model_limit,
-        Some(value) => value.as_u64()?.min(model_limit),
+        Some(value) => match value.as_u64() {
+            Some(limit) if limit > 0 => limit.min(model_limit),
+            _ if value.as_f64().is_some_and(|limit| limit >= 1e20) => model_limit,
+            _ => return None,
+        },
     };
     let special = descriptor.special_tokens?;
     let content = tokenizer_limit.checked_sub(special)?;
@@ -1093,7 +1103,11 @@ fn native_metadata(
                     .unwrap_or(label),
             ),
         })
-        .map(|label| EntityType::parse(label.into()).ok())
+        .map(|label| {
+            (!generic_label(label))
+                .then(|| EntityType::parse(label.into()).ok())
+                .flatten()
+        })
         .collect::<Option<Vec<_>>>()?;
     labels.sort_unstable();
     labels.dedup();
@@ -1225,6 +1239,11 @@ fn entity(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_')
+}
+fn generic_label(value: &str) -> bool {
+    value.strip_prefix("LABEL_").is_some_and(|suffix| {
+        !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit())
+    })
 }
 fn windows_reserved(value: &str) -> bool {
     let stem = value.split('.').next().unwrap_or("").to_ascii_uppercase();

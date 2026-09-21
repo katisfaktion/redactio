@@ -49,7 +49,30 @@ fn strict_dtos_reject_unknown_labels_paths_and_future_registries() {
     );
     let mut generic_label = descriptor.clone();
     generic_label["entity_types"] = serde_json::json!(["LABEL_0"]);
-    assert!(serde_json::from_value::<model_store::ModelDescriptor>(generic_label).is_ok());
+    assert!(serde_json::from_value::<model_store::ModelDescriptor>(generic_label).is_err());
+    let catalog = model_store::catalog_models().unwrap();
+    let catalog_descriptor = &catalog[0].descriptor;
+    let literal_hf_name = format!(
+        "hf:{}@{}",
+        catalog_descriptor.repository, catalog_descriptor.version
+    );
+    let mut catalog_hf_descriptor = descriptor.clone();
+    catalog_hf_descriptor["name"] = serde_json::json!(literal_hf_name);
+    catalog_hf_descriptor["repository"] = serde_json::json!(catalog_descriptor.repository);
+    catalog_hf_descriptor["version"] = serde_json::json!(catalog_descriptor.version);
+    assert!(serde_json::from_value::<model_store::ModelDescriptor>(catalog_hf_descriptor).is_ok());
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../tests/fixtures/model-management.json"
+    ))
+    .unwrap();
+    let mut catalog_hf_managed = fixture["managed_model"].clone();
+    catalog_hf_managed["name"] = serde_json::json!(literal_hf_name);
+    catalog_hf_managed["repository"] = serde_json::json!(catalog_descriptor.repository);
+    catalog_hf_managed["version"] = serde_json::json!(catalog_descriptor.version);
+    assert!(serde_json::from_value::<model_store::ManagedModel>(catalog_hf_managed).is_ok());
+    let mut generic_managed = fixture["managed_model"].clone();
+    generic_managed["entity_types"] = serde_json::json!(["LABEL_0"]);
+    assert!(serde_json::from_value::<model_store::ManagedModel>(generic_managed).is_err());
     assert!(
         serde_json::from_value::<model_store::ModelRegistry>(serde_json::json!({
             "schema_version": 2, "models": [],
@@ -274,6 +297,81 @@ fn v2_discovery_uses_effective_tokenizer_window_and_canonical_identity() {
         serde_json::to_vec(&manifest).unwrap(),
     )
     .unwrap();
+    assert!(!model_store::list_models(root).unwrap()[0].compatible);
+    assert_eq!(
+        model_store::list_managed(root).unwrap()[2].state,
+        model_store::ManagedState::Invalid
+    );
+}
+
+#[test]
+fn tokenizer_metadata_requires_an_object_and_ignores_hf_unbounded_sentinels() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+    common::fixture_model_store(root);
+    let mut manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.join("manifest.json")).unwrap()).unwrap();
+
+    let sentinel = r#"{"model_max_length":1000000000000000019884624838656}"#;
+    fs::write(root.join("fixture-model/tokenizer_config.json"), sentinel).unwrap();
+    manifest["models"][0]["descriptor"]["files"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|file| file["filename"] == "tokenizer_config.json")
+        .unwrap()["size"] = serde_json::json!(sentinel.len());
+    fs::write(
+        root.join("manifest.json"),
+        serde_json::to_vec(&manifest).unwrap(),
+    )
+    .unwrap();
+    assert!(model_store::list_models(root).unwrap()[0].compatible);
+
+    for invalid in [
+        "[]",
+        "null",
+        "1",
+        r#"{"model_max_length":512.0}"#,
+        r#"{"model_max_length":true}"#,
+        r#"{"model_max_length":0}"#,
+    ] {
+        fs::write(root.join("fixture-model/tokenizer_config.json"), invalid).unwrap();
+        manifest["models"][0]["descriptor"]["files"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|file| file["filename"] == "tokenizer_config.json")
+            .unwrap()["size"] = serde_json::json!(invalid.len());
+        fs::write(
+            root.join("manifest.json"),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+        assert!(!model_store::list_models(root).unwrap()[0].compatible);
+    }
+}
+
+#[test]
+fn native_metadata_rejects_generic_model_labels() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+    common::fixture_model_store(root);
+    let config = r#"{"architectures":["BertForTokenClassification"],"model_type":"bert","max_position_embeddings":512,"id2label":{"0":"O","1":"B-LABEL_0"}}"#;
+    fs::write(root.join("fixture-model/config.json"), config).unwrap();
+    let mut manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.join("manifest.json")).unwrap()).unwrap();
+    manifest["models"][0]["descriptor"]["files"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|file| file["filename"] == "config.json")
+        .unwrap()["size"] = serde_json::json!(config.len());
+    fs::write(
+        root.join("manifest.json"),
+        serde_json::to_vec(&manifest).unwrap(),
+    )
+    .unwrap();
+
     assert!(!model_store::list_models(root).unwrap()[0].compatible);
     assert_eq!(
         model_store::list_managed(root).unwrap()[2].state,
