@@ -1,6 +1,7 @@
 mod commands;
 pub mod domain;
 pub mod error;
+pub mod model_store;
 pub mod protocol;
 pub mod resources;
 pub mod sidecar;
