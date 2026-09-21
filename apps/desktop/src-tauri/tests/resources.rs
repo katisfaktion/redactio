@@ -79,6 +79,16 @@ fn packaged_resources_reject_redirected_nested_runtime_libraries() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn packaged_resources_reject_a_linked_existing_model_store() {
+    let temporary = tempfile::tempdir().unwrap();
+    package(temporary.path());
+    let outside = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(outside.path(), temporary.path().join("models")).unwrap();
+    assert!(resources::resolve_packaged(&temporary.path().join("redactio.exe")).is_err());
+}
+
 #[cfg(windows)]
 #[test]
 fn packaged_resources_reject_nested_runtime_junctions() {

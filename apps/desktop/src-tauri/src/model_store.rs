@@ -161,7 +161,6 @@ impl TryFrom<ModelDescriptorWire> for ModelDescriptor {
         if !opaque(&value.name)
             || !hash(&value.version, true)
             || !repository(&value.repository)
-            || value.title.is_empty()
             || !matching_architecture
             || value.window_tokens < 2
             || value.window_tokens > MAX_SAFE_INTEGER
@@ -174,10 +173,7 @@ impl TryFrom<ModelDescriptorWire> for ModelDescriptor {
             || value.stride_tokens != expected_stride
             || value.entity_types.is_empty()
             || sorted != value.entity_types
-            || value
-                .entity_types
-                .iter()
-                .any(|label| !entity(label) || generic_label(label))
+            || value.entity_types.iter().any(|label| !entity(label))
             || filenames.len() != value.files.len()
             || (value.name.starts_with("hf:")
                 && value.name != selection_name(&value.repository, &value.version))
@@ -567,13 +563,9 @@ impl TryFrom<ManagedModelWire> for ManagedModel {
         if !opaque(&value.name)
             || !hash(&value.version, true)
             || !repository(&value.repository)
-            || value.title.is_empty()
             || value.entity_types.is_empty()
             || sorted != value.entity_types
-            || value
-                .entity_types
-                .iter()
-                .any(|label| !entity(label) || generic_label(label))
+            || value.entity_types.iter().any(|label| !entity(label))
             || value
                 .window_tokens
                 .0
@@ -793,6 +785,13 @@ struct LegacyManifest {
 }
 
 pub fn selection_name(repository: &str, revision: &str) -> String {
+    if let Ok(catalog) = catalog_models() {
+        if let Some(entry) = catalog.iter().find(|entry| {
+            entry.descriptor.repository == repository && entry.descriptor.version == revision
+        }) {
+            return entry.descriptor.name.clone();
+        }
+    }
     format!("hf:{repository}@{revision}")
 }
 
@@ -803,13 +802,23 @@ pub fn catalog_models() -> Result<Vec<CatalogEntry>, AppError> {
 }
 
 pub fn read_registry(root: &Path) -> Result<ModelRegistry, AppError> {
-    Ok(read_store(root)?.0)
+    Ok(read_store(root, &catalog_models()?)?.0)
 }
 
-fn read_store(root: &Path) -> Result<(ModelRegistry, bool), AppError> {
+fn read_store(root: &Path, catalog: &[CatalogEntry]) -> Result<(ModelRegistry, bool), AppError> {
+    let exists = safe_root(root)?;
+    if !exists {
+        return Ok((
+            ModelRegistry {
+                schema_version: 2,
+                models: Vec::new(),
+                legacy_unavailable: Vec::new(),
+            },
+            false,
+        ));
+    }
     let manifest = root.join("manifest.json");
-    let bytes = match fs::read(&manifest) {
-        Ok(bytes) => bytes,
+    let bytes = match fs::symlink_metadata(&manifest) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Ok((
                 ModelRegistry {
@@ -821,13 +830,16 @@ fn read_store(root: &Path) -> Result<(ModelRegistry, bool), AppError> {
             ))
         }
         Err(_) => return Err(AppError::new("invalid_model_manifest")),
+        Ok(metadata) if crate::domain::paths::is_link(&metadata) || !metadata.is_file() => {
+            return Err(AppError::new("invalid_model_manifest"))
+        }
+        Ok(_) => fs::read(&manifest).map_err(|_| AppError::new("invalid_model_manifest"))?,
     };
     if let Ok(registry) = serde_json::from_slice::<ModelRegistry>(&bytes) {
         return Ok((registry, false));
     }
     let legacy: LegacyManifest =
         serde_json::from_slice(&bytes).map_err(|_| AppError::new("invalid_model_manifest"))?;
-    let catalog = catalog_models()?;
     let mut registry = ModelRegistry {
         schema_version: 2,
         models: Vec::new(),
@@ -837,28 +849,44 @@ fn read_store(root: &Path) -> Result<(ModelRegistry, bool), AppError> {
         if let Some(entry) = catalog.iter().find(|entry| {
             entry.descriptor.name == legacy.name && entry.descriptor.version == legacy.version
         }) {
-            registry.models.push(ModelRecord {
+            let record = ModelRecord {
                 descriptor: entry.descriptor.clone(),
-                path: Some(legacy.path),
+                path: Some(legacy.path.clone()),
                 state: ModelState::Ready,
-            });
+            };
+            if directory(record.path.as_deref().unwrap())
+                && compatibility(root, &record, true, catalog).is_some()
+            {
+                let mut record = record;
+                record.descriptor.entity_types = compatibility(root, &record, true, catalog)
+                    .unwrap()
+                    .into_iter()
+                    .map(|label| label.as_str().to_owned())
+                    .collect();
+                registry.models.push(record);
+            } else {
+                registry.legacy_unavailable.push(legacy);
+            }
         } else {
             registry.legacy_unavailable.push(legacy);
         }
     }
+    let registry = serde_json::from_value(
+        serde_json::to_value(registry).map_err(|_| AppError::new("invalid_model_manifest"))?,
+    )
+    .map_err(|_| AppError::new("invalid_model_manifest"))?;
     Ok((registry, true))
 }
 
 pub fn list_models(root: &Path) -> Result<Vec<ModelInfo>, AppError> {
-    let (registry, legacy) = read_store(root)?;
+    let catalog = catalog_models()?;
+    let (registry, legacy) = read_store(root, &catalog)?;
     Ok(registry
         .models
         .into_iter()
         .filter(|record| matches!(record.state, ModelState::Ready))
         .map(|record| {
-            let entity_types = ready(root, &record, !legacy)
-                .then(|| native_metadata(root, &record, !legacy))
-                .flatten();
+            let entity_types = compatibility(root, &record, legacy, &catalog);
             ModelInfo {
                 name: record.descriptor.name,
                 version: record.descriptor.version,
@@ -871,7 +899,7 @@ pub fn list_models(root: &Path) -> Result<Vec<ModelInfo>, AppError> {
 
 pub fn list_managed(root: &Path) -> Result<Vec<ManagedModel>, AppError> {
     let catalog = catalog_models()?;
-    let (registry, legacy) = read_store(root)?;
+    let (registry, legacy) = read_store(root, &catalog)?;
     let mut models = catalog
         .iter()
         .map(|entry| {
@@ -884,15 +912,17 @@ pub fn list_managed(root: &Path) -> Result<Vec<ManagedModel>, AppError> {
         })
         .collect::<Vec<_>>();
     for record in registry.models {
+        let compatible = compatibility(root, &record, legacy, &catalog);
         let state = match record.state {
             ModelState::Available => ManagedState::Available,
             ModelState::Removing => ManagedState::Removing,
-            ModelState::Ready if ready(root, &record, !legacy) => ManagedState::Ready,
+            ModelState::Ready if compatible.is_some() => ManagedState::Ready,
             ModelState::Ready => ManagedState::Invalid,
         };
         let installed = record
             .path
             .as_deref()
+            .filter(|_| compatible.is_some())
             .map(|path| installed_bytes(&root.join(path)))
             .unwrap_or(0);
         let catalog_key = catalog
@@ -941,48 +971,107 @@ fn same_identity_fields(managed: &ManagedModel, descriptor: &ModelDescriptor) ->
     managed.repository == descriptor.repository && managed.version == descriptor.version
 }
 
-fn ready(root: &Path, record: &ModelRecord, verify_size: bool) -> bool {
-    if record.descriptor.files.is_empty() {
-        return false;
-    }
-    let Some(path) = &record.path else {
-        return false;
-    };
+fn compatibility(
+    root: &Path,
+    record: &ModelRecord,
+    legacy: bool,
+    catalog: &[CatalogEntry],
+) -> Option<Vec<EntityType>> {
+    let path = record.path.as_deref()?;
     let model = root.join(path);
-    if !directory_on_disk(&model) {
-        return false;
+    if !directory_on_disk(&model)
+        || record.descriptor.name != canonical_name(catalog, &record.descriptor)
+    {
+        return None;
+    }
+    let required = [
+        "model.safetensors",
+        "config.json",
+        "tokenizer.json",
+        "tokenizer_config.json",
+    ];
+    if required.iter().any(|name| !regular_file(&model.join(name)))
+        || !required.iter().all(|name| {
+            legacy
+                || record
+                    .descriptor
+                    .files
+                    .iter()
+                    .any(|file| file.filename == *name)
+        })
+    {
+        return None;
     }
     let receipt_path = model.join("redactio-model.json");
-    let receipt = regular_file(&receipt_path)
-        .then(|| fs::read(receipt_path).ok())
-        .flatten();
-    receipt.is_some_and(|receipt| receipt_matches(&receipt, &record.descriptor))
-        && record.descriptor.files.iter().all(|file| {
-            fs::metadata(model.join(&file.filename)).is_ok_and(|metadata| {
-                metadata.is_file() && (!verify_size || metadata.len() == file.size)
-            }) && regular_file(&model.join(&file.filename))
+    if !regular_file(&receipt_path)
+        || !fs::read(&receipt_path)
+            .ok()
+            .is_some_and(|receipt| receipt_matches(&receipt, &record.descriptor))
+    {
+        return None;
+    }
+    if !legacy
+        && (record.descriptor.files.is_empty()
+            || record.descriptor.files.iter().any(|file| {
+                fs::symlink_metadata(model.join(&file.filename))
+                    .ok()
+                    .filter(|metadata| {
+                        metadata.is_file()
+                            && !crate::domain::paths::is_link(metadata)
+                            && metadata.len() == file.size
+                    })
+                    .is_none()
+            }))
+    {
+        return None;
+    }
+    native_metadata(&model, &record.descriptor, legacy)
+}
+
+fn canonical_name(catalog: &[CatalogEntry], descriptor: &ModelDescriptor) -> String {
+    catalog
+        .iter()
+        .find(|entry| {
+            entry.descriptor.repository == descriptor.repository
+                && entry.descriptor.version == descriptor.version
         })
+        .map(|entry| entry.descriptor.name.clone())
+        .unwrap_or_else(|| format!("hf:{}@{}", descriptor.repository, descriptor.version))
 }
 
 fn native_metadata(
-    root: &Path,
-    record: &ModelRecord,
-    require_labels: bool,
+    model: &Path,
+    descriptor: &ModelDescriptor,
+    legacy: bool,
 ) -> Option<Vec<EntityType>> {
-    let model = root.join(record.path.as_ref()?);
     let config: serde_json::Value =
         serde_json::from_slice(&fs::read(model.join("config.json")).ok()?).ok()?;
-    let architecture = match record.descriptor.architecture {
+    let tokenizer: serde_json::Value =
+        serde_json::from_slice(&fs::read(model.join("tokenizer_config.json")).ok()?).ok()?;
+    let architecture = match descriptor.architecture {
         Architecture::BertForTokenClassification => "BertForTokenClassification",
         Architecture::DebertaV2ForTokenClassification => "DebertaV2ForTokenClassification",
     };
-    let model_type = match record.descriptor.model_type {
+    let model_type = match descriptor.model_type {
         ModelType::Bert => "bert",
         ModelType::DebertaV2 => "deberta-v2",
     };
+    let model_limit = config.get("max_position_embeddings")?.as_u64()?;
+    let tokenizer_limit = match tokenizer.get("model_max_length") {
+        None | Some(serde_json::Value::Null) => model_limit,
+        Some(value) => value.as_u64()?.min(model_limit),
+    };
+    let special = descriptor.special_tokens?;
+    let content = tokenizer_limit.checked_sub(special)?;
+    let stride = std::cmp::min(
+        std::cmp::max(1, tokenizer_limit / 4),
+        content.checked_sub(1)?,
+    );
     if config.get("architectures")?.as_array()? != &[serde_json::Value::String(architecture.into())]
         || config.get("model_type")?.as_str()? != model_type
-        || config.get("max_position_embeddings")?.as_u64()? != record.descriptor.window_tokens
+        || content < 2
+        || tokenizer_limit != descriptor.window_tokens
+        || stride != descriptor.stride_tokens
     {
         return None;
     }
@@ -1008,10 +1097,9 @@ fn native_metadata(
         .collect::<Option<Vec<_>>>()?;
     labels.sort_unstable();
     labels.dedup();
-    if require_labels
+    if !legacy
         && labels
-            != record
-                .descriptor
+            != descriptor
                 .entity_types
                 .iter()
                 .map(|label| EntityType::parse(label.clone()).ok())
@@ -1047,6 +1135,27 @@ fn installed_bytes(path: &Path) -> u64 {
         .map(|metadata| metadata.len())
         .sum()
 }
+fn safe_root(root: &Path) -> Result<bool, AppError> {
+    crate::domain::paths::check_absolute(root)
+        .map_err(|_| AppError::new("invalid_model_manifest"))?;
+    let parent = root
+        .parent()
+        .ok_or_else(|| AppError::new("invalid_model_manifest"))?;
+    crate::domain::paths::reject_links(parent)
+        .map_err(|_| AppError::new("invalid_model_manifest"))?;
+    match fs::symlink_metadata(root) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(_) => Err(AppError::new("invalid_model_manifest")),
+        Ok(metadata) if crate::domain::paths::is_link(&metadata) || !metadata.is_dir() => {
+            Err(AppError::new("invalid_model_manifest"))
+        }
+        Ok(_) => {
+            crate::domain::paths::reject_links(root)
+                .map_err(|_| AppError::new("invalid_model_manifest"))?;
+            Ok(true)
+        }
+    }
+}
 fn directory_on_disk(path: &Path) -> bool {
     fs::symlink_metadata(path)
         .is_ok_and(|metadata| metadata.is_dir() && !crate::domain::paths::is_link(&metadata))
@@ -1058,7 +1167,7 @@ fn regular_file(path: &Path) -> bool {
 
 fn opaque(value: &str) -> bool {
     !value.is_empty()
-        && value.len() <= 512
+        && value.chars().count() <= 512
         && !value.chars().any(|character| character.is_control())
 }
 fn required_fields(value: &serde_json::Value, fields: &[&str]) -> bool {
@@ -1116,11 +1225,6 @@ fn entity(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_')
-}
-fn generic_label(value: &str) -> bool {
-    value.strip_prefix("LABEL_").is_some_and(|suffix| {
-        !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit())
-    })
 }
 fn windows_reserved(value: &str) -> bool {
     let stem = value.split('.').next().unwrap_or("").to_ascii_uppercase();

@@ -6,17 +6,23 @@ pub fn fixture_model_store(root: &std::path::Path) -> String {
         "../../../../../tests/fixtures/model-management.json"
     ))
     .unwrap();
-    let descriptor = fixture["descriptor"].clone();
+    let mut descriptor = fixture["descriptor"].clone();
     let model = root.join("fixture-model");
     std::fs::create_dir_all(&model).unwrap();
-    std::fs::write(model.join("model.safetensors"), vec![0_u8; 1024]).unwrap();
-    std::fs::write(
-        model.join("config.json"),
-        r#"{"architectures":["BertForTokenClassification"],"model_type":"bert","max_position_embeddings":512,"id2label":{"0":"O","1":"B-DATE","2":"I-PERSON"}}"#,
-    )
-    .unwrap();
-    std::fs::write(model.join("tokenizer.json"), "{}").unwrap();
-    std::fs::write(model.join("tokenizer_config.json"), "{}").unwrap();
+    let files = [
+        ("model.safetensors", b"synthetic weights".as_slice()),
+        ("config.json", br#"{"architectures":["BertForTokenClassification"],"model_type":"bert","max_position_embeddings":512,"id2label":{"0":"O","1":"B-DATE","2":"I-PERSON"}}"#.as_slice()),
+        ("tokenizer.json", b"{}".as_slice()),
+        ("tokenizer_config.json", br#"{"model_max_length":512}"#.as_slice()),
+    ];
+    descriptor["files"] = serde_json::Value::Array(files.iter().map(|(filename, bytes)| {
+        use sha2::Digest;
+        let hash = format!("{:x}", sha2::Sha256::digest(bytes));
+        serde_json::json!({"filename": filename, "size": bytes.len(), "upstream_hash":{"algorithm":"sha256","value":hash}, "sha256":hash})
+    }).collect());
+    for (filename, bytes) in files {
+        std::fs::write(model.join(filename), bytes).unwrap();
+    }
     std::fs::write(
         model.join("redactio-model.json"),
         serde_json::to_vec(&serde_json::json!({
@@ -40,6 +46,7 @@ pub fn fixture_model_store(root: &std::path::Path) -> String {
     fixture["descriptor"]["name"].as_str().unwrap().to_owned()
 }
 
+#[allow(dead_code)]
 pub fn manifest_dir() -> PathBuf {
     // Cross-built tests run with a native checkout/fixture mirror, not the build host's path.
     std::env::var_os("REDACTIO_TEST_MANIFEST_DIR")

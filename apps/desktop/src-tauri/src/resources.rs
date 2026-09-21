@@ -48,8 +48,15 @@ pub fn resolve_packaged(executable: &Path) -> Result<ResourcePaths, AppError> {
     let root = executable.parent().ok_or_else(setup_error)?;
     let sidecar = resource(root.join("sidecar"), true)?;
     resource(sidecar.join("_internal"), true)?;
-    // The model store is mutable app data: a fresh package intentionally has none.
     let model_root = root.join("models");
+    // A fresh package has no store; an existing one remains subject to resource link checks.
+    match fs::symlink_metadata(&model_root) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+        Ok(_) => {
+            resource(model_root.clone(), true)?;
+        }
+        Err(_) => return Err(setup_error()),
+    }
     Ok(ResourcePaths {
         sidecar_executable: resource(
             sidecar.join(if cfg!(windows) {

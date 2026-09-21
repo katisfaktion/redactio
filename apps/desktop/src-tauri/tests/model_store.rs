@@ -1,3 +1,4 @@
+mod common;
 use redactio_lib::model_store;
 use std::fs;
 
@@ -37,19 +38,18 @@ fn descriptor() -> serde_json::Value {
 fn strict_dtos_reject_unknown_labels_paths_and_future_registries() {
     let descriptor = descriptor();
     assert!(serde_json::from_value::<model_store::ModelDescriptor>(descriptor.clone()).is_ok());
-    let mut generic_label = descriptor.clone();
-    generic_label["entity_types"] = serde_json::json!(["LABEL_0"]);
     let mut unknown_field = descriptor.clone();
     unknown_field["private_path"] = serde_json::json!("/model");
-    for invalid in [generic_label, unknown_field] {
-        assert!(serde_json::from_value::<model_store::ModelDescriptor>(invalid).is_err());
-    }
+    assert!(serde_json::from_value::<model_store::ModelDescriptor>(unknown_field).is_err());
     assert!(
         serde_json::from_value::<model_store::ModelRegistry>(serde_json::json!({
             "schema_version": 3, "models": [], "legacy_unavailable": [],
         }))
         .is_err()
     );
+    let mut generic_label = descriptor.clone();
+    generic_label["entity_types"] = serde_json::json!(["LABEL_0"]);
+    assert!(serde_json::from_value::<model_store::ModelDescriptor>(generic_label).is_ok());
     assert!(
         serde_json::from_value::<model_store::ModelRegistry>(serde_json::json!({
             "schema_version": 2, "models": [],
@@ -127,6 +127,11 @@ fn legacy_manifest_projects_known_metadata_without_rewriting_or_weight_hashing()
     )
     .unwrap();
     fs::write(
+        model.join("tokenizer_config.json"),
+        r#"{"model_max_length":512}"#,
+    )
+    .unwrap();
+    fs::write(
         model.join("redactio-model.json"),
         serde_json::to_vec(&serde_json::json!({
             "name": entry.descriptor.name,
@@ -163,6 +168,20 @@ fn legacy_manifest_projects_known_metadata_without_rewriting_or_weight_hashing()
 #[test]
 fn ready_registry_record_is_discovered_without_loading_weights() {
     let temporary = tempfile::tempdir().unwrap();
+    let output = std::env::var_os("REDACTIO_FIXTURE_OUTPUT")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| temporary.path().to_owned());
+    fs::create_dir_all(&output).unwrap();
+    let name = common::fixture_model_store(&output);
+    let models = model_store::list_models(&output).unwrap();
+    assert_eq!(models.len(), 1);
+    assert_eq!(models[0].name, name);
+    assert_eq!(models[0].entity_types.len(), 2);
+}
+
+#[test]
+fn discovery_requires_core_metadata_and_agrees_on_invalid_state() {
+    let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path();
     let model = root.join("fixture-model");
     fs::create_dir(&model).unwrap();
@@ -175,30 +194,89 @@ fn ready_registry_record_is_discovered_without_loading_weights() {
     let descriptor = descriptor();
     fs::write(
         model.join("redactio-model.json"),
-        serde_json::to_vec(&serde_json::json!({
-            "name": descriptor["name"],
-            "version": descriptor["version"],
-            "repository": descriptor["repository"],
-        }))
-        .unwrap(),
+        serde_json::to_vec(&serde_json::json!({"name": descriptor["name"], "version": descriptor["version"], "repository": descriptor["repository"]})).unwrap(),
+    ).unwrap();
+    fs::write(root.join("manifest.json"), serde_json::to_vec(&serde_json::json!({"schema_version":2,"models":[{"descriptor":descriptor,"path":"fixture-model","state":"ready"}],"legacy_unavailable":[]})).unwrap()).unwrap();
+
+    assert!(!model_store::list_models(root).unwrap()[0].compatible);
+    assert_eq!(
+        model_store::list_managed(root).unwrap()[2].state,
+        model_store::ManagedState::Invalid
+    );
+}
+
+#[test]
+fn empty_titles_are_transport_values() {
+    let mut value = descriptor();
+    value["title"] = serde_json::json!("");
+    assert!(serde_json::from_value::<model_store::ModelDescriptor>(value).is_ok());
+}
+
+#[test]
+fn opaque_names_count_unicode_scalar_values() {
+    let mut value = descriptor();
+    value["name"] = serde_json::json!("😀".repeat(257));
+    assert!(serde_json::from_value::<model_store::ModelDescriptor>(value.clone()).is_ok());
+    value["name"] = serde_json::json!("😀".repeat(513));
+    assert!(serde_json::from_value::<model_store::ModelDescriptor>(value).is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn linked_store_or_manifest_is_an_invalid_store_not_an_empty_one() {
+    let temporary = tempfile::tempdir().unwrap();
+    let linked = temporary.path().join("linked-models");
+    std::os::unix::fs::symlink(temporary.path().join("missing"), &linked).unwrap();
+    assert_eq!(
+        model_store::read_registry(&linked).unwrap_err().code,
+        "invalid_model_manifest"
+    );
+
+    let root = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(
+        temporary.path().join("missing-manifest"),
+        root.path().join("manifest.json"),
     )
     .unwrap();
+    assert_eq!(
+        model_store::read_registry(root.path()).unwrap_err().code,
+        "invalid_model_manifest"
+    );
+}
+
+#[test]
+fn v2_discovery_uses_effective_tokenizer_window_and_canonical_identity() {
+    let temporary = tempfile::tempdir().unwrap();
+    common::fixture_model_store(temporary.path());
+    let root = temporary.path();
+    let mut manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.join("manifest.json")).unwrap()).unwrap();
+    let config = r#"{"architectures":["BertForTokenClassification"],"model_type":"bert","max_position_embeddings":1024,"id2label":{"0":"O","1":"B-DATE","2":"I-PERSON"}}"#;
+    fs::write(root.join("fixture-model/config.json"), config).unwrap();
+    let files = manifest["models"][0]["descriptor"]["files"]
+        .as_array_mut()
+        .unwrap();
+    files
+        .iter_mut()
+        .find(|file| file["filename"] == "config.json")
+        .unwrap()["size"] = serde_json::json!(config.len());
     fs::write(
         root.join("manifest.json"),
-        serde_json::to_vec(&serde_json::json!({
-            "schema_version": 2,
-            "models": [{"descriptor": descriptor, "path": "fixture-model", "state": "ready"}],
-            "legacy_unavailable": [],
-        }))
-        .unwrap(),
+        serde_json::to_vec(&manifest).unwrap(),
     )
     .unwrap();
+    assert!(model_store::list_models(root).unwrap()[0].compatible);
 
-    let models = model_store::list_models(root).unwrap();
-    assert_eq!(models.len(), 1);
+    manifest["models"][0]["descriptor"]["name"] = serde_json::json!("pii-sensitive-ner-german");
+    fs::write(root.join("fixture-model/redactio-model.json"), serde_json::to_vec(&serde_json::json!({"name":"pii-sensitive-ner-german","version":manifest["models"][0]["descriptor"]["version"],"repository":manifest["models"][0]["descriptor"]["repository"]})).unwrap()).unwrap();
+    fs::write(
+        root.join("manifest.json"),
+        serde_json::to_vec(&manifest).unwrap(),
+    )
+    .unwrap();
+    assert!(!model_store::list_models(root).unwrap()[0].compatible);
     assert_eq!(
-        models[0].name,
-        "hf:acme/medical-ner@0123456789abcdef0123456789abcdef01234567"
+        model_store::list_managed(root).unwrap()[2].state,
+        model_store::ManagedState::Invalid
     );
-    assert_eq!(models[0].entity_types.len(), 2);
 }
