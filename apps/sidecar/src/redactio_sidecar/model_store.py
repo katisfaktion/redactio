@@ -1,9 +1,26 @@
 from __future__ import annotations
 
+import hashlib
+import json
+import os
+import re
+import tempfile
+from importlib.resources import files
 from pathlib import Path
-from typing import Any, NamedTuple, cast
+from typing import Annotated, Any, Literal, NamedTuple, Self, cast
+
+from pydantic import (
+    AfterValidator,
+    BeforeValidator,
+    Field,
+    PrivateAttr,
+    StringConstraints,
+    TypeAdapter,
+    model_validator,
+)
 
 from .ipc import EngineError
+from .schemas import EntityType, NonEmptyString, Sha256, StrictModel, UuidString
 
 _VALIDATION_UNIT = "Hans München 😀\r\n"
 
@@ -159,3 +176,424 @@ def validate_local_model(path: Path, model_type: str, architecture: str) -> Wind
         return window
     except Exception as error:
         raise EngineError("model_incompatible") from error
+
+
+_SAFE_INTEGER = 2**53 - 1
+_REPOSITORY_PART = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,95}")
+_RESERVED = {
+    "con",
+    "prn",
+    "aux",
+    "nul",
+    *(f"com{i}" for i in range(1, 10)),
+    *(f"lpt{i}" for i in range(1, 10)),
+}
+_FAMILIES = {"bert": "BertForTokenClassification", "deberta-v2": "DebertaV2ForTokenClassification"}
+
+
+def _repository(value: str) -> str:
+    parts = value.split("/")
+    if len(parts) != 2 or any(
+        not _REPOSITORY_PART.fullmatch(part)
+        or part.endswith((".", "-"))
+        or ".." in part
+        or "--" in part
+        for part in parts
+    ):
+        raise ValueError("invalid repository")
+    return value
+
+
+def _selection(value: str) -> str:
+    if not 1 <= len(value) <= 512 or any(ord(c) < 32 or 127 <= ord(c) <= 159 for c in value):
+        raise ValueError("invalid selection name")
+    return value
+
+
+def _basename(value: str) -> str:
+    if (
+        not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", value)
+        or value.endswith(".")
+        or value.split(".")[0].lower() in _RESERVED
+    ):
+        raise ValueError("invalid filename")
+    return value
+
+
+def _directory(value: str) -> str:
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,127}", value):
+        raise ValueError("invalid model directory")
+    return _basename(value)
+
+
+def _legacy_path(value: str) -> str:
+    if (
+        not value
+        or "\\" in value
+        or ":" in value
+        or any(part in ("", ".", "..") for part in value.split("/"))
+    ):
+        raise ValueError("invalid legacy path")
+    return value
+
+
+def _entities(value: list[str]) -> list[str]:
+    if not value or value != sorted(set(value)):
+        raise ValueError("entities must be nonempty, sorted and unique")
+    return value
+
+
+Repository = Annotated[str, AfterValidator(_repository)]
+SelectionName = Annotated[str, AfterValidator(_selection)]
+Revision = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{40}$")]
+ByteCount = Annotated[int, Field(ge=0, le=_SAFE_INTEGER)]
+WindowTokens = Annotated[int, Field(ge=2, le=_SAFE_INTEGER)]
+Entities = Annotated[list[EntityType], AfterValidator(_entities)]
+Directory = Annotated[str, AfterValidator(_directory)]
+CatalogKey = Literal["biomedbert", "hugginglil"]
+
+
+class UpstreamHash(StrictModel):
+    algorithm: Literal["git-sha1", "sha256"]
+    value: str
+
+    @model_validator(mode="after")
+    def valid_hash(self) -> Self:
+        length = 40 if self.algorithm == "git-sha1" else 64
+        if not re.fullmatch(r"[0-9a-f]{" + str(length) + "}", self.value):
+            raise ValueError("invalid upstream hash")
+        return self
+
+
+class Artifact(StrictModel):
+    filename: Annotated[str, AfterValidator(_basename)]
+    size: ByteCount
+    upstream_hash: UpstreamHash
+    sha256: Sha256 | None
+
+
+class ModelDescriptor(StrictModel):
+    name: SelectionName
+    version: Revision
+    repository: Repository
+    title: str
+    license: str | None
+    model_type: Literal["bert", "deberta-v2"]
+    architecture: Literal["BertForTokenClassification", "DebertaV2ForTokenClassification"]
+    entity_types: Entities
+    window_tokens: WindowTokens
+    stride_tokens: Annotated[int, Field(gt=0, le=_SAFE_INTEGER)]
+    special_tokens: ByteCount | None
+    files: list[Artifact]
+
+    @model_validator(mode="after")
+    def valid_descriptor(self) -> Self:
+        _matching_name(self.name, self.repository, self.version)
+        if self.architecture != _FAMILIES[self.model_type]:
+            raise ValueError("incompatible architecture")
+        window = processing_window(self.window_tokens, None, self.special_tokens or 0)
+        if self.stride_tokens != window.stride:
+            raise ValueError("invalid processing stride")
+        if len({file.filename for file in self.files}) != len(self.files):
+            raise ValueError("duplicate artifacts")
+        return self
+
+
+class CatalogEntry(StrictModel):
+    key: CatalogKey
+    directory: Directory
+    descriptor: ModelDescriptor
+
+
+def _schema_version(value: object) -> object:
+    if type(value) is not int:
+        raise ValueError("schema version must be an integer")
+    return value
+
+
+class ModelCatalog(StrictModel):
+    schema_version: Annotated[Literal[1], BeforeValidator(_schema_version)]
+    models: list[CatalogEntry]
+
+
+class ModelRecord(StrictModel):
+    descriptor: ModelDescriptor
+    path: Directory | None
+    state: Literal["ready", "available", "removing"]
+
+    @model_validator(mode="after")
+    def ready_is_verified(self) -> Self:
+        if self.state == "ready" and (
+            self.path is None
+            or self.descriptor.special_tokens is None
+            or any(file.sha256 is None for file in self.descriptor.files)
+        ):
+            raise ValueError("ready model is not verified")
+        return self
+
+
+class LegacyEntry(StrictModel):
+    name: SelectionName
+    version: NonEmptyString
+    path: Annotated[str, AfterValidator(_legacy_path)]
+
+
+class ModelRegistry(StrictModel):
+    _migrated_legacy: bool = PrivateAttr(default=False)
+    schema_version: Annotated[Literal[2], BeforeValidator(_schema_version)]
+    models: list[ModelRecord]
+    legacy_unavailable: list[LegacyEntry]
+
+    @model_validator(mode="after")
+    def unique_identities(self) -> Self:
+        names = [model.descriptor.name for model in self.models]
+        names.extend(entry.name for entry in self.legacy_unavailable)
+        paths = [model.path for model in self.models if model.path is not None]
+        if len(set(names)) != len(names) or len(set(paths)) != len(paths):
+            raise ValueError("duplicate model identity or path")
+        return self
+
+
+class SafeError(StrictModel):
+    code: str
+    retryable: bool
+
+
+class PairUse(StrictModel):
+    id: UuidString
+    name: str
+
+
+class ManagedModel(StrictModel):
+    name: SelectionName
+    version: Revision
+    repository: Repository
+    title: str
+    license: str | None
+    entity_types: Entities
+    window_tokens: WindowTokens | None
+    download_bytes: ByteCount
+    installed_bytes: ByteCount
+    state: Literal["available", "ready", "invalid", "removing"]
+    catalog_key: CatalogKey | None
+    used_by_pairs: list[PairUse]
+    error: SafeError | None
+
+    @model_validator(mode="after")
+    def valid_name(self) -> Self:
+        _matching_name(self.name, self.repository, self.version)
+        return self
+
+
+class CatalogSource(StrictModel):
+    kind: Literal["catalog"]
+    key: CatalogKey
+
+
+class UrlSource(StrictModel):
+    kind: Literal["url"]
+    url: str
+
+    @model_validator(mode="after")
+    def repository_url(self) -> Self:
+        prefix = "https://huggingface.co/"
+        if not self.url.startswith(prefix):
+            raise ValueError("invalid repository URL")
+        _repository(self.url[len(prefix) :].removesuffix("/"))
+        return self
+
+
+class ReceiptSource(StrictModel):
+    kind: Literal["receipt"]
+    name: SelectionName
+
+
+ModelSource = Annotated[CatalogSource | UrlSource | ReceiptSource, Field(discriminator="kind")]
+
+
+class CheckedModel(StrictModel):
+    plan_id: UuidString
+    model: ManagedModel
+
+
+class ModelJob(StrictModel):
+    job_id: UuidString
+    model_name: SelectionName
+    stage: Literal[
+        "downloading", "validating", "ready", "cancelled", "failed", "removing", "removed"
+    ]
+    downloaded_bytes: ByteCount
+    total_bytes: ByteCount
+    error: SafeError | None
+
+
+def _matching_name(name: str, repository: str, revision: str) -> None:
+    if name.startswith("hf:") and name != f"hf:{repository}@{revision}":
+        raise ValueError("selection identity mismatch")
+
+
+def catalog_models() -> list[CatalogEntry]:
+    return ModelCatalog.model_validate_json(
+        files("redactio_sidecar").joinpath("model_catalog.json").read_text(encoding="utf-8")
+    ).models
+
+
+def selection_name(repository: str, revision: str) -> str:
+    _repository(repository)
+    TypeAdapter(Revision).validate_python(revision, strict=True)
+    for entry in catalog_models():
+        descriptor = entry.descriptor
+        if (repository, revision) == (descriptor.repository, descriptor.version):
+            return descriptor.name
+    return f"hf:{repository}@{revision}"
+
+
+def directory_name(repository: str, revision: str) -> str:
+    identity = selection_name(repository, revision)
+    return "model-" + hashlib.sha256(identity.encode()).hexdigest()
+
+
+def model_entity_types(path: Path) -> tuple[str, ...]:
+    try:
+        config = json.loads((path / "config.json").read_text(encoding="utf-8"))
+        labels = config["id2label"]
+        if not isinstance(labels, dict) or not all(
+            isinstance(index, str) and index.isdecimal() and isinstance(label, str)
+            for index, label in labels.items()
+        ):
+            return ()
+        entities = {
+            label[2:] if label.startswith(("B-", "I-")) else label for label in labels.values()
+        } - {"O"}
+        return tuple(TypeAdapter(Entities).validate_python(sorted(entities), strict=True))
+    except (KeyError, OSError, TypeError, ValueError):
+        return ()
+
+
+def _safe_path(root: Path, relative: str) -> Path:
+    path = root / relative
+    for part in (root, *root.parents, path, *path.relative_to(root).parents):
+        # Check each component below root separately as relative parents are not absolute.
+        candidate = part if part.is_absolute() else root / part
+        if candidate.is_symlink():
+            raise ValueError("model path must not contain links")
+    if not path.resolve().is_relative_to(root.resolve()):
+        raise ValueError("model path escapes store")
+    return path
+
+
+def compatible_descriptor(path: Path, descriptor: ModelDescriptor, *, legacy: bool = False) -> bool:
+    try:
+        if descriptor.name != selection_name(descriptor.repository, descriptor.version):
+            return False
+        required = {
+            "model.safetensors",
+            "config.json",
+            "tokenizer.json",
+            "tokenizer_config.json",
+            "redactio-model.json",
+        }
+        if any((path / name).is_symlink() or not (path / name).is_file() for name in required):
+            return False
+        identity = json.loads((path / "redactio-model.json").read_text(encoding="utf-8"))
+        if identity != {
+            "name": descriptor.name,
+            "version": descriptor.version,
+            "repository": descriptor.repository,
+        }:
+            return False
+        config = json.loads((path / "config.json").read_text(encoding="utf-8"))
+        tokenizer = json.loads((path / "tokenizer_config.json").read_text(encoding="utf-8"))
+        if not isinstance(config, dict) or not isinstance(tokenizer, dict):
+            return False
+        labels = model_entity_types(path)
+        window = processing_window(
+            config["max_position_embeddings"],
+            tokenizer.get("model_max_length"),
+            descriptor.special_tokens or 0,
+        )
+        if (
+            config["model_type"] != descriptor.model_type
+            or config.get("architectures") != [descriptor.architecture]
+            or not labels
+            or window != Window(descriptor.window_tokens, descriptor.stride_tokens)
+        ):
+            return False
+        if legacy:
+            return True
+        return (
+            list(labels) == descriptor.entity_types
+            and required - {"redactio-model.json"} <= {file.filename for file in descriptor.files}
+            and all(
+                not (path / file.filename).is_symlink()
+                and (path / file.filename).is_file()
+                and (path / file.filename).stat().st_size == file.size
+                for file in descriptor.files
+            )
+        )
+    except (KeyError, OSError, TypeError, ValueError):
+        return False
+
+
+def read_registry(root: Path) -> ModelRegistry:
+    try:
+        root = root.absolute()
+        manifest = _safe_path(root, "manifest.json")
+        if not manifest.exists():
+            if root.exists() and not root.is_dir():
+                raise ValueError("invalid store")
+            return ModelRegistry(schema_version=2, models=[], legacy_unavailable=[])
+        raw = json.loads(manifest.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            raise ValueError("invalid registry")
+        if "schema_version" in raw:
+            return ModelRegistry.model_validate(raw)
+        if set(raw) != {"models"}:
+            raise ValueError("invalid legacy manifest")
+        entries = TypeAdapter(list[LegacyEntry]).validate_python(raw["models"], strict=True)
+        registry = ModelRegistry(schema_version=2, models=[], legacy_unavailable=[])
+        catalogs = {entry.descriptor.name: entry for entry in catalog_models()}
+        for entry in entries:
+            catalog = catalogs.get(entry.name)
+            if catalog is None or entry.version != catalog.descriptor.version:
+                registry.legacy_unavailable.append(entry)
+                continue
+            try:
+                _directory(entry.path)
+                path = _safe_path(root, entry.path)
+                descriptor = catalog.descriptor.model_copy(deep=True)
+                if not compatible_descriptor(path, descriptor, legacy=True):
+                    raise ValueError("incompatible legacy model")
+                descriptor.entity_types = list(model_entity_types(path))
+                registry.models.append(
+                    ModelRecord(descriptor=descriptor, path=entry.path, state="ready")
+                )
+            except (OSError, ValueError):
+                registry.legacy_unavailable.append(entry)
+        registry = ModelRegistry.model_validate(registry.model_dump())
+        registry._migrated_legacy = True
+        return registry
+    except (OSError, TypeError, ValueError) as error:
+        raise EngineError("invalid_model_manifest") from error
+
+
+def write_registry(root: Path, registry: ModelRegistry) -> None:
+    validated = ModelRegistry.model_validate(registry.model_dump())
+    root = root.absolute()
+    manifest = _safe_path(root, "manifest.json")
+    if manifest.exists():
+        read_registry(root)
+    root.mkdir(parents=True, exist_ok=True)
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=root, delete=False
+        ) as stream:
+            temporary = Path(stream.name)
+            stream.write(validated.model_dump_json(indent=2) + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, manifest)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)

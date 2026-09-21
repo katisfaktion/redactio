@@ -704,7 +704,7 @@ def test_cli_takes_explicit_model_root_and_keeps_ping_available_without_models(t
     replies = [json.loads(line) for line in completed.stdout.splitlines()]
     assert replies[0]["type"] == "ping_result"
     assert replies[1]["payload"] == {
-        "code": "invalid_model_manifest",
+        "code": "model_not_found",
         "retryable": False,
     }
     assert completed.stderr == ""

@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import json
 import math
-import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -10,13 +8,24 @@ from typing import Any
 from presidio_analyzer import EntityRecognizer, RecognizerResult
 
 from .ipc import EngineError
-from .model_store import Window, _load_local_model, _token_classification_pipeline
+from .model_store import (
+    ModelDescriptor,
+    Window,
+    _load_local_model,
+    _token_classification_pipeline,
+    catalog_models,
+    compatible_descriptor,
+)
+from .model_store import (
+    model_entity_types as model_entity_types,
+)
 from .model_store import validate_local_model as _validate_local_model
 
-MODEL_NAME = "OpenMed-PII-German-BiomedBERT-Large-340M-v1"
-MODEL_VERSION = "ce797d58600cc20bba9a2500dafc0b7f5c3270c1"
-HUGGINGLIL_MODEL_NAME = "pii-sensitive-ner-german"
-HUGGINGLIL_MODEL_VERSION = "6af88facbb75da7be737da55d2c411c7ce79e5a1"
+_CATALOG = {entry.key: entry.descriptor for entry in catalog_models()}
+MODEL_NAME = _CATALOG["biomedbert"].name
+MODEL_VERSION = _CATALOG["biomedbert"].version
+HUGGINGLIL_MODEL_NAME = _CATALOG["hugginglil"].name
+HUGGINGLIL_MODEL_VERSION = _CATALOG["hugginglil"].version
 _LEGACY_LABELS = {
     **dict.fromkeys(("FIRSTNAME", "MIDDLENAME", "LASTNAME"), "PERSON"),
     **dict.fromkeys(
@@ -34,7 +43,6 @@ _LEGACY_LABELS = {
         "LOCATION",
     ),
 }
-_LABEL_ID = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
 
 
 @dataclass(frozen=True)
@@ -47,43 +55,20 @@ class ModelSpec:
     recognizer_name: str
 
 
-BIOMEDBERT = ModelSpec(
-    MODEL_NAME,
-    MODEL_VERSION,
-    "OpenMed/" + MODEL_NAME,
-    "bert",
-    "BertForTokenClassification",
-    "BiomedBertRecognizer",
-)
-HUGGINGLIL = ModelSpec(
-    HUGGINGLIL_MODEL_NAME,
-    HUGGINGLIL_MODEL_VERSION,
-    "HuggingLil/pii-sensitive-ner-german",
-    "deberta-v2",
-    "DebertaV2ForTokenClassification",
-    "HuggingLilRecognizer",
-)
-MODEL_SPECS = {spec.name: spec for spec in (BIOMEDBERT, HUGGINGLIL)}
+def model_spec(descriptor: ModelDescriptor) -> ModelSpec:
+    recognizer = {MODEL_NAME: "BiomedBertRecognizer", HUGGINGLIL_MODEL_NAME: "HuggingLilRecognizer"}
+    return ModelSpec(
+        descriptor.name,
+        descriptor.version,
+        descriptor.repository,
+        descriptor.model_type,
+        descriptor.architecture,
+        recognizer.get(descriptor.name, "TransformersNerRecognizer"),
+    )
 
 
-def model_entity_types(path: Path) -> tuple[str, ...]:
-    try:
-        config = json.loads((path / "config.json").read_text(encoding="utf-8"))
-        labels = config["id2label"]
-        if not isinstance(labels, dict):
-            raise TypeError
-        if not all(isinstance(index, str) and index.isdecimal() for index in labels):
-            raise ValueError
-        if not all(isinstance(label, str) for label in labels.values()):
-            raise ValueError
-        entity_types = {_strip_bio_prefix(label) for label in labels.values()} - {"O"}
-        if any(not _LABEL_ID.fullmatch(label) for label in entity_types) or any(
-            not isinstance(label, str) for label in labels.values()
-        ):
-            raise ValueError
-        return tuple(sorted(entity_types))
-    except (KeyError, OSError, TypeError, ValueError, json.JSONDecodeError):
-        return ()
+BIOMEDBERT = model_spec(_CATALOG["biomedbert"])
+HUGGINGLIL = model_spec(_CATALOG["hugginglil"])
 
 
 def _strip_bio_prefix(label: str) -> str:
@@ -91,35 +76,15 @@ def _strip_bio_prefix(label: str) -> str:
 
 
 def compatible_model(path: Path, name: str, model_version: str) -> bool:
-    try:
-        spec = MODEL_SPECS[name]
-        metadata = json.loads((path / "redactio-model.json").read_text(encoding="utf-8"))
-        config = json.loads((path / "config.json").read_text(encoding="utf-8"))
-        labels = model_entity_types(path)
-        return bool(
-            model_version == spec.version
-            and metadata
-            == {
-                "name": spec.name,
-                "version": spec.version,
-                "repository": spec.repository,
-            }
-            and config["model_type"] == spec.model_type
-            and config.get("architectures") == [spec.architecture]
-            and type(config["max_position_embeddings"]) is int
-            and 0 < config["max_position_embeddings"] < 10**20
-            and bool(labels)
-            and all(
-                (path / file).is_file()
-                for file in (
-                    "model.safetensors",
-                    "tokenizer.json",
-                    "tokenizer_config.json",
-                )
-            )
-        )
-    except (KeyError, OSError, TypeError, ValueError, json.JSONDecodeError):
-        return False
+    descriptor = next(
+        (
+            entry
+            for entry in _CATALOG.values()
+            if (entry.name, entry.version) == (name, model_version)
+        ),
+        None,
+    )
+    return descriptor is not None and compatible_descriptor(path, descriptor, legacy=True)
 
 
 def _load_pipeline(
@@ -224,3 +189,8 @@ class BiomedBertRecognizer(_TokenClassificationRecognizer):
 class HuggingLilRecognizer(_TokenClassificationRecognizer):
     def __init__(self, path: Path, native_labels: tuple[str, ...] = ()) -> None:
         super().__init__(path, HUGGINGLIL, native_labels)
+
+
+class TransformersNerRecognizer(_TokenClassificationRecognizer):
+    def __init__(self, path: Path, descriptor: ModelDescriptor) -> None:
+        super().__init__(path, model_spec(descriptor), tuple(descriptor.entity_types))

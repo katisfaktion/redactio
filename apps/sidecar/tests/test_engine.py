@@ -308,7 +308,6 @@ def test_available_models_validates_missing_incompatible_and_escaped_directories
                         "version": "3.8.0",
                         "path": incompatible.name,
                     },
-                    {"name": "escaped", "version": "1", "path": "../outside"},
                 ]
             }
         ),
@@ -324,6 +323,14 @@ def test_available_models_validates_missing_incompatible_and_escaped_directories
             str(uuid4()),
             ProcessingConfig(model="de_core_news_lg"),
         )
+
+
+def test_escaped_legacy_path_rejects_manifest(tmp_path: Path) -> None:
+    (tmp_path / "manifest.json").write_text(
+        json.dumps({"models": [{"name": "escaped", "version": "1", "path": "../outside"}]})
+    )
+    with pytest.raises(EngineError, match="invalid_model_manifest"):
+        Engine(tmp_path).available_models()
 
 
 def test_packaged_model_is_reported_compatible(model_root: Path) -> None:

@@ -4,6 +4,7 @@ from PyInstaller.utils.hooks import collect_all, collect_data_files, copy_metada
 
 root = Path(SPECPATH).resolve().parent
 datas, binaries, hiddenimports = [], [], []
+datas += collect_data_files('redactio_sidecar', includes=['model_catalog.json'])
 for package in ('spacy', 'presidio_analyzer', 'thinc'):
     package_data, package_binaries, package_imports = collect_all(package)
     datas += package_data

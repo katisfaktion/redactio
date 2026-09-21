@@ -746,3 +746,13 @@ def test_real_hugginglil_offline_long_document(monkeypatch) -> None:
             detection.entity_type == entity and detection.start <= start < detection.end
             for detection in detections
         ), (entity, term)
+
+
+def test_v2_catalog_record_checks_recorded_sizes(bert_root: Path) -> None:
+    from redactio_sidecar.model_store import read_registry, write_registry
+
+    registry = read_registry(bert_root)
+    assert Engine(bert_root).available_models()[0].compatible
+    # Legacy synthetic artifacts deliberately differ from real catalog sizes.
+    write_registry(bert_root, registry)
+    assert not Engine(bert_root).available_models()[0].compatible

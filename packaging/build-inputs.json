@@ -16,7 +16,8 @@
     "tldextract": "5.3.2"
   },
   "model": {
-    "inputs": "biomedbert-inputs.json"
+    "catalog": "apps/sidecar/src/redactio_sidecar/model_catalog.json",
+    "key": "biomedbert"
   },
   "webview2": {
     "version": "153.0.4234.48",

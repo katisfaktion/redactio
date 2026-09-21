@@ -97,5 +97,24 @@ class ModelPreparationTests(unittest.TestCase):
                     self.prepare.prepare(Path(directory), {**self.inputs, "directory": name})
 
 
+class CatalogProjectionTests(unittest.TestCase):
+    def test_projection_uses_catalog_hashes_and_keeps_preparation_shape(self):
+        from redactio_sidecar.model_store import catalog_models
+
+        spec = importlib.util.spec_from_file_location(
+            "prepare", Path(__file__).with_name("prepare-biomedbert.py")
+        )
+        prepare = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(prepare)
+        for entry in catalog_models():
+            inputs = prepare.catalog_inputs(entry.key)
+            self.assertEqual(inputs["name"], entry.descriptor.name)
+            self.assertEqual(inputs["revision"], entry.descriptor.version)
+            self.assertEqual(inputs["directory"], entry.directory)
+            self.assertEqual(
+                inputs["files"], {f.filename: f.sha256 for f in entry.descriptor.files}
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

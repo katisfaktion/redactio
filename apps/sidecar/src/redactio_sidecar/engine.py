@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import re
 from collections.abc import Callable
 from copy import copy
@@ -32,17 +31,22 @@ from presidio_analyzer.predefined_recognizers import (
 from pydantic import ValidationError
 
 from .biomedbert import (
+    HUGGINGLIL_MODEL_NAME,
     MODEL_NAME,
-    MODEL_SPECS,
     BiomedBertRecognizer,
     HuggingLilRecognizer,
-    ModelSpec,
-    compatible_model,
-    model_entity_types,
+    TransformersNerRecognizer,
 )
 from .extract import Extraction, extract_document
 from .frontmatter import normalize_body, render_document
 from .ipc import EngineError
+from .model_store import (
+    ModelDescriptor,
+    _safe_path,
+    catalog_models,
+    compatible_descriptor,
+    read_registry,
+)
 from .redaction import apply_redactions
 from .schemas import (
     Decisions,
@@ -115,7 +119,7 @@ class _Model:
     path: Path
     compatible: bool
     entity_types: tuple[str, ...]
-    spec: ModelSpec | None
+    descriptor: ModelDescriptor
 
 
 @dataclass(frozen=True)
@@ -133,9 +137,11 @@ class _Snapshot:
 
 class Engine:
     def __init__(self, model_root: Path) -> None:
-        self._model_root = model_root.resolve()
+        self._model_root = model_root.absolute()
         self._loaded_models: dict[tuple[str, str], NlpEngine] = {}
-        self._recognizers: dict[tuple[str, str], BiomedBertRecognizer | HuggingLilRecognizer] = {}
+        self._recognizers: dict[
+            tuple[str, str], BiomedBertRecognizer | HuggingLilRecognizer | TransformersNerRecognizer
+        ] = {}
         self._snapshot: _Snapshot | None = None
 
     def available_models(self) -> list[ModelInfo]:
@@ -466,6 +472,8 @@ class Engine:
             BiomedBertRecognizer(model.path, model.entity_types)
             if model.name == MODEL_NAME
             else HuggingLilRecognizer(model.path, model.entity_types)
+            if model.name == HUGGINGLIL_MODEL_NAME
+            else TransformersNerRecognizer(model.path, model.descriptor)
         )
         blank_engine = SpacyNlpEngine()
         cast(Any, blank_engine).nlp = {LANGUAGE: spacy.blank(LANGUAGE)}
@@ -474,43 +482,45 @@ class Engine:
         return blank_engine
 
     def _models(self) -> list[_Model]:
-        manifest_path = self._model_root / "manifest.json"
-        try:
-            raw = json.loads(manifest_path.read_text(encoding="utf-8"))
-            entries = raw["models"]
-            if not isinstance(entries, list):
-                raise TypeError
-            models = [self._model(entry) for entry in entries]
-        except (KeyError, OSError, TypeError, ValueError, json.JSONDecodeError) as error:
-            raise EngineError("invalid_model_manifest") from error
-        if len({model.name for model in models}) != len(models):
-            raise EngineError("invalid_model_manifest")
-        return [model for model in models if model.spec is not None]
-
-    def _model(self, entry: object) -> _Model:
-        if not isinstance(entry, dict) or set(entry) != {"name", "version", "path"}:
-            raise TypeError
-        name, model_version, relative = entry["name"], entry["version"], entry["path"]
-        if not all(isinstance(value, str) and value for value in (name, model_version, relative)):
-            raise TypeError
-        path = (self._model_root / relative).resolve()
-        spec = MODEL_SPECS.get(name)
-        entity_types = model_entity_types(path) if spec is not None else ()
-        compatible = path.is_relative_to(self._model_root) and _compatible_model(
-            path, name, model_version
-        )
-        return _Model(
-            name=name,
-            version=model_version,
-            path=path,
-            compatible=compatible,
-            entity_types=entity_types if compatible else (),
-            spec=spec,
-        )
-
-
-def _compatible_model(path: Path, name: str, model_version: str) -> bool:
-    return name in MODEL_SPECS and compatible_model(path, name, model_version)
+        registry = read_registry(self._model_root)
+        catalogs = {entry.descriptor.name: entry.descriptor for entry in catalog_models()}
+        models = []
+        for record in registry.models:
+            if record.state != "ready" or record.path is None:
+                continue
+            descriptor = record.descriptor
+            path = self._model_root / record.path
+            try:
+                path = _safe_path(self._model_root, record.path)
+                compatible = compatible_descriptor(
+                    path, descriptor, legacy=registry._migrated_legacy
+                )
+            except (OSError, ValueError):
+                compatible = False
+            models.append(
+                _Model(
+                    descriptor.name,
+                    descriptor.version,
+                    path,
+                    compatible,
+                    tuple(descriptor.entity_types) if compatible else (),
+                    descriptor,
+                )
+            )
+        for entry in registry.legacy_unavailable:
+            legacy_descriptor = catalogs.get(entry.name)
+            if legacy_descriptor is not None:
+                models.append(
+                    _Model(
+                        entry.name,
+                        entry.version,
+                        self._model_root / entry.path,
+                        False,
+                        (),
+                        legacy_descriptor,
+                    )
+                )
+        return models
 
 
 def _rule_pattern(rule: RegexRule | WordRule) -> str:

@@ -5,7 +5,16 @@ $ErrorActionPreference = 'Stop'
 if (-not $IsWindows -or -not [Environment]::Is64BitOperatingSystem) { throw 'Windows x64 build host required' }
 $root = Split-Path $PSScriptRoot -Parent
 $inputs = Get-Content -Raw -LiteralPath (Join-Path $root 'packaging/build-inputs.json') | ConvertFrom-Json
-$inputs.model = Get-Content -Raw -LiteralPath (Join-Path $root ('packaging/' + $inputs.model.inputs)) | ConvertFrom-Json
+$catalog = Get-Content -Raw -LiteralPath (Join-Path $root $inputs.model.catalog) | ConvertFrom-Json
+$entry = @($catalog.models | Where-Object { $_.key -ceq $inputs.model.key })
+if ($catalog.schema_version -ne 1 -or $entry.Count -ne 1) { throw 'invalid_model_catalog' }
+$descriptor = $entry[0].descriptor
+$modelFiles = [ordered]@{}
+foreach ($artifact in $descriptor.files) { $modelFiles[$artifact.filename] = $artifact.sha256 }
+$inputs.model = [pscustomobject]@{
+    name = $descriptor.name; repository = $descriptor.repository; revision = $descriptor.version
+    license = $descriptor.license; directory = $entry[0].directory; files = [pscustomobject]$modelFiles
+}
 $work = Join-Path $root 'dist/windows'
 $package = Join-Path $work 'redactio'
 $desktopSupplied = [bool]$DesktopExecutable
