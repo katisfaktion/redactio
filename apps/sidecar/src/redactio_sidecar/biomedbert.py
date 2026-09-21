@@ -10,7 +10,7 @@ from typing import Any
 from presidio_analyzer import EntityRecognizer, RecognizerResult
 
 from .ipc import EngineError
-from .model_store import Window, _load_local_model
+from .model_store import Window, _load_local_model, _token_classification_pipeline
 from .model_store import validate_local_model as _validate_local_model
 
 MODEL_NAME = "OpenMed-PII-German-BiomedBERT-Large-340M-v1"
@@ -127,17 +127,8 @@ def _load_pipeline(
     model_type: str = "bert",
     architecture: str = "BertForTokenClassification",
 ) -> Any:
-    from transformers import pipeline
-
     tokenizer, model, window = _load_local_model(path, model_type, architecture)
-    return pipeline(
-        "token-classification",
-        model=model,
-        tokenizer=tokenizer,
-        device=-1,
-        aggregation_strategy="simple",
-        stride=window.stride,
-    )
+    return _token_classification_pipeline(model, tokenizer, window)
 
 
 def validate_local_model(path: Path, model_type: str, architecture: str) -> Window:

@@ -5,6 +5,8 @@ from typing import Any, NamedTuple, cast
 
 from .ipc import EngineError
 
+_VALIDATION_TEXT = ("Hans München 😀\r\n" * 640) + "Ende"
+
 
 class Window(NamedTuple):
     tokens: int
@@ -62,10 +64,54 @@ def _load_local_model(path: Path, model_type: str, architecture: str) -> tuple[A
     return tokenizer, model, window
 
 
+def _token_classification_pipeline(model: Any, tokenizer: Any, window: Window) -> Any:
+    from transformers import pipeline
+
+    return pipeline(
+        "token-classification",
+        model=model,
+        tokenizer=tokenizer,
+        device=-1,
+        aggregation_strategy="simple",
+        stride=window.stride,
+    )
+
+
 def validate_local_model(path: Path, model_type: str, architecture: str) -> Window:
     try:
         tokenizer, model, window = _load_local_model(path, model_type, architecture)
-        model(**tokenizer("redactio validation", truncation=True, return_tensors="pt"))
+        encoded = tokenizer(
+            _VALIDATION_TEXT,
+            truncation=True,
+            max_length=window.tokens,
+            stride=window.stride,
+            return_overflowing_tokens=True,
+            return_offsets_mapping=True,
+        )
+        offsets = encoded["offset_mapping"]
+        spans = {
+            (start, end)
+            for chunk in offsets
+            for start, end in chunk
+            if type(start) is int and type(end) is int and 0 <= start < end <= len(_VALIDATION_TEXT)
+        }
+        if len(offsets) < 2 or not spans or max(end for _, end in spans) != len(_VALIDATION_TEXT):
+            raise ValueError("incomplete synthetic offsets")
+        starts = {start for start, _ in spans}
+        ends = {end for _, end in spans}
+        seen: set[tuple[int, int]] = set()
+        for detection in _token_classification_pipeline(model, tokenizer, window)(_VALIDATION_TEXT):
+            start, end = detection.get("start"), detection.get("end")
+            if (
+                type(start) is not int
+                or type(end) is not int
+                or not 0 <= start < end <= len(_VALIDATION_TEXT)
+                or start not in starts
+                or end not in ends
+                or (start, end) in seen
+            ):
+                raise ValueError("invalid synthetic inference offsets")
+            seen.add((start, end))
         return window
     except Exception as error:
         raise EngineError("model_incompatible") from error
