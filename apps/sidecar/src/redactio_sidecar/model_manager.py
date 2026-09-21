@@ -12,20 +12,20 @@ import re
 import shutil
 import socket
 import ssl
-import stat
 import tempfile
 import threading
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 from urllib.parse import urljoin, urlsplit
 
 import certifi
 from pydantic import TypeAdapter
 
 from .ipc import EngineError
+from .model_lock import _checked_path, _native_lock, _regular
 from .model_store import (
     Artifact,
     ModelDescriptor,
@@ -35,7 +35,6 @@ from .model_store import (
     Repository,
     UpstreamHash,
     _load_local_tokenizer,
-    _safe_path,
     catalog_models,
     directory_name,
     processing_window,
@@ -580,115 +579,6 @@ def _validate_downloaded(path: Path, descriptor: ModelDescriptor) -> ModelDescri
             "special_tokens": special,
         }
     )
-
-
-def _checked_path(root: Path, relative: str) -> Path:
-    try:
-        return _safe_path(root.absolute(), relative)
-    except (OSError, ValueError) as error:
-        raise EngineError("model_path_unsafe") from error
-
-
-def _regular(path: Path) -> None:
-    status = path.lstat()
-    if (
-        not stat.S_ISREG(status.st_mode)
-        or status.st_nlink != 1
-        or getattr(status, "st_file_attributes", 0) & 0x400
-    ):
-        raise EngineError("model_path_unsafe")
-
-
-@contextmanager
-def _native_lock(path: Path, *, create: bool, code: str) -> Iterator[Any]:
-    _checked_path(path.parent, path.name)
-    if path.exists():
-        _regular(path)
-    if os.name == "nt":
-        import ctypes
-        import msvcrt
-        from ctypes import wintypes
-
-        class Overlapped(ctypes.Structure):
-            _fields_ = [
-                ("Internal", ctypes.c_size_t),
-                ("InternalHigh", ctypes.c_size_t),
-                ("Offset", wintypes.DWORD),
-                ("OffsetHigh", wintypes.DWORD),
-                ("hEvent", wintypes.HANDLE),
-            ]
-
-        kernel = cast(Any, ctypes).WinDLL("kernel32", use_last_error=True)
-        kernel.CreateFileW.argtypes = [
-            wintypes.LPCWSTR,
-            wintypes.DWORD,
-            wintypes.DWORD,
-            ctypes.c_void_p,
-            wintypes.DWORD,
-            wintypes.DWORD,
-            wintypes.HANDLE,
-        ]
-        kernel.CreateFileW.restype = wintypes.HANDLE
-        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
-        kernel.LockFileEx.argtypes = [
-            wintypes.HANDLE,
-            wintypes.DWORD,
-            wintypes.DWORD,
-            wintypes.DWORD,
-            wintypes.DWORD,
-            ctypes.POINTER(Overlapped),
-        ]
-        kernel.UnlockFileEx.argtypes = [
-            wintypes.HANDLE,
-            wintypes.DWORD,
-            wintypes.DWORD,
-            wintypes.DWORD,
-            ctypes.POINTER(Overlapped),
-        ]
-        # Share delete permits removal while this exclusive receipt lease remains held.
-        handle = kernel.CreateFileW(
-            str(path),
-            0xC0000000 if create else 0x80000000,
-            7,
-            None,
-            4 if create else 3,
-            0x200080,
-            None,
-        )
-        if handle == ctypes.c_void_p(-1).value:
-            raise cast(Any, ctypes).WinError(cast(Any, ctypes).get_last_error())
-        try:
-            fd = cast(Any, msvcrt).open_osfhandle(handle, os.O_RDWR if create else os.O_RDONLY)
-        except BaseException:
-            kernel.CloseHandle(handle)
-            raise
-        with os.fdopen(fd, "r+b" if create else "rb") as stream:
-            _regular(path)
-            overlapped = Overlapped()
-            if not kernel.LockFileEx(handle, 3, 0, 1, 0, ctypes.byref(overlapped)):
-                raise EngineError(code, retryable=True)
-            try:
-                yield stream
-            finally:
-                kernel.UnlockFileEx(handle, 0, 1, 0, ctypes.byref(overlapped))
-    else:
-        import fcntl
-
-        fd = os.open(
-            path, os.O_NOFOLLOW | (os.O_RDWR | os.O_CREAT if create else os.O_RDONLY), 0o600
-        )
-        with os.fdopen(fd, "r+b" if create else "rb") as stream:
-            _regular(path)
-            if not os.path.samestat(os.fstat(fd), path.stat()):
-                raise EngineError("model_path_unsafe")
-            try:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError as error:
-                raise EngineError(code, retryable=True) from error
-            try:
-                yield stream
-            finally:
-                fcntl.flock(fd, fcntl.LOCK_UN)
 
 
 @contextmanager

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
+from contextlib import ExitStack
 from copy import copy
 from dataclasses import dataclass
 from datetime import datetime
@@ -40,6 +41,7 @@ from .biomedbert import (
 from .extract import Extraction, extract_document
 from .frontmatter import normalize_body, render_document
 from .ipc import EngineError
+from .model_lock import _checked_path, _locked_path, _native_lock
 from .model_store import (
     ModelDescriptor,
     _safe_path,
@@ -139,6 +141,7 @@ class Engine:
     def __init__(self, model_root: Path) -> None:
         self._model_root = model_root.absolute()
         self._loaded_models: dict[tuple[str, str], NlpEngine] = {}
+        self._model_leases: dict[tuple[str, str], ExitStack] = {}
         self._recognizers: dict[
             tuple[str, str], BiomedBertRecognizer | HuggingLilRecognizer | TransformersNerRecognizer
         ] = {}
@@ -468,18 +471,29 @@ class Engine:
         cached = self._loaded_models.get(identity)
         if cached is not None:
             return cached
-        recognizer = (
-            BiomedBertRecognizer(model.path, model.entity_types)
-            if model.name == MODEL_NAME
-            else HuggingLilRecognizer(model.path, model.entity_types)
-            if model.name == HUGGINGLIL_MODEL_NAME
-            else TransformersNerRecognizer(model.path, model.descriptor)
-        )
-        blank_engine = SpacyNlpEngine()
-        cast(Any, blank_engine).nlp = {LANGUAGE: spacy.blank(LANGUAGE)}
-        self._recognizers[identity] = recognizer
-        self._loaded_models[identity] = blank_engine
-        return blank_engine
+        with ExitStack() as lease:
+            receipt = _checked_path(model.path, "redactio-model.json")
+            stream = lease.enter_context(
+                _native_lock(receipt, create=False, code="model_in_use", shared=True)
+            )
+            # Removal may have won between discovery and locking. Recheck the ready
+            # record and the exact receipt handle before constructing any cached model.
+            if model not in self._models():
+                raise EngineError("model_incompatible")
+            _locked_path(stream, receipt)
+            recognizer = (
+                BiomedBertRecognizer(model.path, model.entity_types)
+                if model.name == MODEL_NAME
+                else HuggingLilRecognizer(model.path, model.entity_types)
+                if model.name == HUGGINGLIL_MODEL_NAME
+                else TransformersNerRecognizer(model.path, model.descriptor)
+            )
+            blank_engine = SpacyNlpEngine()
+            cast(Any, blank_engine).nlp = {LANGUAGE: spacy.blank(LANGUAGE)}
+            self._recognizers[identity] = recognizer
+            self._loaded_models[identity] = blank_engine
+            self._model_leases[identity] = lease.pop_all()
+            return blank_engine
 
     def _models(self) -> list[_Model]:
         registry = read_registry(self._model_root)
