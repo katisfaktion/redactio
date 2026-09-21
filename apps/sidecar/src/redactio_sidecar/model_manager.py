@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import http.client
 import ipaddress
@@ -237,7 +238,12 @@ def _chunks(
     while True:
         if time.monotonic() > deadline:
             raise EngineError("model_network_timeout", retryable=True)
-        chunk = response.read1(min(CHUNK, maximum - count + 1))
+        try:
+            chunk = response.read1(min(CHUNK, maximum - count + 1))
+        except TimeoutError as error:
+            raise EngineError("model_network_timeout", retryable=True) from error
+        except (OSError, http.client.HTTPException) as error:
+            raise EngineError("model_network_failed", retryable=True) from error
         if time.monotonic() > deadline:
             raise EngineError("model_network_timeout", retryable=True)
         if not chunk:
@@ -653,23 +659,32 @@ def _download(
             not re.fullmatch(r"[0-9]+", length) or int(length) != artifact.size
         ):
             raise EngineError("model_size_mismatch")
-        with partial.open("xb") as stream:
-            for chunk in _chunks(reply, artifact.size, seconds=3600):
-                stream.write(chunk)
-                upstream.update(chunk)
-                sha256.update(chunk)
-                count += len(chunk)
-                if count < artifact.size:
-                    progress(count)
-            if count != artifact.size:
-                raise EngineError("model_size_mismatch")
-            digest = sha256.hexdigest()
-            if upstream.hexdigest() != artifact.upstream_hash.value or (
-                artifact.sha256 is not None and digest != artifact.sha256
-            ):
-                raise EngineError("model_hash_mismatch")
-            stream.flush()
-            os.fsync(stream.fileno())
+        try:
+            with partial.open("xb") as stream:
+                for chunk in _chunks(reply, artifact.size, seconds=3600):
+                    stream.write(chunk)
+                    upstream.update(chunk)
+                    sha256.update(chunk)
+                    count += len(chunk)
+                    if count < artifact.size:
+                        progress(count)
+                if count != artifact.size:
+                    raise EngineError("model_size_mismatch")
+                digest = sha256.hexdigest()
+                if upstream.hexdigest() != artifact.upstream_hash.value or (
+                    artifact.sha256 is not None and digest != artifact.sha256
+                ):
+                    raise EngineError("model_hash_mismatch")
+                stream.flush()
+                os.fsync(stream.fileno())
+        except OSError as error:
+            # Network reads are translated in _chunks, before this storage boundary.
+            code = "model_operation_failed"
+            if isinstance(error, PermissionError) or error.errno == errno.EROFS:
+                code = "model_store_read_only"
+            elif error.errno == errno.ENOSPC:
+                code = "model_insufficient_space"
+            raise EngineError(code, retryable=True) from error
     # A complete progress event means this file is durable and reusable after cancellation.
     partial.replace(target)
     progress(count)
@@ -714,7 +729,14 @@ def install_model(
             (record for record in registry.models if record.descriptor.name == descriptor.name),
             None,
         )
-        if any(entry.name == descriptor.name for entry in registry.legacy_unavailable):
+        legacy = next(
+            (entry for entry in registry.legacy_unavailable if entry.name == descriptor.name),
+            None,
+        )
+        if legacy is not None and (
+            legacy.version != descriptor.version
+            or not any(entry.descriptor == descriptor for entry in catalog_models())
+        ):
             raise EngineError("model_path_unsafe")
         if existing is not None and existing.state == "removing":
             raise EngineError("model_store_busy", retryable=True)
@@ -785,6 +807,9 @@ def install_model(
                 item for item in registry.models if item.descriptor.name != descriptor.name
             ]
             registry.models.append(record)
+            registry.legacy_unavailable = [
+                entry for entry in registry.legacy_unavailable if entry != legacy
+            ]
             write_registry(root, registry)
         progress("ready", total)
         return verified_descriptor

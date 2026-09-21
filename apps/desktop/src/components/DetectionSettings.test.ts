@@ -3,7 +3,7 @@ import { createOnyx } from "sit-onyx";
 import onyxDeDE from "sit-onyx/locales/de-DE.json";
 import { ref } from "vue";
 import { expect, test } from "vitest";
-import type { SyncPair } from "../lib/contracts";
+import type { ModelInfo, SyncPair } from "../lib/contracts";
 import DetectionSettings from "./DetectionSettings.vue";
 
 const pair: SyncPair = {
@@ -19,9 +19,9 @@ const models = [
 const hugginglil = { name: "pii-sensitive-ner-german", version: "6af88facbb75da7be737da55d2c411c7ce79e5a1", compatible: true,
   entity_types: ["ACCOUNTNUM", "BUILDINGNUM", "CITY", "CREDITCARDNUMBER", "DATEOFBIRTH", "DRIVERLICENSENUM", "EMAIL", "ETHN", "GIVENNAME", "IDCARDNUM", "PASSWORD", "REL", "SOCIALNUM", "SOR", "STREET", "SURNAME", "TAXNUM", "TELEPHONENUM", "USERNAME", "ZIPCODE"] };
 
-function setup(selected = pair) {
+function setup(selected = pair, available: ModelInfo[] = models) {
   return mount(DetectionSettings, {
-    props: { pair: selected, models, busy: false },
+    props: { pair: selected, models: available, busy: false },
     global: { plugins: [createOnyx({ i18n: { locale: ref("de-DE"), messages: { "de-DE": onyxDeDE } } })] },
   });
 }
@@ -120,6 +120,47 @@ test("model discovery refresh preserves unsaved settings", async () => {
   expect(wrapper.get('[data-testid="model-entity-GIVENNAME"]').attributes("checked")).toBeUndefined();
   await wrapper.get("form").trigger("submit");
   expect(wrapper.emitted("save")!.at(-1)![1]).toEqual(beforeRefresh);
+});
+
+test.each([false, true])("late legacy metadata initializes labels and preserves edited draft=%s", async (edited) => {
+  const wrapper = setup(pair, []);
+  if (edited) {
+    await wrapper.get('[data-testid="add-regex"]').trigger("click");
+    await wrapper.get('[data-testid="rule-pattern"]').setValue("Synthetic name");
+    await wrapper.get('[data-testid="include-positions"]').setValue(false);
+  }
+  await wrapper.get('[data-testid="preview-text"]').setValue("Synthetic preview");
+  await wrapper.setProps({ models: [{ ...models[0]!, entity_types: ["AGE", "FIRSTNAME", "CITY"] }],
+    pair: structuredClone(pair) });
+  expect((wrapper.get('[data-testid="model-entity-AGE"]').element as HTMLInputElement).checked).toBe(true);
+  expect((wrapper.get('[data-testid="model-entity-FIRSTNAME"]').element as HTMLInputElement).checked).toBe(true);
+  expect((wrapper.get('[data-testid="model-entity-CITY"]').element as HTMLInputElement).checked).toBe(false);
+  await wrapper.get('[data-testid="preview"]').trigger("click");
+  expect(wrapper.emitted("preview")!.at(-1)).toEqual([pair.id, {
+    ...pair.config, model_entities: ["AGE", "FIRSTNAME"], enabled_entities: [], include_positions: !edited,
+    custom_rules: edited ? [expect.objectContaining({ pattern: "Synthetic name" })] : [],
+  }, "Synthetic preview"]);
+  await wrapper.get('[data-testid="model-entity-FIRSTNAME"]').setValue(false);
+  await wrapper.setProps({ models: [{ ...models[0]!, entity_types: ["AGE", "FIRSTNAME", "CITY"] }] });
+  await wrapper.get("form").trigger("submit");
+  expect(wrapper.emitted("save")!.at(-1)![1]).toMatchObject({ model_entities: ["AGE"] });
+});
+
+test("late legacy metadata preserves the selected model and initializes its cached draft on return", async () => {
+  const wrapper = setup(pair, [hugginglil]);
+  await wrapper.get('[data-testid="add-regex"]').trigger("click");
+  await wrapper.get('[data-testid="rule-pattern"]').setValue("Legacy edit");
+  await wrapper.get('[role="option"][aria-label="HuggingLil – Deutsch, PII (6af88fa)"]').trigger("click");
+  await wrapper.get('[data-testid="clear-model-entities"]').trigger("click");
+  await wrapper.setProps({ models: [hugginglil, { ...models[0]!, entity_types: ["AGE", "FIRSTNAME", "CITY"] }] });
+  await wrapper.get("form").trigger("submit");
+  expect(wrapper.emitted("save")!.at(-1)![1]).toMatchObject({ model: hugginglil.name, model_entities: [] });
+  await wrapper.get('[role="option"][aria-label="BiomedBERT – Deutsch, PII (340M, ce797d5)"]').trigger("click");
+  await wrapper.get("form").trigger("submit");
+  expect(wrapper.emitted("save")!.at(-1)![1]).toMatchObject({
+    model: pair.config.model, model_entities: ["AGE", "FIRSTNAME"], enabled_entities: [],
+    custom_rules: [expect.objectContaining({ pattern: "Legacy edit" })],
+  });
 });
 
 test("requires an explicit native label selection for HuggingLil", async () => {

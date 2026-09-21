@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import io
 import json
@@ -359,6 +360,158 @@ def install_fixture(monkeypatch):
 
 
 JOB = "00000000-0000-4000-8000-000000000001"
+
+
+@pytest.mark.parametrize("catalog_index", [0, 1])
+@pytest.mark.parametrize("migrated", [False, True])
+def test_reinstall_missing_catalog_legacy_preserves_other_entries(
+    monkeypatch, tmp_path, catalog_index, migrated
+):
+    descriptor = manager.catalog_models()[catalog_index].descriptor
+    legacy = {"name": descriptor.name, "version": descriptor.version, "path": "old-model"}
+    unrelated = {"name": "unknown-model", "version": "old", "path": "unowned"}
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps({"models": [legacy, unrelated]}))
+    unowned = tmp_path / "unowned"
+    unowned.mkdir()
+    (unowned / "personal.txt").write_text("keep")
+    if migrated:
+        other, data = install_fixture(monkeypatch)
+        transport(monkeypatch, lambda url: Response(data[url.rsplit("/", 1)[1]]))
+        manager.install_model(tmp_path, other, JOB, lambda _: None)
+        assert json.loads(manifest.read_text())["schema_version"] == 2
+    before = manager.read_registry(tmp_path)
+    assert legacy in [entry.model_dump() for entry in before.legacy_unavailable]
+    before_bytes = manifest.read_bytes()
+
+    def downloaded(path, selected, artifact, progress):
+        (path / artifact.filename).write_bytes(b"synthetic catalog artifact")
+        return artifact
+
+    monkeypatch.setattr(manager, "_download", downloaded)
+    monkeypatch.setattr(manager, "_validate_downloaded", lambda path, value: value)
+
+    def cancel(job):
+        if job.stage == "validating":
+            raise KeyboardInterrupt()
+
+    with pytest.raises(KeyboardInterrupt):
+        manager.install_model(tmp_path, descriptor, JOB, cancel)
+    assert manifest.read_bytes() == before_bytes
+    manager.install_model(tmp_path, descriptor, JOB, lambda _: None)
+    registry = manager.read_registry(tmp_path)
+    assert registry.models[:-1] == before.models
+    assert registry.models[-1].descriptor == descriptor
+    assert registry.models[-1].state == "ready"
+    assert registry.models[-1].path == manager.directory_name(
+        descriptor.repository, descriptor.version
+    )
+    assert [entry.model_dump() for entry in registry.legacy_unavailable] == [unrelated]
+    assert (unowned / "personal.txt").read_text() == "keep"
+    assert not (tmp_path / "old-model").exists()
+
+
+@pytest.mark.parametrize("recognized", [False, True])
+def test_legacy_reinstall_preserves_unowned_destination(monkeypatch, tmp_path, recognized):
+    descriptor = manager.catalog_models()[0].descriptor
+    destination = tmp_path / (
+        manager.directory_name(descriptor.repository, descriptor.version)
+        if recognized
+        else "old-model"
+    )
+    destination.mkdir()
+    (destination / "personal.txt").write_text("keep")
+    before = json.dumps(
+        {
+            "models": [
+                {
+                    "name": descriptor.name,
+                    "version": descriptor.version if recognized else "unknown",
+                    "path": "old-model",
+                }
+            ]
+        }
+    )
+    (tmp_path / "manifest.json").write_text(before)
+    transport(monkeypatch, lambda _: pytest.fail("unsafe legacy installation downloaded"))
+    with pytest.raises(EngineError, match="model_path_unsafe"):
+        manager.install_model(tmp_path, descriptor, JOB, lambda _: None)
+    assert (destination / "personal.txt").read_text() == "keep"
+    assert (tmp_path / "manifest.json").read_text() == before
+
+
+@pytest.mark.parametrize("operation", ["open", "write", "flush", "fsync"])
+@pytest.mark.parametrize(
+    "error,code",
+    [
+        (PermissionError(errno.EACCES, "private path"), "model_store_read_only"),
+        (OSError(errno.EROFS, "private path"), "model_store_read_only"),
+        (OSError(errno.ENOSPC, "private path"), "model_insufficient_space"),
+    ],
+)
+def test_download_destination_failure_is_storage_error(
+    monkeypatch, tmp_path, operation, error, code
+):
+    descriptor, data = install_fixture(monkeypatch)
+    artifact = descriptor.files[0]
+    transport(monkeypatch, lambda _: Response(data[artifact.filename]))
+    original_open = manager.Path.open
+
+    class FailedDestination(io.BytesIO):
+        def write(self, value):
+            if operation == "write":
+                raise error
+            return super().write(value)
+
+        def flush(self):
+            if operation == "flush":
+                raise error
+
+        def fileno(self):
+            return 0
+
+    def failed_open(path, *args, **kwargs):
+        if path.suffix == ".part":
+            if operation == "open":
+                raise error
+            return FailedDestination()
+        return original_open(path, *args, **kwargs)
+
+    def failed_fsync(_):
+        raise error
+
+    monkeypatch.setattr(manager.Path, "open", failed_open)
+    if operation == "fsync":
+        monkeypatch.setattr(manager.os, "fsync", failed_fsync)
+    with pytest.raises(EngineError, match=code) as failure:
+        manager._download(tmp_path, descriptor, artifact, lambda _: None)
+    assert failure.value.retryable
+    assert not (tmp_path / artifact.filename).exists()
+    assert not manager.read_registry(tmp_path).models
+
+
+@pytest.mark.parametrize(
+    "error,code",
+    [
+        (TimeoutError(), "model_network_timeout"),
+        (ConnectionResetError(), "model_network_failed"),
+    ],
+)
+def test_download_interrupted_read_remains_network_error(monkeypatch, tmp_path, error, code):
+    descriptor, data = install_fixture(monkeypatch)
+    artifact = descriptor.files[0]
+
+    class Interrupted(Response):
+        def read1(self, size=-1):
+            if self.tell():
+                raise error
+            return super().read1(1)
+
+    transport(monkeypatch, lambda _: Interrupted(data[artifact.filename]))
+    with pytest.raises(EngineError, match=code):
+        manager._download(tmp_path, descriptor, artifact, lambda _: None)
+    assert not (tmp_path / artifact.filename).exists()
+    assert (tmp_path / (artifact.filename + ".part")).read_bytes() == data[artifact.filename][:1]
 
 
 def test_install_pins_revision_hashes_files_and_publishes_last(monkeypatch, tmp_path):

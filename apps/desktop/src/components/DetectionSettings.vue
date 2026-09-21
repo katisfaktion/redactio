@@ -50,6 +50,13 @@ watch([() => props.pair.id, () => JSON.stringify(props.pair.config)], () => {
   modelDrafts.clear(); modelDrafts.set(draft.value.model, clone(draft.value));
   previewText.value = "";
 });
+watch(() => selectedModel(draft.value.model)?.entity_types, () => {
+  if (draft.value.model === biomedbert && draft.value.model_entities === null) {
+    const initialized = nativeDraft(draft.value);
+    draft.value.model_entities = initialized.model_entities;
+    draft.value.enabled_entities = initialized.enabled_entities;
+  }
+});
 
 const modelOptions = computed(() => {
   const available = props.models.map(model => ({

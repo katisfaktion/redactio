@@ -69,8 +69,11 @@ test("visiting model management preserves an unsaved detection draft", async () 
   wrapper.unmount();
 });
 
-test("an equivalent missing-to-ready refresh preserves the draft, model cache, and preview text", async () => {
-  const ready = managed({ state: "ready", installed_bytes: 1_024, used_by_pairs: [] });
+test.each([false, true])("an equivalent missing-to-ready refresh preserves drafts with legacy labels=%s", async (legacy) => {
+  const ready = managed({ state: "ready", installed_bytes: 1_024, used_by_pairs: [],
+    ...(legacy ? { name: "OpenMed-PII-German-BiomedBERT-Large-340M-v1",
+      version: "ce797d58600cc20bba9a2500dafc0b7f5c3270c1", entity_types: ["AGE", "CITY", "FIRSTNAME"] } : {}),
+  });
   const alternate = managed({
     name: "synthetic-ready",
     version: "b".repeat(40),
@@ -84,7 +87,8 @@ test("an equivalent missing-to-ready refresh preserves the draft, model cache, a
   const initial = { schema_version: 1 as const, selected_sync_pair_id: pairId, sync_pairs: [{
     id: pairId, name: "Sammlung", source_folder: "/source", target_folder: "/target", created_at: "2026-09-19T10:00:00Z",
     processing_revision: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-    config: { model: ready.name, model_entities: ready.entity_types, enabled_entities: [], custom_rules: [], include_positions: true },
+    config: { model: ready.name, model_entities: legacy ? null : ready.entity_types,
+      enabled_entities: legacy ? ["PERSON"] : [], custom_rules: [], include_positions: true },
   }] };
   vi.spyOn(modelApi, "list").mockResolvedValueOnce([]).mockResolvedValue([ready, alternate]);
   vi.spyOn(modelApi, "listen").mockResolvedValue(() => {});
@@ -115,9 +119,14 @@ test("an equivalent missing-to-ready refresh preserves the draft, model cache, a
     expect((wrapper.get('[data-testid="rule-pattern"]').element as HTMLInputElement).value).toBe("Synthetic name");
     expect((wrapper.get('[data-testid="preview-text"]').element as HTMLTextAreaElement).value).toBe("private preview");
     await wrapper.get(`[role="option"][aria-label="${alternate.name} (${alternate.version})"]`).trigger("click");
-    await wrapper.get(`[role="option"][aria-label="${ready.name} (${ready.version})"]`).trigger("click");
+    await wrapper.get(`[role="option"][aria-label="${legacy ? "BiomedBERT – Deutsch, PII (340M, ce797d5)" : `${ready.name} (${ready.version})`}"]`).trigger("click");
     expect((wrapper.get('[data-testid="rule-pattern"]').element as HTMLInputElement).value).toBe("Synthetic name");
     expect((wrapper.get('[data-testid="preview-text"]').element as HTMLTextAreaElement).value).toBe("private preview");
+    if (legacy) {
+      expect((wrapper.get('[data-testid="model-entity-FIRSTNAME"]').element as HTMLInputElement).checked).toBe(true);
+      expect((wrapper.get('[data-testid="model-entity-CITY"]').element as HTMLInputElement).checked).toBe(false);
+      expect(wrapper.get('.detection-settings [data-testid="save"]').attributes("disabled")).toBeUndefined();
+    }
   } finally {
     wrapper.unmount();
     HTMLElement.prototype.scrollIntoView = previousScrollIntoView;
