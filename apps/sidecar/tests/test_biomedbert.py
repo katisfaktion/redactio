@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import os
 import socket
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -61,6 +63,8 @@ def bert_root(tmp_path: Path) -> Path:
         json.dumps(
             {
                 "model_type": "bert",
+                "architectures": ["BertForTokenClassification"],
+                "max_position_embeddings": 512,
                 "id2label": {
                     "0": "O",
                     "1": "B-FIRSTNAME",
@@ -446,10 +450,94 @@ def test_model_load_failure_does_not_activate_pair(bert_root, monkeypatch) -> No
         engine.analyze(pair, revision, "Anna")
 
 
+@pytest.mark.parametrize("context", [256, 512, 1024])
+def test_pipeline_uses_model_context_for_tokenizer_and_stride(monkeypatch, context: int) -> None:
+    from redactio_sidecar import biomedbert
+
+    tokenizer = SimpleNamespace(
+        is_fast=True,
+        model_max_length=10**30,
+        num_special_tokens_to_add=lambda **_: 2,
+    )
+    model = SimpleNamespace(
+        config=SimpleNamespace(
+            model_type="bert",
+            max_position_embeddings=context,
+            architectures=["BertForTokenClassification"],
+        )
+    )
+    captured: dict[str, object] = {}
+
+    def pipeline(*args, **kwargs):
+        captured.update(kwargs)
+        return lambda _: []
+
+    monkeypatch.setitem(
+        sys.modules,
+        "transformers",
+        SimpleNamespace(
+            AutoTokenizer=SimpleNamespace(from_pretrained=lambda *_args, **_kwargs: tokenizer),
+            AutoModelForTokenClassification=SimpleNamespace(
+                from_pretrained=lambda *_args, **_kwargs: (
+                    model,
+                    {"missing_keys": [], "mismatched_keys": []},
+                )
+            ),
+            pipeline=pipeline,
+        ),
+    )
+
+    biomedbert._load_pipeline(Path("unused"))
+
+    assert tokenizer.model_max_length == context
+    assert captured["tokenizer"] is tokenizer
+    assert captured["stride"] == context // 4
+
+
+def test_small_context_keeps_long_unicode_offsets(tmp_path):
+    from transformers import BertConfig, BertForTokenClassification, BertTokenizerFast
+
+    from redactio_sidecar.biomedbert import _load_pipeline, validate_local_model
+    from redactio_sidecar.model_store import Window
+
+    vocab = tmp_path / "vocab.txt"
+    vocab.write_text("[PAD]\n[UNK]\n[CLS]\n[SEP]\n[MASK]\nhans\nende\n", encoding="utf-8")
+    tokenizer = BertTokenizerFast(vocab_file=str(vocab), model_max_length=32)
+    tokenizer.save_pretrained(tmp_path)
+    config = BertConfig(
+        vocab_size=len(tokenizer),
+        hidden_size=16,
+        num_hidden_layers=1,
+        num_attention_heads=2,
+        intermediate_size=32,
+        max_position_embeddings=32,
+        id2label={0: "O", 1: "B-PERSON", 2: "I-PERSON"},
+        label2id={"O": 0, "B-PERSON": 1, "I-PERSON": 2},
+    )
+    BertForTokenClassification(config).save_pretrained(tmp_path, safe_serialization=True)
+    text = ("Hans München 😀\r\n" * 30) + "Ende"
+    encoded = tokenizer(
+        text,
+        truncation=True,
+        max_length=32,
+        stride=8,
+        return_overflowing_tokens=True,
+        return_offsets_mapping=True,
+    )
+    assert len(encoded["input_ids"]) > 1
+    assert max(end for chunk in encoded["offset_mapping"] for _, end in chunk) == len(text)
+    assert validate_local_model(tmp_path, "bert", "BertForTokenClassification") == Window(32, 8)
+    with pytest.raises(EngineError, match="^model_incompatible$"):
+        validate_local_model(tmp_path, "bert", "DebertaV2ForTokenClassification")
+    for detection in _load_pipeline(tmp_path)(text):
+        assert 0 <= detection["start"] < detection["end"] <= len(text)
+
+
 def test_real_pipeline_bounds_sentinel_tokenizer_and_covers_chunk_boundaries(tmp_path, monkeypatch):
     torch = pytest.importorskip("torch")
     transformers = pytest.importorskip("transformers")
-    from redactio_sidecar.biomedbert import BiomedBertRecognizer
+    from redactio_sidecar.biomedbert import BiomedBertRecognizer, validate_local_model
+    from redactio_sidecar.model_store import Window
 
     # A tiny local model predicts PERSON for every token, so lost windows or bad
     # Unicode offsets leave an observable gap without requiring production weights.
@@ -467,7 +555,7 @@ def test_real_pipeline_bounds_sentinel_tokenizer_and_covers_chunk_boundaries(tmp
         num_hidden_layers=1,
         num_attention_heads=2,
         intermediate_size=8,
-        max_position_embeddings=512,
+        max_position_embeddings=1024,
         id2label={0: "O", 1: "B-FIRSTNAME"},
         label2id={"O": 0, "B-FIRSTNAME": 1},
     )
@@ -481,14 +569,24 @@ def test_real_pipeline_bounds_sentinel_tokenizer_and_covers_chunk_boundaries(tmp
         raise AssertionError("runtime network access attempted")
 
     monkeypatch.setattr(socket.socket, "connect", deny_network)
+    text = "😀 Müller " + "Anna " * 1200 + "Müller"
+    encoded = tokenizer(
+        text,
+        truncation=True,
+        max_length=1024,
+        stride=256,
+        return_overflowing_tokens=True,
+        return_offsets_mapping=True,
+    )
+    assert len(encoded["input_ids"]) > 1
+    assert max(end for chunk in encoded["offset_mapping"] for _, end in chunk) == len(text)
+    assert validate_local_model(tmp_path, "bert", "BertForTokenClassification") == Window(1024, 256)
     recognizer = BiomedBertRecognizer(tmp_path)
     recognizer.configure_labels(["FIRSTNAME"], legacy=False)
-    text = "😀 Müller " + "Anna " * 1200 + "Müller"
     results = recognizer.analyze(text, ["FIRSTNAME"], None)
     for index, char in enumerate(text):
         if not char.isspace():
             assert any(r.start <= index < r.end for r in results), index
-    assert results[-1].end == len(text)
 
 
 def test_bert_pair_toggle_keeps_structured_recognizers(bert_root, monkeypatch) -> None:

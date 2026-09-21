@@ -5,11 +5,13 @@ import math
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from presidio_analyzer import EntityRecognizer, RecognizerResult
 
 from .ipc import EngineError
+from .model_store import Window, _load_local_model
+from .model_store import validate_local_model as _validate_local_model
 
 MODEL_NAME = "OpenMed-PII-German-BiomedBERT-Large-340M-v1"
 MODEL_VERSION = "ce797d58600cc20bba9a2500dafc0b7f5c3270c1"
@@ -103,13 +105,9 @@ def compatible_model(path: Path, name: str, model_version: str) -> bool:
                 "repository": spec.repository,
             }
             and config["model_type"] == spec.model_type
-            and (
-                spec is BIOMEDBERT
-                or (
-                    config.get("architectures") == [spec.architecture]
-                    and config["max_position_embeddings"] == 512
-                )
-            )
+            and config.get("architectures") == [spec.architecture]
+            and type(config["max_position_embeddings"]) is int
+            and 0 < config["max_position_embeddings"] < 10**20
             and bool(labels)
             and all(
                 (path / file).is_file()
@@ -129,37 +127,21 @@ def _load_pipeline(
     model_type: str = "bert",
     architecture: str = "BertForTokenClassification",
 ) -> Any:
-    from transformers import AutoModelForTokenClassification, AutoTokenizer, pipeline
+    from transformers import pipeline
 
-    tokenizer = cast(Any, AutoTokenizer).from_pretrained(
-        str(path),
-        local_files_only=True,
-        trust_remote_code=False,
-        use_fast=True,
-        model_max_length=512,
-    )
-    if not tokenizer.is_fast:
-        raise ValueError("fast tokenizer required")
-    model = AutoModelForTokenClassification.from_pretrained(
-        str(path),
-        local_files_only=True,
-        trust_remote_code=False,
-        use_safetensors=True,
-    )
-    if (
-        model.config.model_type != model_type
-        or model.config.max_position_embeddings != 512
-        or model.config.architectures != [architecture]
-    ):
-        raise ValueError("incompatible model architecture")
+    tokenizer, model, window = _load_local_model(path, model_type, architecture)
     return pipeline(
         "token-classification",
         model=model,
         tokenizer=tokenizer,
         device=-1,
         aggregation_strategy="simple",
-        stride=128,
+        stride=window.stride,
     )
+
+
+def validate_local_model(path: Path, model_type: str, architecture: str) -> Window:
+    return _validate_local_model(path, model_type, architecture)
 
 
 class _TokenClassificationRecognizer(EntityRecognizer):
