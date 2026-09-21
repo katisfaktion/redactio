@@ -333,6 +333,8 @@ fn tokenizer_metadata_requires_an_object_and_ignores_hf_unbounded_sentinels() {
 
     for invalid in [
         "[]",
+        "[512]",
+        "[null]",
         "null",
         "1",
         r#"{"model_max_length":512.0}"#,

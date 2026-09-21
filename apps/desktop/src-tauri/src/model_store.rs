@@ -1,19 +1,13 @@
 use crate::{domain::settings::EntityType, error::AppError, protocol::ModelInfo};
 use serde::{de::Error as _, Deserialize, Deserializer, Serialize};
 use std::{
-    collections::HashSet,
+    collections::{BTreeMap, HashSet},
     fs,
     path::{Component, Path},
 };
 
 const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 const CATALOG: &str = include_str!("../../../sidecar/src/redactio_sidecar/model_catalog.json");
-
-#[derive(Deserialize)]
-struct TokenizerConfig<'a> {
-    #[serde(borrow)]
-    model_max_length: Option<&'a serde_json::value::RawValue>,
-}
 
 struct Nullable<T>(Option<T>);
 impl<'de, T: Deserialize<'de>> Deserialize<'de> for Nullable<T> {
@@ -1058,7 +1052,8 @@ fn native_metadata(
     let config: serde_json::Value =
         serde_json::from_slice(&fs::read(model.join("config.json")).ok()?).ok()?;
     let tokenizer_bytes = fs::read(model.join("tokenizer_config.json")).ok()?;
-    let tokenizer: TokenizerConfig<'_> = serde_json::from_slice(&tokenizer_bytes).ok()?;
+    let tokenizer: BTreeMap<String, &serde_json::value::RawValue> =
+        serde_json::from_slice(&tokenizer_bytes).ok()?;
     let architecture = match descriptor.architecture {
         Architecture::BertForTokenClassification => "BertForTokenClassification",
         Architecture::DebertaV2ForTokenClassification => "DebertaV2ForTokenClassification",
@@ -1068,7 +1063,7 @@ fn native_metadata(
         ModelType::DebertaV2 => "deberta-v2",
     };
     let model_limit = config.get("max_position_embeddings")?.as_u64()?;
-    let tokenizer_limit = match tokenizer.model_max_length {
+    let tokenizer_limit = match tokenizer.get("model_max_length") {
         None => model_limit,
         Some(raw) if raw.get() == "null" => model_limit,
         Some(raw) => {
