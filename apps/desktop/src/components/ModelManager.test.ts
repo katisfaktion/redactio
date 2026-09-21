@@ -123,9 +123,54 @@ test("read-only storage gives the actionable whole-app-folder instruction", () =
   expect(wrapper.get('[role="alert"]').text()).toContain("gesamten App-Ordner");
 });
 
-test("cancel remains disabled after a terminal job", () => {
-  const wrapper = mountManager([], { job: job({ stage: "failed" }), busy: true });
-  expect(wrapper.get('[data-testid="cancel-job"]').attributes("disabled")).toBeDefined();
+test("active install progress disappears when its retained job becomes ready", async () => {
+  const wrapper = mountManager([], { job: job({ stage: "downloading" }), busy: true });
+
+  expect(wrapper.find("progress").exists()).toBe(true);
+  const cancel = wrapper.get('[data-testid="cancel-job"]');
+  expect(cancel.attributes("disabled")).toBeUndefined();
+  await cancel.trigger("click");
+  expect(wrapper.emitted("cancel")).toEqual([[]]);
+
+  await wrapper.setProps({ job: job({ stage: "validating" }) });
+  expect(wrapper.find("progress").exists()).toBe(true);
+  expect(wrapper.find('[data-testid="cancel-job"]').exists()).toBe(true);
+
+  await wrapper.setProps({ models: [model], job: job({ stage: "ready" }) });
+  expect(wrapper.find(".model-job").exists()).toBe(false);
+  expect(wrapper.text()).toContain("Bereit");
+});
+
+test("successful removal does not leave its retained job visible", () => {
+  const wrapper = mountManager([], { job: job({ stage: "removed" }), busy: true });
+  expect(wrapper.find(".model-job").exists()).toBe(false);
+});
+
+test("active removal keeps progress and cancellation available", async () => {
+  const removing = managed({ state: "removing", used_by_pairs: [] });
+  const wrapper = mountManager([removing], {
+    job: job({ stage: "removing", model_name: removing.name }),
+    busy: true,
+  });
+
+  expect(wrapper.find("progress").exists()).toBe(true);
+  expect(wrapper.text()).toContain("Die Entfernung wird abgeschlossen");
+  const cancel = wrapper.get('[data-testid="cancel-job"]');
+  expect(cancel.attributes("disabled")).toBeUndefined();
+  await cancel.trigger("click");
+  expect(wrapper.emitted("cancel")).toEqual([[]]);
+});
+
+test.each([
+  ["cancelled", "Abgebrochen"],
+  ["failed", "Fehlgeschlagen"],
+] as const)("terminal %s job keeps feedback without active controls", (stage, label) => {
+  const wrapper = mountManager([], { job: job({ stage }), busy: true });
+  const result = wrapper.get(".model-job");
+
+  expect(result.text()).toContain(label);
+  expect(result.find("progress").exists()).toBe(false);
+  expect(result.find('[data-testid="cancel-job"]').exists()).toBe(false);
 });
 
 test("repository text is rendered as text", () => {

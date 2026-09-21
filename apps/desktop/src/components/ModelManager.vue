@@ -14,8 +14,8 @@ const status = computed(() => ({
 const errorText = computed(() => errorMessage(props.error));
 const downloadable = computed(() => props.checked !== null && props.checked.model.state !== "ready"
   && !props.models.some(model => model.name === props.checked!.model.name && model.state === "ready"));
-const cancellable = computed(() => props.busy && props.job !== null
-  && ["downloading", "validating", "removing"].includes(props.job.stage));
+const activeJob = computed(() => props.job !== null && ["downloading", "validating", "removing"].includes(props.job.stage));
+const cancellable = computed(() => props.busy && activeJob.value);
 function bytes(value: number) {
   const [unit, divisor] = value < 1_000_000 ? ["kilobyte", 1_000] : ["megabyte", 1_000_000];
   return new Intl.NumberFormat("de-DE", { style: "unit", unit, maximumFractionDigits: 1 }).format(value / divisor);
@@ -92,11 +92,11 @@ function checkUrl() {
       <small>Lizenz: <a v-if="checked.model.license" data-testid="model-license" :href="sourceUrl(checked.model)" target="_blank" rel="noopener noreferrer">{{ checked.model.license }}</a><strong v-else>Nicht angegeben</strong></small>
       <OnyxButton v-if="downloadable" data-testid="download-model" label="Herunterladen" type="button" :disabled="busy" @click="emit('install', checked.plan_id)" />
     </section>
-    <section v-if="job" class="model-job" aria-live="polite" role="status">
+    <section v-if="job && job.stage !== 'ready' && job.stage !== 'removed'" class="model-job" aria-live="polite" role="status">
       <strong>{{ status }}</strong>
-      <progress v-if="job.total_bytes" :value="job.downloaded_bytes" :max="job.total_bytes">{{ job.downloaded_bytes }} / {{ job.total_bytes }}</progress>
-      <span>{{ bytes(job.downloaded_bytes) }} von {{ bytes(job.total_bytes) }}</span>
-      <OnyxButton data-testid="cancel-job" label="Abbrechen" type="button" mode="outline" :disabled="!cancellable" @click="emit('cancel')" />
+      <progress v-if="activeJob && job.total_bytes" :value="job.downloaded_bytes" :max="job.total_bytes">{{ job.downloaded_bytes }} / {{ job.total_bytes }}</progress>
+      <span v-if="activeJob">{{ bytes(job.downloaded_bytes) }} von {{ bytes(job.total_bytes) }}</span>
+      <OnyxButton v-if="activeJob" data-testid="cancel-job" label="Abbrechen" type="button" mode="outline" :disabled="!cancellable" @click="emit('cancel')" />
     </section>
     <ul class="models">
       <li v-for="model in models" :key="model.name">
