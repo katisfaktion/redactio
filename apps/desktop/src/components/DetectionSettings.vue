@@ -20,6 +20,7 @@ function clone(config: ProcessingConfig): ProcessingConfig { return ProcessingCo
 function selectedModel(name: string) { return props.models.find(model => model.name === name); }
 const biomedbert = "OpenMed-PII-German-BiomedBERT-Large-340M-v1";
 const hugginglil = "pii-sensitive-ner-german";
+const legacyModel = "de_core_news_lg";
 function nativeDraft(config: ProcessingConfig): ProcessingConfig {
   const model = selectedModel(config.model);
   if (!model?.entity_types || config.model_entities !== null || config.model !== biomedbert) return clone(config);
@@ -44,19 +45,23 @@ const errors: Record<string, string> = {
   file_busy: "Das Ordnerpaar wird gerade von einer anderen Instanz verwendet.",
   recovery_pending: "Zuerst muss die unterbrochene Verarbeitung mit der bisherigen Erkennung wiederhergestellt werden. Die Einstellungen wurden nicht geändert.",
 };
-watch(() => [props.pair.id, props.pair.config, props.models], () => {
+watch(() => [props.pair.id, JSON.stringify(props.pair.config)], () => {
   draft.value = nativeDraft(props.pair.config);
   modelDrafts.clear(); modelDrafts.set(draft.value.model, clone(draft.value));
   previewText.value = "";
 });
 
-const modelOptions = computed(() => props.models.map(model => ({
+const modelOptions = computed(() => {
+  const available = props.models.map(model => ({
   value: model.name,
   label: `${model.name === biomedbert ? `BiomedBERT – Deutsch, PII (340M, ${model.version.slice(0, 7)})`
     : model.name === hugginglil ? `HuggingLil – Deutsch, PII (${model.version.slice(0, 7)})`
       : `${model.name} (${model.version})`}${model.compatible ? "" : " – nicht verfügbar"}`,
   disabled: !model.compatible,
-})));
+  }));
+  return available.some(model => model.value === draft.value.model) ? available
+    : [{ value: draft.value.model, label: `${draft.value.model} – fehlt`, disabled: true }, ...available];
+});
 const currentModel = computed(() => selectedModel(draft.value.model));
 const modelEntities = computed(() => currentModel.value?.entity_types ?? []);
 const entityOptions = computed(() => [...new Set([
@@ -68,7 +73,7 @@ const validation = computed(() => {
   if (!props.models.some(model => model.name === draft.value.model && model.compatible)) {
     return "Das gewählte Modell ist lokal nicht verfügbar oder nicht kompatibel. Wählen Sie ein verfügbares Modell aus.";
   }
-  if (draft.value.model === hugginglil && draft.value.model_entities === null) {
+  if (draft.value.model !== legacyModel && currentModel.value?.entity_types && draft.value.model_entities === null) {
     return "Eine explizite Auswahl der Modell-Labels ist erforderlich.";
   }
   if (draft.value.custom_rules.some(rule => rule.kind === "regex" ? !rule.pattern.length : !rule.words.length || rule.words.some(word => !word.length))) {

@@ -1,6 +1,6 @@
 import { effectScope, ref } from "vue";
 import { flushPromises } from "@vue/test-utils";
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import { useDetection } from "./useDetection";
 import type { DetectionApi } from "../lib/ipc";
 import type { Settings, SyncPair } from "../lib/contracts";
@@ -9,11 +9,12 @@ const a: SyncPair = { id:"11111111-1111-4111-8111-111111111111",name:"A",source_
 const b: SyncPair = {...a,id:"22222222-2222-4222-8222-222222222222",name:"B"};
 const settings:Settings={schema_version:1,sync_pairs:[a,b],selected_sync_pair_id:a.id};
 const api:DetectionApi={listModels:async()=>[{name:"de_core_news_lg",version:"3.8.0",compatible:true}],refresh:async()=>settings,save:async()=>settings,preview:async()=>[]};
+const ready=ref([{name:"de_core_news_lg",version:"3.8.0",compatible:true}]);
 
 test("late preview results and failures cannot cross a pair switch",async()=>{
   for(const reject of [false,true]) {
     const pair=ref<SyncPair|null>(a),scope=effectScope(); let finish!:(value:never)=>void;
-    const detection=scope.run(()=>useDetection(pair,()=>{}, {...api,preview:()=>new Promise((resolve,fail)=>{finish=reject?fail:resolve;})}))!;
+    const detection=scope.run(()=>useDetection(pair,ready,()=>{}, {...api,preview:()=>new Promise((resolve,fail)=>{finish=reject?fail:resolve;})}))!;
     await flushPromises();
     const pending=detection.preview(a.id,a.config,"private A");
     pair.value=b; await flushPromises();
@@ -27,15 +28,28 @@ test("late preview results and failures cannot cross a pair switch",async()=>{
 test("validated saves update settings and failures leave the draft available",async()=>{
   const pair=ref<SyncPair|null>(a),scope=effectScope(); const applied:Settings[]=[];
   const updated={...settings,sync_pairs:[{...a,processing_revision:"cccccccc-cccc-4ccc-8ccc-cccccccccccc",config:{...a.config,include_positions:false}},b]};
-  const detection=scope.run(()=>useDetection(pair,value=>applied.push(value), {...api,save:async()=>updated}))!;
+  const detection=scope.run(()=>useDetection(pair,ready,value=>applied.push(value), {...api,save:async()=>updated}))!;
   await flushPromises();
   await detection.save(a.id,updated.sync_pairs[0]!.config);
   expect(applied.at(-1)).toEqual(updated); expect(detection.saved.value).toBe(true);
   scope.stop();
   const failureScope=effectScope();
-  const failed=failureScope.run(()=>useDetection(pair,value=>applied.push(value),{...api,save:async()=>{throw {code:"invalid_configuration",retryable:false};}}))!;
+  const failed=failureScope.run(()=>useDetection(pair,ready,value=>applied.push(value),{...api,save:async()=>{throw {code:"invalid_configuration",retryable:false};}}))!;
   await flushPromises(); const count=applied.length;
   await failed.save(a.id,a.config);
   expect(applied).toHaveLength(count); expect(failed.error.value?.code).toBe("invalid_configuration"); expect(failed.busy.value).toBe(false);
   failureScope.stop();
+});
+
+test("missing exact models do not refresh until that model becomes ready", async()=>{
+  const pair=ref<SyncPair|null>(a),models=ref<typeof ready.value>([]),scope=effectScope();
+  const refresh=vi.fn(async()=>settings);
+  scope.run(()=>useDetection(pair,models,()=>{}, {...api,refresh}));
+  await flushPromises();
+  expect(refresh).not.toHaveBeenCalled();
+  models.value=[{name:"another",version:"1",compatible:true}]; await flushPromises();
+  expect(refresh).not.toHaveBeenCalled();
+  models.value=[...models.value,{name:a.config.model,version:"3.8.0",compatible:true}]; await flushPromises();
+  expect(refresh).toHaveBeenCalledOnce();
+  scope.stop();
 });

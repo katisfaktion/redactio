@@ -52,6 +52,13 @@ function errorMessage(error: SafeError | null) {
     invalid_request: "Die Modellanfrage war ungültig. Prüfen Sie die Eingabe und versuchen Sie es erneut.",
     message_too_large: "Die Modellantwort war zu groß und wurde abgelehnt. Prüfen Sie ein anderes Modell.",
     model_operation_failed: "Das Modell konnte nicht verarbeitet werden. Bitte versuchen Sie es erneut.",
+    model_plan_expired: "Die Modellprüfung ist abgelaufen. Prüfen Sie das Modell erneut.",
+    invalid_model_protocol: "Die Modellverwaltung antwortet ungültig. Starten Sie die App neu.",
+    model_worker_unavailable: "Die Modellverwaltung ist nicht verfügbar. Starten Sie die App neu.",
+    model_install_interrupted: "Die Installation wurde unterbrochen. Versuchen Sie es erneut.",
+    operation_busy: "Ein anderer Vorgang läuft. Bitte warten Sie, bis er beendet ist.",
+    operation_cancelled: "Der Vorgang wurde abgebrochen.",
+    state_unavailable: "Der Modellstatus ist nicht verfügbar. Starten Sie die App neu.",
   };
   return messages[error.code] ?? (error.retryable
     ? "Der Vorgang wurde unterbrochen. Bitte versuchen Sie es erneut."
@@ -96,18 +103,18 @@ function checkUrl() {
         <div>
           <div class="model-title"><strong>{{ model.title }}</strong><OnyxTag :label="state(model)" /></div>
           <small>Quelle: <a :href="sourceUrl(model)" target="_blank" rel="noopener noreferrer">{{ model.repository }}</a> · Revision: {{ model.version }}</small>
-          <small>{{ model.state === 'ready' || model.state === 'removing' ? 'Belegt' : 'Noch herunterzuladen' }}: {{ bytes(model.state === 'ready' || model.state === 'removing' ? model.installed_bytes : model.download_bytes) }} · Labels: {{ model.entity_types.join(', ') }}</small>
+          <small>{{ model.state === 'ready' || model.state === 'removing' || (model.state === 'invalid' && model.installed_bytes > 0) ? 'Belegt' : 'Noch herunterzuladen' }}: {{ bytes(model.state === 'ready' || model.state === 'removing' || (model.state === 'invalid' && model.installed_bytes > 0) ? model.installed_bytes : model.download_bytes) }} · Labels: {{ model.entity_types.join(', ') }}</small>
           <small>Lizenz: <a v-if="model.license" :href="sourceUrl(model)" target="_blank" rel="noopener noreferrer">{{ model.license }}</a><strong v-else>Nicht angegeben</strong></small>
           <small v-if="model.error" role="status">{{ errorMessage(model.error) }}</small>
           <small v-if="model.used_by_pairs.length">Wird verwendet von: {{ model.used_by_pairs.map(pair => pair.name).join(', ') }}</small>
-          <small v-if="model.state === 'ready' && model.used_by_pairs.length">Entfernen erst möglich, wenn keine gespeicherten Paare dieses Modell verwenden.</small>
+          <small v-if="(model.state === 'ready' || model.state === 'invalid') && model.used_by_pairs.length">Entfernen erst möglich, wenn keine gespeicherten Paare dieses Modell verwenden.</small>
           <small v-if="model.state === 'removing'">{{ removalActive(model.name) ? "Die Entfernung wird abgeschlossen. Dieser Eintrag wird danach aktualisiert." : "Die Entfernung wurde unterbrochen. Setzen Sie sie fort." }}</small>
         </div>
         <OnyxButton v-if="model.state === 'available' && model.catalog_key" label="Prüfen" type="button" mode="outline" :disabled="busy" @click="emit('check', { kind: 'catalog', key: model.catalog_key })" />
         <OnyxButton v-else-if="model.state === 'available'" data-testid="check-receipt" label="Erneut prüfen" type="button" mode="outline" :disabled="busy" @click="emit('check', retrySource(model))" />
-        <OnyxButton v-else-if="model.state === 'invalid'" :data-testid="model.catalog_key ? 'retry-catalog' : 'retry-receipt'" label="Erneut prüfen" type="button" mode="outline" :disabled="busy" @click="emit('check', retrySource(model))" />
+        <OnyxButton v-if="model.state === 'invalid'" :data-testid="model.catalog_key ? 'retry-catalog' : 'retry-receipt'" label="Erneut prüfen" type="button" mode="outline" :disabled="busy" @click="emit('check', retrySource(model))" />
         <OnyxButton v-else-if="model.state === 'removing' && !removalActive(model.name)" data-testid="resume-removal" label="Entfernen fortsetzen" type="button" color="danger" mode="outline" :disabled="busy || model.used_by_pairs.length > 0" @click="emit('remove', model.name)" />
-        <OnyxButton v-else-if="model.state === 'ready'" data-testid="remove-model" label="Entfernen" type="button" color="danger" mode="outline" :disabled="busy || model.used_by_pairs.length > 0" @click="emit('remove', model.name)" />
+        <OnyxButton v-if="model.state === 'ready' || (model.state === 'invalid' && model.installed_bytes > 0)" data-testid="remove-model" label="Entfernen" type="button" color="danger" mode="outline" :disabled="busy || model.used_by_pairs.length > 0" @click="emit('remove', model.name)" />
       </li>
     </ul>
   </OnyxCard>

@@ -4,7 +4,7 @@ import { pairApi, safeError } from "../lib/ipc";
 
 export interface PairApi {
   listPairs(): Promise<Settings>;
-  addPair(name: string, sourceFolder: string, targetFolder: string, createTarget: boolean): Promise<Settings>;
+  addPair(name: string, sourceFolder: string, targetFolder: string, createTarget: boolean, modelName: string): Promise<Settings>;
   renamePair(pairId: string, name: string): Promise<Settings>;
   selectPair(pairId: string): Promise<Settings>;
   removePair(pairId: string): Promise<Settings>;
@@ -44,7 +44,7 @@ export function usePairs(initialSettings: Settings, api: PairApi = pairApi) {
     selectedPair,
     error,
     busy,
-    addPair: (name: string, source: string, target: string, createTarget: boolean) => run(() => api.addPair(name, source, target, createTarget)),
+    addPair: (name: string, source: string, target: string, createTarget: boolean, modelName: string) => run(() => api.addPair(name, source, target, createTarget, modelName)),
     renamePair: (pairId: string, name: string) => run(() => api.renamePair(pairId, name)),
     selectPair: (pairId: string) => run(() => api.selectPair(pairId)),
     removePair: (pairId: string) => run(() => api.removePair(pairId)),

@@ -104,6 +104,24 @@ test("switches from 54 labels to HuggingLil's native 20 labels and restores its 
   expect(wrapper.emitted("preview")![0]).toEqual([pair.id, config, "Elena Petrov"]);
 });
 
+test("model discovery refresh preserves unsaved settings", async () => {
+  const wrapper = setup();
+  await wrapper.setProps({ models: [...models, hugginglil] });
+  await wrapper.get('[role="option"][aria-label="HuggingLil – Deutsch, PII (6af88fa)"]').trigger("click");
+  await wrapper.get('[data-testid="model-entity-GIVENNAME"]').setValue(false);
+  await wrapper.get('[data-testid="add-regex"]').trigger("click");
+  await wrapper.get('[data-testid="rule-pattern"]').setValue("Synthetic name");
+  await wrapper.get('[data-testid="preview-text"]').setValue("Synthetic name");
+  await wrapper.get('[data-testid="preview"]').trigger("click");
+  const beforeRefresh = structuredClone(wrapper.emitted("preview")!.at(-1)![1]);
+  const added = { name: "hf:fixture/model@" + "a".repeat(40), version: "a".repeat(40),
+    compatible: true, entity_types: ["PERSON"] };
+  await wrapper.setProps({ models: [...models, { ...hugginglil }, added] });
+  expect(wrapper.get('[data-testid="model-entity-GIVENNAME"]').attributes("checked")).toBeUndefined();
+  await wrapper.get("form").trigger("submit");
+  expect(wrapper.emitted("save")!.at(-1)![1]).toEqual(beforeRefresh);
+});
+
 test("requires an explicit native label selection for HuggingLil", async () => {
   const wrapper = setup({ ...pair, config: { ...pair.config, model: hugginglil.name, model_entities: null, enabled_entities: [] } });
   await wrapper.setProps({ models: [...models, hugginglil] });
@@ -156,6 +174,7 @@ test("switching an unavailable legacy pair strips legacy entities from supplemen
 test("rejects empty entries and unavailable models and blocks actions while busy", async () => {
   const wrapper = setup({ ...pair, config: { ...pair.config, model: "missing_model" } });
   expect(wrapper.text()).toContain("nicht verfügbar oder nicht kompatibel");
+  expect(wrapper.get('[role="option"][aria-label="missing_model – fehlt"]').attributes("aria-disabled")).toBe("true");
   await wrapper.get("form").trigger("submit");
   expect(wrapper.emitted("save")).toBeUndefined();
   await wrapper.setProps({ pair });

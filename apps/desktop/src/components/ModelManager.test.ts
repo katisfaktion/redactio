@@ -78,6 +78,28 @@ test("invalid receipts show a repair action and a German compatibility reason", 
   expect(wrapper.emitted("check")).toEqual([[{ kind: "receipt", name: invalid.name }]]);
 });
 
+test("invalid installed entries can be removed unless a saved pair uses them", async () => {
+  const invalid = managed({ state: "invalid", installed_bytes: 1_024, used_by_pairs: [] });
+  const wrapper = mountManager([invalid]);
+  expect(wrapper.text()).toContain("Belegt: 1 kB");
+  await wrapper.get('[data-testid="remove-model"]').trigger("click");
+  expect(wrapper.emitted("remove")).toEqual([[invalid.name]]);
+
+  await wrapper.setProps({ models: [managed({ state: "invalid", installed_bytes: 1_024 })] });
+  expect(wrapper.get('[data-testid="remove-model"]').attributes("disabled")).toBeDefined();
+  expect(wrapper.text()).toContain("Entfernen erst möglich");
+});
+
+test.each([
+  ["model_plan_expired", "erneut"], ["invalid_model_protocol", "neu"],
+  ["model_worker_unavailable", "neu"], ["model_install_interrupted", "erneut"],
+  ["operation_busy", "warten"], ["operation_cancelled", "abgebrochen"],
+  ["state_unavailable", "neu"],
+])("host error %s has an actionable German message", (code, action) => {
+  const wrapper = mountManager([], { error: { code, retryable: true } });
+  expect(wrapper.get('[role="alert"]').text().toLocaleLowerCase("de-DE")).toContain(action);
+});
+
 test("interrupted removal can resume with the existing removal command", async () => {
   const removing = managed({ state: "removing", download_bytes: 2_000, used_by_pairs: [] });
   const wrapper = mountManager([removing]);

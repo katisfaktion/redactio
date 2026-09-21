@@ -8,6 +8,9 @@ import ReviewView from "./components/ReviewView.vue";
 import { detectionApi, pairApi, reviewApi, runApi } from "./lib/ipc";
 import type { ReviewViewData, Settings } from "./lib/contracts";
 import { OnyxModal } from "sit-onyx";
+import ModelManager from "./components/ModelManager.vue";
+import { modelApi } from "./lib/modelIpc";
+import { managed } from "./test/modelFixture";
 
 const native = vi.hoisted(() => ({ listen: vi.fn(), destroy: vi.fn() }));
 vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ onCloseRequested: native.listen, destroy: native.destroy }) }));
@@ -25,6 +28,8 @@ const view: ReviewViewData = {
   decisions: { dismissed_ids: [], manual: [] }, warnings: [], acknowledged_warnings: [], notes: "", status: "pending",
 };
 async function setup() {
+  vi.spyOn(modelApi, "list").mockResolvedValue([managed({ name: "de_core_news_lg", state: "ready", installed_bytes: 1_024, used_by_pairs: [] })]);
+  vi.spyOn(modelApi, "listen").mockResolvedValue(() => {});
   vi.spyOn(detectionApi, "listModels").mockResolvedValue([]);
   vi.spyOn(detectionApi, "refresh").mockImplementation(async id => ({ ...settings, selected_sync_pair_id: id }));
   vi.spyOn(runApi, "listen").mockResolvedValue(() => {});
@@ -60,6 +65,17 @@ test.each(["stay", "discard", "save"] as const)("dirty navigation resolves %s wi
     expect(review.notes.value).toBe("keep notes");
   } else expect(wrapper.get('[data-testid="settings-nav"]').attributes("aria-current")).toBe("page");
   expect(save).toHaveBeenCalledTimes(choice === "save" ? 1 : 0);
+  wrapper.unmount();
+});
+
+test("model navigation uses the dirty review guard", async () => {
+  const { wrapper, review } = await setup();
+  review.notes.value = "private model navigation note";
+  await wrapper.get('[data-testid="models-nav"]').trigger("click");
+  expect(wrapper.findComponent(ModelManager).exists()).toBe(false);
+  await wrapper.get('[data-testid="leave-discard"]').trigger("click");
+  await flushPromises();
+  expect(wrapper.findComponent(ModelManager).exists()).toBe(true);
   wrapper.unmount();
 });
 

@@ -2,9 +2,14 @@ import { mount } from "@vue/test-utils";
 import { createOnyx } from "sit-onyx";
 import onyxDeDE from "sit-onyx/locales/de-DE.json";
 import { ref } from "vue";
-import { expect, test } from "vitest";
-import type { Settings } from "../lib/contracts";
+import { expect, test, vi } from "vitest";
+import type { ModelInfo, Settings } from "../lib/contracts";
 import PairManager from "./PairManager.vue";
+import * as dialog from "@tauri-apps/plugin-dialog";
+
+vi.mock("@tauri-apps/plugin-dialog", () => ({ confirm: vi.fn(), open: vi.fn(), save: vi.fn() }));
+
+const ready = (name: string): ModelInfo => ({ name, version: "a".repeat(40), compatible: true, entity_types: ["PERSON"] });
 
 const pair = {
   id: "11111111-1111-4111-8111-111111111111",
@@ -21,9 +26,9 @@ const pair = {
   },
 };
 
-function mountManager(settings: Settings) {
+function mountManager(settings: Settings, models: ModelInfo[] = []) {
   return mount(PairManager, {
-    props: { settings, busy: false },
+    props: { settings, models, busy: false },
     global: {
       plugins: [createOnyx({
         i18n: { locale: ref("de-DE"), messages: { "de-DE": onyxDeDE } },
@@ -66,4 +71,34 @@ test("the initial empty setup remains expanded", () => {
   expect(wrapper.find('[data-testid="pair-management-toggle"]').exists()).toBe(false);
   expect(wrapper.get("form").text()).toContain("Noch kein Ordnerpaar eingerichtet");
   expect(wrapper.text()).toContain("Quellordner auswählen");
+});
+
+test("zero ready models blocks creation and opens model management", async () => {
+  const wrapper = mountManager({ schema_version: 1, sync_pairs: [], selected_sync_pair_id: null });
+  expect(wrapper.text()).toContain("Installieren Sie zuerst ein Modell");
+  expect(wrapper.get('[data-testid="add-pair-submit"]').attributes("disabled")).toBeDefined();
+  await wrapper.get('[data-testid="manage-models"]').trigger("click");
+  expect(wrapper.emitted("manageModels")).toEqual([[]]);
+});
+
+test("one ready model is visibly selected and emitted for creation", async () => {
+  const model = ready("hf:fixture/only@" + "a".repeat(40));
+  const wrapper = mountManager({ schema_version: 1, sync_pairs: [], selected_sync_pair_id: null }, [model]);
+  expect(wrapper.getComponent('[data-testid="creation-model-select"]').props("modelValue")).toBe(model.name);
+  vi.mocked(dialog.open).mockResolvedValueOnce("/source").mockResolvedValueOnce("/target");
+  await wrapper.get('input[type="text"]').setValue("Akten");
+  const choose = wrapper.findAll("button");
+  await choose.find(button => button.text() === "Quellordner auswählen")!.trigger("click");
+  await choose.find(button => button.text() === "Bestehenden Zielordner auswählen")!.trigger("click");
+  await wrapper.get("form").trigger("submit");
+  expect(wrapper.emitted("add")!.at(-1)).toEqual(["Akten", "/source", "/target", false, model.name]);
+});
+
+test("multiple ready models require an explicit creation choice", async () => {
+  const models = [ready("hf:fixture/one@" + "a".repeat(40)), ready("hf:fixture/two@" + "b".repeat(40))];
+  const wrapper = mountManager({ schema_version: 1, sync_pairs: [], selected_sync_pair_id: null }, models);
+  expect(wrapper.getComponent('[data-testid="creation-model-select"]').props("modelValue")).toBeUndefined();
+  expect(wrapper.get('[data-testid="add-pair-submit"]').attributes("disabled")).toBeDefined();
+  await wrapper.get(`[role="option"][aria-label="${models[1]!.name} (${models[1]!.version.slice(0, 7)})"]`).trigger("click");
+  expect(wrapper.getComponent('[data-testid="creation-model-select"]').props("modelValue")).toBe(models[1]!.name);
 });

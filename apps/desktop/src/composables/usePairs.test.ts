@@ -1,5 +1,5 @@
 import { ref } from "vue";
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import type { Settings } from "../lib/contracts";
 import { isSelectedPair, usePairs, type PairApi } from "./usePairs";
 
@@ -43,4 +43,16 @@ test("a late selection response cannot undo the newest selection", async () => {
   await oldRequest;
 
   expect(pairs.settings.value.selected_sync_pair_id).toBe("22222222-2222-4222-8222-222222222222");
+});
+
+test("pair creation forwards the exact selected model", async () => {
+  const addPair = vi.fn(async () => settings);
+  const api: PairApi = {
+    listPairs: async () => settings, addPair,
+    renamePair: async () => settings, removePair: async () => settings, selectPair: async () => settings,
+  };
+  const pairs = usePairs(settings, api);
+  const modelName = "hf:fixture/model@" + "a".repeat(40);
+  await pairs.addPair("C", "/source", "/target", false, modelName);
+  expect(addPair).toHaveBeenCalledWith("C", "/source", "/target", false, modelName);
 });

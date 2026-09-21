@@ -30,8 +30,8 @@ export const pairApi = {
   freshStart: async (pairId: string, targetFolder: string, confirmed: boolean): Promise<void> => {
     await invoke("fresh_start_pair", { pairId, targetFolder, confirmed });
   },
-  addPair: (name: string, sourceFolder: string, targetFolder: string, createTarget: boolean) =>
-    settingsCommand("add_pair", { name, sourceFolder, targetFolder, createTarget }),
+  addPair: (name: string, sourceFolder: string, targetFolder: string, createTarget: boolean, modelName: string) =>
+    settingsCommand("add_pair", { name, sourceFolder, targetFolder, createTarget, modelName }),
   renamePair: (pairId: string, name: string) => settingsCommand("rename_pair", { pairId, name }),
   selectPair: (pairId: string) => settingsCommand("select_pair", { pairId }),
   removePair: (pairId: string) => settingsCommand("remove_pair", { pairId }),

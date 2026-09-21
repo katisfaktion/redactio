@@ -5,9 +5,18 @@ import { pairApi, runApi, detectionApi, reviewApi } from "./lib/ipc";
 import { ProcessingConfigSchema, type ReviewViewData } from "./lib/contracts";
 import PairManager from "./components/PairManager.vue";
 import DocumentList from "./components/DocumentList.vue";
+import DetectionSettings from "./components/DetectionSettings.vue";
+import ModelManager from "./components/ModelManager.vue";
+import { modelApi } from "./lib/modelIpc";
+import { managed } from "./test/modelFixture";
 import * as dialog from "@tauri-apps/plugin-dialog";
 vi.mock("@tauri-apps/plugin-dialog", () => ({ confirm: vi.fn(), open: vi.fn(), save: vi.fn() }));
 afterEach(() => vi.restoreAllMocks());
+
+function mockReadyModel(name = "de_core_news_lg") {
+  vi.spyOn(modelApi, "list").mockResolvedValue([managed({ name, state: "ready", installed_bytes: 1_024, used_by_pairs: [] })]);
+  vi.spyOn(modelApi, "listen").mockResolvedValue(() => {});
+}
 
 test("an empty registry offers setup without a pretend sync action", () => {
   const wrapper = mount(App, { props: {
@@ -16,6 +25,70 @@ test("an empty registry offers setup without a pretend sync action", () => {
   expect(wrapper.text()).toContain("Ordnerpaar hinzufügen");
   expect(wrapper.find('[data-testid="start-sync"]').exists()).toBe(false);
   expect(wrapper.findAll("main")).toHaveLength(1);
+});
+
+test("models are accessible without a pair and hide pair selection", async () => {
+  vi.spyOn(modelApi, "list").mockResolvedValue([]);
+  vi.spyOn(modelApi, "listen").mockResolvedValue(() => {});
+  const wrapper = mount(App, { props: {
+    initialSettings: { schema_version: 1, sync_pairs: [], selected_sync_pair_id: null },
+  } });
+  await flushPromises();
+  await wrapper.get('[data-testid="models-nav"]').trigger("click");
+  expect(wrapper.findComponent(ModelManager).exists()).toBe(true);
+  expect(wrapper.get('[data-testid="pair-management"]').attributes("style")).toContain("display: none");
+  expect(wrapper.get('[data-testid="models-nav"]').attributes("aria-current")).toBe("page");
+  wrapper.unmount();
+});
+
+test("visiting model management preserves an unsaved detection draft", async () => {
+  const ready = managed({ state: "ready", installed_bytes: 1_024, used_by_pairs: [] });
+  const pairId = "11111111-1111-4111-8111-111111111111";
+  const initial = { schema_version: 1 as const, selected_sync_pair_id: pairId, sync_pairs: [{
+    id: pairId, name: "Sammlung", source_folder: "/source", target_folder: "/target", created_at: "2026-09-19T10:00:00Z",
+    processing_revision: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    config: { model: ready.name, model_entities: ready.entity_types, enabled_entities: [], custom_rules: [], include_positions: true },
+  }] };
+  vi.spyOn(modelApi, "list").mockResolvedValue([ready]);
+  vi.spyOn(modelApi, "listen").mockResolvedValue(() => {});
+  vi.spyOn(detectionApi, "refresh").mockResolvedValue(initial);
+  const save = vi.spyOn(detectionApi, "save").mockImplementation(async (_, config) => ({ ...initial,
+    sync_pairs: [{ ...initial.sync_pairs[0]!, config }],
+  }));
+  vi.spyOn(runApi, "auditLocation").mockResolvedValue("/audit");
+  const wrapper = mount(App, { props: { initialSettings: initial }, attachTo: document.body });
+  await flushPromises();
+  await wrapper.get('[data-testid="settings-nav"]').trigger("click");
+  await wrapper.get('[data-testid="add-regex"]').trigger("click");
+  await wrapper.get('[data-testid="rule-pattern"]').setValue("Synthetic name");
+  await wrapper.get('[data-testid="models-nav"]').trigger("click");
+  expect(wrapper.getComponent(DetectionSettings).isVisible()).toBe(false);
+  await wrapper.get('[data-testid="settings-nav"]').trigger("click");
+  await wrapper.get(".detection-settings form").trigger("submit");
+  expect(save.mock.calls.at(-1)?.[1].custom_rules[0]).toMatchObject({ pattern: "Synthetic name" });
+  wrapper.unmount();
+});
+
+test("a pair with a missing exact model remains inspectable but cannot run or open review", async () => {
+  vi.spyOn(modelApi, "list").mockResolvedValue([]);
+  vi.spyOn(modelApi, "listen").mockResolvedValue(() => {});
+  const pairId = "11111111-1111-4111-8111-111111111111";
+  vi.spyOn(pairApi, "scanPair").mockResolvedValue({ files: [{ doc_id: "doc-0001", relative_path: "synthetic.docx",
+    size_bytes: 5, mtime: null, source_hash_sha256: "a".repeat(64), review_status: "pending", state: "current" }], errors: [] });
+  const open = vi.spyOn(reviewApi, "open");
+  const wrapper = mount(App, { props: { initialSettings: { schema_version: 1, selected_sync_pair_id: pairId, sync_pairs: [{
+    id: pairId, name: "Sammlung", source_folder: "/source", target_folder: "/target", created_at: "2026-09-19T10:00:00Z",
+    processing_revision: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    config: { model: "missing-exact-model", model_entities: ["PERSON"], enabled_entities: [], custom_rules: [], include_positions: true },
+  }] } } });
+  await flushPromises();
+  expect(wrapper.text()).toContain("Das für dieses Ordnerpaar gespeicherte Modell ist nicht verfügbar");
+  await wrapper.findAll("button").find(button => button.text() === "Quellordner einlesen")!.trigger("click");
+  await flushPromises();
+  expect(wrapper.findAll("button").find(button => button.text() === "Verarbeitung starten")!.attributes("disabled")).toBeDefined();
+  await wrapper.get('[data-testid="review-doc-0001"]').trigger("click");
+  expect(open).not.toHaveBeenCalled();
+  wrapper.unmount();
 });
 
 test("a settings load failure is visible instead of pretending setup is empty", () => {
@@ -72,6 +145,7 @@ test("a missing source mapping asks for repair without offering empty setup", ()
 });
 
 test("a scanned selected pair stays locked through the authoritative finish and list refresh", async () => {
+  mockReadyModel();
   const pairId = "11111111-1111-4111-8111-111111111111", runId = "22222222-2222-4222-8222-222222222222";
   let finishRefresh!: (report: Awaited<ReturnType<typeof pairApi.scanPair>>) => void;
   const refresh = new Promise<Awaited<ReturnType<typeof pairApi.scanPair>>>(resolve => { finishRefresh = resolve; });
@@ -124,6 +198,7 @@ test("a scanned selected pair stays locked through the authoritative finish and 
 });
 
 test.each([false, true])("reprocessing sends exact force IDs only after confirmation=%s", async (accepted) => {
+  mockReadyModel();
   const pairId = "11111111-1111-4111-8111-111111111111", runId = "22222222-2222-4222-8222-222222222222";
   vi.mocked(dialog.confirm).mockResolvedValue(accepted);
   vi.spyOn(pairApi, "scanPair").mockResolvedValue({ files: [{ doc_id: "doc-0001", relative_path: "reviewed.docx", size_bytes: 5, mtime: null, source_hash_sha256: "a".repeat(64), review_status: null, state: "stale" }], errors: [] });
@@ -147,6 +222,7 @@ test.each([false, true])("reprocessing sends exact force IDs only after confirma
 });
 
 test("saving detection settings retains the pair and clears documents from the old processing revision", async () => {
+  mockReadyModel();
   const pairId = "11111111-1111-4111-8111-111111111111";
   const initial = { schema_version: 1 as const, selected_sync_pair_id: pairId, sync_pairs: [{
     id: pairId, name: "Sammlung", source_folder: "/source", target_folder: "/target", created_at: "2026-09-19T10:00:00Z", processing_revision: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",

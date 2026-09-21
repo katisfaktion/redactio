@@ -9,12 +9,14 @@ import DocumentList from "./components/DocumentList.vue";
 import PairManager from "./components/PairManager.vue";
 import RunPanel from "./components/RunPanel.vue";
 import DetectionSettings from "./components/DetectionSettings.vue";
+import ModelManager from "./components/ModelManager.vue";
 import ReviewView from "./components/ReviewView.vue";
 import ExportDialog from "./components/ExportDialog.vue";
 import { useReview } from "./composables/useReview";
 import { useDetection } from "./composables/useDetection";
 import { usePairs } from "./composables/usePairs";
 import { useRun } from "./composables/useRun";
+import { useModels } from "./composables/useModels";
 import { runApi, safeError } from "./lib/ipc";
 import type { DocumentKey, SafeError, ScanReport, Settings } from "./lib/contracts";
 import { supplementaryEntities } from "./lib/entityLabels";
@@ -29,13 +31,15 @@ function recovered(settings: Settings) { pairs.settings.value = settings; startu
 
 const empty: Settings = { schema_version: 1, sync_pairs: [], selected_sync_pair_id: null };
 const pairs = usePairs(props.initialSettings ?? empty);
-const detection = useDetection(pairs.selectedPair, (settings) => { pairs.settings.value = settings; });
-const view = ref<"documents" | "settings" | "review">("documents");
+const models = useModels();
+const detection = useDetection(pairs.selectedPair, models.readyModels, (settings) => { pairs.settings.value = settings; });
+const view = ref<"documents" | "settings" | "models" | "review">("documents");
+const settingsMounted = ref(false);
 const navigation = useTemplateRef("navigation");
 const review = useReview();
 const reviewEntityTypes = computed(() => {
   const pair = pairs.selectedPair.value;
-  const model = pair && detection.models.value.find(item => item.name === pair.config.model);
+  const model = pair && models.readyModels.value.find(item => item.name === pair.config.model);
   return [...new Set([
     ...(model?.entity_types ?? []), ...supplementaryEntities, "PERSON", "LOCATION", "CUSTOM",
     ...(pair?.config.custom_rules.map(rule => rule.entity_type) ?? []),
@@ -51,7 +55,9 @@ function invalidateDocuments() { scanned.value = false; }
 const scanned = ref(false), scanning = ref(false), confirming = ref(false);
 function setScanning(value: boolean) { scanning.value = value; }
 const exportSelection = shallowRef<{ pairId: string; pairName: string; keys: DocumentKey[] } | null>(null);
-const busy = computed(() => scanning.value || !!exportSelection.value || pairs.busy.value || run.busy.value || detection.busy.value || review.busy.value || confirming.value);
+const busy = computed(() => scanning.value || !!exportSelection.value || pairs.busy.value || run.busy.value || detection.busy.value || review.busy.value || models.busy.value || confirming.value);
+const selectedModelReady = computed(() => !!pairs.selectedPair.value
+  && models.readyModels.value.some(model => model.name === pairs.selectedPair.value!.config.model));
 const leaveAction = shallowRef<(() => void | Promise<void>) | null>(null);
 const closeError = ref("");
 function guard(action: () => void | Promise<void>) {
@@ -66,17 +72,20 @@ async function leave(choice: "save" | "discard" | "stay") {
   const action = leaveAction.value; leaveAction.value = null;
   review.clear(); await action?.();
 }
-function changeView(next: "documents" | "settings") {
+function changeView(next: "documents" | "settings" | "models") {
   navigation.value?.closeMobileMenus();
   if (next === view.value) return;
-  guard(() => { review.clear(); view.value = next; if (next === "settings") void loadAuditLocation(); });
+  guard(() => {
+    review.clear(); view.value = next;
+    if (next === "settings") { settingsMounted.value = true; void loadAuditLocation(); }
+  });
 }
 function changePair(action: () => Promise<void>) {
   guard(async () => { review.clear(); view.value = "documents"; await action(); });
 }
 function openReview(docId: string) {
   const pairId = selectedId.value;
-  if (!pairId || (view.value === "review" && review.key.value?.doc_id === docId)) return;
+  if (!pairId || !selectedModelReady.value || (view.value === "review" && review.key.value?.doc_id === docId)) return;
   guard(async () => { view.value = "review"; await review.open({ sync_pair_id: pairId, doc_id: docId }); });
 }
 function openExport(keys: DocumentKey[]) {
@@ -119,7 +128,7 @@ async function openAuditFolder() {
   catch { auditError.value = true; }
 }
 async function reprocess(files: { relative_path: string; doc_id: string }[]) {
-  if (busy.value || !files.length) return;
+  if (busy.value || !selectedModelReady.value || !files.length) return;
   const pairId = selectedId.value;
   confirming.value = true;
   try {
@@ -147,16 +156,17 @@ const errorText: Record<string, string> = {
     <template #navBar>
       <OnyxNavBar ref="navigation" app-name="Redactio" mobile="xs" aria-label="Ansichten">
         <template #appArea><span class="brand">Redactio</span></template>
-        <OnyxNavItem v-if="!startupError" data-testid="documents-nav" label="Dokumente" :active="view !== 'settings'" :aria-current="view !== 'settings' ? 'page' : undefined" :disabled="busy" @click="changeView('documents')" />
+        <OnyxNavItem v-if="!startupError" data-testid="documents-nav" label="Dokumente" :active="view === 'documents'" :aria-current="view === 'documents' ? 'page' : undefined" :disabled="busy" @click="changeView('documents')" />
         <OnyxNavItem v-if="!startupError" data-testid="settings-nav" label="Einstellungen" :active="view === 'settings'" :aria-current="view === 'settings' ? 'page' : undefined" :disabled="busy" @click="changeView('settings')" />
-        <template #mobileActivePage>{{ view === 'settings' ? 'Einstellungen' : view === 'review' ? 'Dokument prüfen' : 'Dokumente' }}</template>
+        <OnyxNavItem v-if="!startupError" data-testid="models-nav" label="Modelle" :active="view === 'models'" :aria-current="view === 'models' ? 'page' : undefined" :disabled="busy" @click="changeView('models')" />
+        <template #mobileActivePage>{{ view === 'settings' ? 'Einstellungen' : view === 'models' ? 'Modelle' : view === 'review' ? 'Dokument prüfen' : 'Dokumente' }}</template>
       </OnyxNavBar>
     </template>
     <OnyxPageLayout>
       <div class="shell" :class="{ 'shell--review': view === 'review' }">
         <header v-show="view !== 'review'" class="app-header">
           <div class="app-title">
-            <OnyxHeadline is="h1">{{ view === 'settings' ? 'Einstellungen' : view === 'review' ? 'Dokument prüfen' : 'Dokumente' }}</OnyxHeadline>
+            <OnyxHeadline is="h1">{{ view === 'settings' ? 'Einstellungen' : view === 'models' ? 'Modelle' : view === 'review' ? 'Dokument prüfen' : 'Dokumente' }}</OnyxHeadline>
             <p v-if="view === 'documents'">Lokal verarbeiten, sorgfältig prüfen und freigegeben exportieren.</p>
           </div>
           <AppearanceSelect class="appearance" />
@@ -171,16 +181,20 @@ const errorText: Record<string, string> = {
           <OnyxInfoCard v-if="pairs.error.value" color="danger" role="alert">
             {{ errorText[pairs.error.value.code] ?? "Die Änderung konnte nicht gespeichert werden." }}
           </OnyxInfoCard>
-          <PairManager v-show="view !== 'review'"
-            :settings="pairs.settings.value"
-            :busy="busy"
-            @add="(name, source, target, createTarget) => changePair(() => pairs.addPair(name, source, target, createTarget))"
-            @rename="pairs.renamePair"
-            @select="id => id !== selectedId && changePair(() => pairs.selectPair(id))"
-            @remove="id => changePair(() => pairs.removePair(id))"
-          >
-            <template #context><small v-if="view === 'review'">Prüfung: {{ review.key.value?.doc_id }}</small></template>
-          </PairManager>
+          <div v-show="view !== 'review' && view !== 'models'" data-testid="pair-management">
+            <PairManager
+              :settings="pairs.settings.value"
+              :models="models.readyModels.value"
+              :busy="busy"
+              @add="(name, source, target, createTarget, modelName) => changePair(() => pairs.addPair(name, source, target, createTarget, modelName))"
+              @rename="pairs.renamePair"
+              @select="id => id !== selectedId && changePair(() => pairs.selectPair(id))"
+              @remove="id => changePair(() => pairs.removePair(id))"
+              @manage-models="changeView('models')"
+            >
+              <template #context><small v-if="view === 'review'">Prüfung: {{ review.key.value?.doc_id }}</small></template>
+            </PairManager>
+          </div>
           <div v-if="view === 'review' && pairs.selectedPair.value" class="view-switcher">
             <OnyxSelect v-if="view === 'review' && pairs.selectedPair.value" class="review-picker" data-testid="review-document-select" label="Dokument prüfen" list-label="Verarbeitete Dokumente" :options="reviewDocuments" :model-value="review.key.value?.doc_id" :hide-clear-icon="true" :disabled="busy" @update:model-value="id => typeof id === 'string' && openReview(id)" />
           </div>
@@ -190,6 +204,9 @@ const errorText: Record<string, string> = {
             <ReviewView :key="`${review.key.value?.sync_pair_id}:${review.key.value?.doc_id}`" :review="review" :pair-name="pairs.selectedPair.value.name" :entity-types="reviewEntityTypes" :disabled="busy" @back="changeView('documents')" />
           </template>
           <p v-if="view === 'documents' && detection.error.value" role="alert">Die Erkennung ist derzeit nicht verfügbar. Prüfen Sie die Modelle und Regeln unter Einstellungen.</p>
+          <OnyxInfoCard v-if="view === 'documents' && pairs.selectedPair.value && !selectedModelReady" headline="Modell fehlt" color="warning" role="alert">
+            Das für dieses Ordnerpaar gespeicherte Modell ist nicht verfügbar. Sie können die Dokumente einsehen; installieren Sie das exakte Modell unter Modelle, bevor Sie verarbeiten oder prüfen.
+          </OnyxInfoCard>
           <OnyxCard v-if="pairs.selectedPair.value" v-show="view === 'documents'" data-testid="document-view" role="region" aria-labelledby="documents-heading">
             <div class="section-heading">
               <OnyxHeadline id="documents-heading" is="h2">Dokumentübersicht</OnyxHeadline>
@@ -202,17 +219,17 @@ const errorText: Record<string, string> = {
                 :stage="run.progress.value?.stage ?? (run.busy.value ? 'initializing' : null)"
                 :outcome="run.summary.value?.outcome"
                 :cancelling="run.cancelling.value"
-                :disabled="busy || !scanned"
+                :disabled="busy || !scanned || !selectedModelReady"
                 :error="run.error.value"
                 :errors="run.summary.value?.errors"
                 :audit-warning="run.summary.value?.audit_warning"
                 @start="run.start()" @cancel="run.cancel()"
               />
-              <OnyxButton v-if="run.summary.value?.errors.length" label="Fehlgeschlagene Dokumente erneut versuchen" type="button" :disabled="busy" @click="run.start(run.summary.value.errors.map((failure) => failure.relative_path))" />
+              <OnyxButton v-if="run.summary.value?.errors.length" label="Fehlgeschlagene Dokumente erneut versuchen" type="button" :disabled="busy || !selectedModelReady" @click="run.start(run.summary.value.errors.map((failure) => failure.relative_path))" />
             </DocumentList>
           </OnyxCard>
-          <section v-if="view === 'settings'" class="settings" aria-label="Einstellungen">
-            <DetectionSettings v-if="pairs.selectedPair.value" :pair="pairs.selectedPair.value" :models="detection.models.value" :busy="busy"
+          <section v-if="settingsMounted" v-show="view === 'settings'" class="settings" aria-label="Einstellungen">
+            <DetectionSettings v-if="pairs.selectedPair.value" :pair="pairs.selectedPair.value" :models="models.readyModels.value" :busy="busy"
               :preview="detection.result.value" :error="detection.error.value" :saved="detection.saved.value"
               @save="detection.save" @preview="detection.preview" />
             <OnyxCard class="audit-settings" role="region" aria-labelledby="audit-heading">
@@ -222,6 +239,8 @@ const errorText: Record<string, string> = {
               <p v-if="auditError" role="alert">Der Protokollordner ist derzeit nicht verfügbar.</p>
             </OnyxCard>
           </section>
+          <ModelManager v-if="view === 'models'" :models="models.models.value" :checked="models.checked.value" :job="models.job.value"
+            :busy="busy" :error="models.error.value" @check="models.check" @install="models.install" @cancel="models.cancel" @remove="models.remove" />
         </template>
         <ExportDialog v-if="exportSelection" :pair-id="exportSelection.pairId" :pair-name="exportSelection.pairName" :keys="exportSelection.keys" @close="exportSelection = null" />
         <OnyxModal label="Ungespeicherte Prüfung" :open="!!leaveAction" :alert="true" @update:open="open => !open && leave('stay')">

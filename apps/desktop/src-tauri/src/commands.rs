@@ -170,13 +170,14 @@ pub fn add_pair(
     source_folder: String,
     target_folder: String,
     create_target: bool,
+    model_name: String,
 ) -> Result<UiSettings, AppError> {
     mutate(&state, |settings| {
         let resources = crate::resources::resolve()?;
-        let model = crate::resources::list_models(&resources.model_root)?
-            .into_iter()
-            .find(|model| model.compatible)
-            .ok_or_else(|| AppError::new("setup_incomplete"))?;
+        let model = ready_model(
+            crate::resources::list_models(&resources.model_root)?,
+            &model_name,
+        )?;
         let _lease =
             crate::model_store::ModelUseGuard::acquire(&resources.model_root, &model.name)?;
         let source = Path::new(&source_folder);
@@ -302,7 +303,7 @@ pub async fn save_review(
 }
 
 fn mutate(
-    state: &State<'_, AppState>,
+    state: &AppState,
     change: impl FnOnce(&mut Settings) -> Result<(), AppError>,
 ) -> Result<UiSettings, AppError> {
     let _guard = state.runs.try_operation()?;
@@ -321,14 +322,42 @@ fn mutate(
 
 fn validate_model_config(config: &ProcessingConfig) -> Result<(), AppError> {
     config.validate()?;
-    if config.model == "pii-sensitive-ner-german" && config.model_entities.is_none() {
+    if requires_native_selection(&config.model) && config.model_entities.is_none() {
         return Err(AppError::new("invalid_settings"));
     }
     let resources = crate::resources::resolve()?;
-    let model = crate::resources::list_models(&resources.model_root)?
+    validate_model_config_against(
+        config,
+        crate::resources::list_models(&resources.model_root)?,
+    )
+}
+
+fn requires_native_selection(name: &str) -> bool {
+    !matches!(
+        name,
+        "de_core_news_lg" | "OpenMed-PII-German-BiomedBERT-Large-340M-v1"
+    )
+}
+
+fn ready_model(
+    models: Vec<crate::protocol::ModelInfo>,
+    name: &str,
+) -> Result<crate::protocol::ModelInfo, AppError> {
+    models
         .into_iter()
-        .find(|model| model.compatible && model.name == config.model)
-        .ok_or_else(|| AppError::new("model_not_found"))?;
+        .find(|model| model.compatible && model.name == name)
+        .ok_or_else(|| AppError::new("model_not_found"))
+}
+
+fn validate_model_config_against(
+    config: &ProcessingConfig,
+    models: Vec<crate::protocol::ModelInfo>,
+) -> Result<(), AppError> {
+    config.validate()?;
+    let model = ready_model(models, &config.model)?;
+    if requires_native_selection(&config.model) && config.model_entities.is_none() {
+        return Err(AppError::new("invalid_settings"));
+    }
     if let Some(selected) = &config.model_entities {
         let supported = model.entity_types.into_iter().collect::<HashSet<_>>();
         if selected.iter().any(|entity| !supported.contains(entity)) {
@@ -350,7 +379,7 @@ fn native_default_config(model: &crate::protocol::ModelInfo) -> ProcessingConfig
     config
 }
 
-fn load_registry(state: &State<'_, AppState>) -> Result<Settings, AppError> {
+fn load_registry(state: &AppState) -> Result<Settings, AppError> {
     let settings = load_settings(&state.settings_path)?;
     settings.validate_registry(std::slice::from_ref(&state.app_config_root))?;
     Ok(settings)
@@ -390,6 +419,75 @@ mod tests {
             validate_model_config(&config).unwrap_err().code,
             "invalid_settings"
         );
+    }
+
+    #[test]
+    fn pair_model_selection_uses_only_the_requested_ready_name() {
+        let models = vec![
+            crate::protocol::ModelInfo {
+                name: "ready-first".into(),
+                version: "one".into(),
+                compatible: true,
+                entity_types: vec![
+                    crate::domain::settings::EntityType::parse("PERSON".into()).unwrap()
+                ],
+            },
+            crate::protocol::ModelInfo {
+                name: "requested".into(),
+                version: "two".into(),
+                compatible: true,
+                entity_types: vec![
+                    crate::domain::settings::EntityType::parse("DATE".into()).unwrap()
+                ],
+            },
+        ];
+        let selected = ready_model(models.clone(), "requested").unwrap();
+        assert_eq!(native_default_config(&selected).model, "requested");
+        assert_eq!(
+            ready_model(models, "missing").unwrap_err().code,
+            "model_not_found"
+        );
+    }
+
+    #[test]
+    fn every_nonlegacy_model_requires_native_labels() {
+        let model = crate::protocol::ModelInfo {
+            name: "hf:fixture/model@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+            version: "a".repeat(40),
+            compatible: true,
+            entity_types: vec![crate::domain::settings::EntityType::parse("PERSON".into()).unwrap()],
+        };
+        let config = ProcessingConfig {
+            model: model.name.clone(),
+            ..ProcessingConfig::default()
+        };
+        assert_eq!(
+            validate_model_config_against(&config, vec![model])
+                .unwrap_err()
+                .code,
+            "invalid_settings"
+        );
+    }
+
+    #[test]
+    fn concurrent_model_removal_blocks_pair_mutation_before_it_can_create() {
+        let root = tempfile::tempdir().unwrap();
+        let settings_path = root.path().join("settings.json");
+        save_settings(&settings_path, &Settings::default()).unwrap();
+        let state = AppState {
+            settings_path: settings_path.clone(),
+            app_config_root: root.path().to_path_buf(),
+            runs: RunController::new(settings_path.clone()),
+            sidecar: Mutex::new(None),
+            models: Mutex::new(None),
+        };
+        let removal = state.runs.try_operation().unwrap();
+        let error = mutate(&state, |_| panic!("pair mutation ran during model removal"))
+            .err()
+            .unwrap();
+        assert_eq!(error.code, "operation_busy");
+        assert!(load_settings(&settings_path).unwrap().sync_pairs.is_empty());
+        drop(removal);
     }
 }
 

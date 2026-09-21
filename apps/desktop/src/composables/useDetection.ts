@@ -2,8 +2,10 @@ import { onScopeDispose, ref, watch, type Ref } from "vue";
 import { ProcessingConfigSchema, type ModelInfo, type ProcessingConfig, type RulePreview, type SafeError, type Settings, type SyncPair } from "../lib/contracts";
 import { detectionApi, pairApi, safeError, type DetectionApi } from "../lib/ipc";
 
-export function useDetection(pair: Ref<SyncPair | null>, apply: (settings: Settings) => void, api: DetectionApi = detectionApi) {
-  const models = ref<ModelInfo[]>([]), error = ref<SafeError | null>(null);
+type PairDetectionApi = Pick<DetectionApi, "refresh" | "save" | "preview">;
+
+export function useDetection(pair: Ref<SyncPair | null>, models: Readonly<Ref<ModelInfo[]>>, apply: (settings: Settings) => void, api: PairDetectionApi = detectionApi) {
+  const error = ref<SafeError | null>(null);
   const busy = ref(false), saved = ref(false), result = ref<RulePreview | null>(null);
   let request = 0;
   onScopeDispose(() => { request++; result.value = null; });
@@ -31,17 +33,17 @@ export function useDetection(pair: Ref<SyncPair | null>, apply: (settings: Setti
     }
   }
 
-  watch(() => pair.value?.id, async (id) => {
+  watch([
+    () => pair.value?.id,
+    () => pair.value?.config.model,
+    () => !!pair.value && models.value.some(model => model.name === pair.value!.config.model),
+  ], async ([id, , ready]) => {
     request++; result.value = null; saved.value = false; error.value = null; busy.value = false;
-    if (!id) return;
-    await run(id, async () => {
-      const available = await api.listModels();
-      if (pair.value?.id === id) models.value = available;
-      return api.refresh(id);
-    });
+    if (!id || !ready) return;
+    await run(id, () => api.refresh(id));
   }, { immediate: true });
 
-  return { models, busy, error, saved, result,
+  return { busy, error, saved, result,
     save: (id: string, config: ProcessingConfig) => {
       if (busy.value || pair.value?.id !== id) return Promise.resolve();
       return run(id, () => api.save(id, config), true);

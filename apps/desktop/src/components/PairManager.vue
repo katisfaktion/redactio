@@ -1,21 +1,23 @@
 <script setup lang="ts">
 import { confirm, open, save } from "@tauri-apps/plugin-dialog";
 import { OnyxButton, OnyxCard, OnyxHeadline, OnyxInput, OnyxSelect, OnyxVisuallyHidden } from "sit-onyx";
-import { computed, reactive, ref, useId } from "vue";
-import type { Settings } from "../lib/contracts";
+import { computed, reactive, ref, useId, watch } from "vue";
+import type { ModelInfo, Settings } from "../lib/contracts";
 
-const props = defineProps<{ settings: Settings; busy: boolean }>();
+const props = defineProps<{ settings: Settings; models: ModelInfo[]; busy: boolean }>();
 const emit = defineEmits<{
-  add: [name: string, source: string, target: string, createTarget: boolean];
+  add: [name: string, source: string, target: string, createTarget: boolean, modelName: string];
   rename: [pairId: string, name: string];
   select: [pairId: string];
   remove: [pairId: string];
+  manageModels: [];
 }>();
 
 const name = ref("");
 const source = ref("");
 const target = ref("");
 const createTarget = ref(false);
+const modelName = ref(props.models.length === 1 ? props.models[0]!.name : "");
 const managementOpen = ref(false);
 const managementId = useId();
 const renameNames = reactive<Record<string, string>>({});
@@ -23,6 +25,13 @@ const pairOptions = computed(() => props.settings.sync_pairs.map((pair) => ({
   label: pair.name,
   value: pair.id,
 })));
+const modelOptions = computed(() => props.models.map(model => ({
+  label: `${model.name} (${model.version.slice(0, 7)})`, value: model.name,
+})));
+watch(() => props.models.map(model => model.name), names => {
+  if (names.includes(modelName.value)) return;
+  modelName.value = names.length === 1 ? names[0]! : "";
+});
 
 async function chooseSource() {
   const chosen = await open({ directory: true, multiple: false, title: "Quellordner auswählen" });
@@ -51,7 +60,8 @@ async function chooseNewTarget() {
 }
 
 function submit() {
-  emit("add", name.value, source.value, target.value, createTarget.value);
+  if (!props.models.some(model => model.name === modelName.value)) return;
+  emit("add", name.value, source.value, target.value, createTarget.value, modelName.value);
 }
 
 function selectPair(value?: string | number | null) {
@@ -134,6 +144,11 @@ async function remove(pairId: string) {
         <h3>{{ settings.sync_pairs.length ? "Weiteres Ordnerpaar" : "Noch kein Ordnerpaar eingerichtet" }}</h3>
         <p v-if="!settings.sync_pairs.length">Wählen Sie einen Quellordner und einen getrennten Zielordner aus.</p>
         <OnyxInput v-model="name" label="Name" required :disabled="busy" />
+        <OnyxSelect v-if="models.length" data-testid="creation-model-select" :model-value="modelName || undefined"
+          label="Lokales Sprachmodell" list-label="Installierte Sprachmodelle" :options="modelOptions"
+          :hide-clear-icon="true" :disabled="busy" @update:model-value="value => typeof value === 'string' && (modelName = value)" />
+        <p v-else>Installieren Sie zuerst ein Modell, bevor Sie ein Ordnerpaar hinzufügen.</p>
+        <OnyxButton v-if="!models.length" data-testid="manage-models" label="Modelle verwalten" type="button" mode="outline" :disabled="busy" @click="emit('manageModels')" />
         <div class="folder-choice">
           <OnyxButton label="Quellordner auswählen" type="button" mode="outline" :disabled="busy" @click="chooseSource" />
           <span>{{ source || "Kein Quellordner gewählt" }}</span>
@@ -144,7 +159,7 @@ async function remove(pairId: string) {
           <span>{{ target || "Kein Zielordner gewählt" }}</span>
         </div>
         <p class="hint">Ein nicht leerer Zielordner wird nur übernommen, wenn er bereits zu dieser Quelle gehört.</p>
-        <OnyxButton label="Ordnerpaar hinzufügen" type="submit" :disabled="busy || !name.trim() || !source || !target" />
+        <OnyxButton data-testid="add-pair-submit" label="Ordnerpaar hinzufügen" type="submit" :disabled="busy || !name.trim() || !source || !target || !modelName" />
       </form>
     </div>
   </OnyxCard>
