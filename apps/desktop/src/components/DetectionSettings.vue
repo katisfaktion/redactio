@@ -45,7 +45,7 @@ const errors: Record<string, string> = {
   file_busy: "Das Ordnerpaar wird gerade von einer anderen Instanz verwendet.",
   recovery_pending: "Zuerst muss die unterbrochene Verarbeitung mit der bisherigen Erkennung wiederhergestellt werden. Die Einstellungen wurden nicht geändert.",
 };
-watch(() => [props.pair.id, JSON.stringify(props.pair.config)], () => {
+watch([() => props.pair.id, () => JSON.stringify(props.pair.config)], () => {
   draft.value = nativeDraft(props.pair.config);
   modelDrafts.clear(); modelDrafts.set(draft.value.model, clone(draft.value));
   previewText.value = "";
