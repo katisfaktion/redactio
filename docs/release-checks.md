@@ -23,6 +23,7 @@ application itself must need no separately installed runtime or development tool
 
 ```powershell
 ./scripts/test-check-package.ps1
+./scripts/test-build-manifest.ps1
 ./scripts/check-package.ps1 -PackageRoot 'C:\Users\Public\Redactio Prüfung' -CorpusRoot 'C:\TestInputs\synthetic'
 ./scripts/check-package.ps1 -PackageRoot 'C:\Users\Public\Redactio Prüfung' -CorpusRoot 'C:\TestInputs\synthetic-edges'
 ```
@@ -31,8 +32,9 @@ application itself must need no separately installed runtime or development tool
 SHA-256, and expected safe warning/error/state codes. It contains no extracted text,
 recognizer values, original filenames, or private-document measurements. The six edge
 profiles are header warnings, corrupt ZIP, empty body, repeated names, Unicode, and
-output tampering. The repeated-placeholder check uses an explicit literal PERSON rule
-for the known synthetic name; it measures placeholder reuse, not baseline NER recall.
+output tampering. Package smoke uses explicit synthetic custom rules; it proves local
+model loading, processing and replay without treating a particular NER result as a
+quality claim.
 The baseline lg 3.8.0 model missed the name at code-point offset 310 in this edge
 (occurrences at 63 and 326 were detected). This observed NER limitation remains open
 for human quality acceptance; independent baseline PERSON canaries are unchanged.
@@ -136,9 +138,12 @@ alone does not prove zero attempted connections. Keep traces content-free and lo
 Record the loaded WebView executable path and version, plus app settings, WebView cache
 and OS cache locations separately; do not claim Windows performs zero unrelated writes.
 
-For missing-resource cases use a disposable copy of the ZIP, remove `webview2/` or
-`models/biomedbert-de/`, and confirm setup fails without falling back to installed
-runtimes/models. Preserve expected errors, screenshots and command exit codes. Never
+For missing-resource cases use a disposable copy of the ZIP and remove `webview2/`.
+For each preloaded model, separately remove or corrupt one artifact while leaving its
+registry receipt ready; confirm validation fails without falling back to installed
+runtimes or another model location. A model-free package and a receipt recording an
+explicitly removed model must remain valid. Preserve expected errors, screenshots and
+command exit codes. Never
 change host firewall/network settings, delete existing settings/pairs, or use private
 documents to produce repository or CI evidence.
 

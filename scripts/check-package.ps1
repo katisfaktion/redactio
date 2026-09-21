@@ -3,9 +3,102 @@ param([Parameter(Mandatory)][string]$PackageRoot,
       [string]$CorpusRoot = (Join-Path $PSScriptRoot 'smoke'))
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+function Test-ModelStore([string]$Root, $BuildManifest) {
+    $store = Join-Path $Root 'models'
+    $registryPath = Join-Path $store 'manifest.json'
+    if (-not (Test-Path -LiteralPath $registryPath -PathType Leaf) -or
+        (Get-Item -LiteralPath $registryPath).Length -gt 1MB -or
+        $BuildManifest.inputs.PSObject.Properties.Name -cnotcontains 'models' -or
+        $BuildManifest.inputs.PSObject.Properties.Name -ccontains 'model') {
+        throw 'invalid_model_manifest'
+    }
+    try { $registry = Get-Content -Raw -LiteralPath $registryPath | ConvertFrom-Json -Depth 30 }
+    catch { throw 'invalid_model_manifest' }
+    if ($registry.schema_version -ne 2 -or
+        $registry.PSObject.Properties.Name -cnotcontains 'models' -or
+        $registry.PSObject.Properties.Name -cnotcontains 'legacy_unavailable') {
+        throw 'invalid_model_manifest'
+    }
+    $names = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $directories = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($record in @($registry.models)) {
+        $descriptor = $record.descriptor
+        if (-not $descriptor -or -not $names.Add($descriptor.name) -or
+            $descriptor.version -cnotmatch '^[0-9a-f]{40}$' -or
+            $record.state -cnotin @('ready', 'available', 'removing')) {
+            throw 'invalid_model_manifest'
+        }
+        if ($record.state -eq 'available') {
+            if ($null -ne $record.path) { throw 'invalid_model_manifest' }
+            continue
+        }
+        if ($record.path -cnotmatch '^[a-z0-9][a-z0-9-]{0,127}$' -or
+            $record.path -cmatch '^(con|prn|aux|nul|com[1-9]|lpt[1-9])$' -or
+            -not $directories.Add($record.path)) { throw 'invalid_model_manifest' }
+        $directory = Join-Path $store $record.path
+        if (-not (Test-Path -LiteralPath $directory -PathType Container)) { throw 'preloaded_model_missing' }
+        $receiptPath = Join-Path $directory 'redactio-model.json'
+        try { $receipt = Get-Content -Raw -LiteralPath $receiptPath | ConvertFrom-Json }
+        catch { throw 'invalid_model_receipt' }
+        if (($receipt.PSObject.Properties.Name | Sort-Object) -join ',' -cne 'name,repository,version' -or
+            $receipt.name -cne $descriptor.name -or $receipt.version -cne $descriptor.version -or
+            $receipt.repository -cne $descriptor.repository) { throw 'invalid_model_receipt' }
+        $files = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+        [void]$files.Add('redactio-model.json')
+        foreach ($artifact in @($descriptor.files)) {
+            $base = [IO.Path]::GetFileNameWithoutExtension($artifact.filename)
+            if ($artifact.filename -cnotmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$' -or
+                $artifact.filename.EndsWith('.') -or
+                $base -match '^(con|prn|aux|nul|com[1-9]|lpt[1-9])$' -or
+                -not $files.Add($artifact.filename) -or
+                $artifact.size -lt 0 -or $artifact.sha256 -cnotmatch '^[0-9a-f]{64}$') {
+                throw 'invalid_model_manifest'
+            }
+            $file = Join-Path $directory $artifact.filename
+            if (-not (Test-Path -LiteralPath $file -PathType Leaf) -or
+                (Get-Item -LiteralPath $file).Length -ne $artifact.size) { throw 'preloaded_model_missing' }
+            if ((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant() -cne
+                $artifact.sha256) { throw 'model_checksum_mismatch' }
+        }
+        foreach ($file in Get-ChildItem -LiteralPath $directory -File -Force) {
+            if (-not $files.Contains($file.Name)) { throw 'invalid_model_receipt' }
+        }
+    }
+    foreach ($preload in @($BuildManifest.inputs.models)) {
+        $found = @($registry.models | Where-Object {
+            $_.descriptor.name -ceq $preload.descriptor.name -and
+            $_.descriptor.version -ceq $preload.descriptor.version -and
+            $_.descriptor.repository -ceq $preload.descriptor.repository
+        })
+        if ($found.Count -ne 1) { throw 'preloaded_model_missing' }
+        $actual = $found[0].descriptor
+        foreach ($property in @('name', 'version', 'repository', 'title', 'license', 'model_type',
+                                'architecture', 'window_tokens', 'stride_tokens', 'special_tokens')) {
+            if ($actual.$property -cne $preload.descriptor.$property) { throw 'invalid_model_manifest' }
+        }
+        if (($actual.entity_types -join ',') -cne ($preload.descriptor.entity_types -join ',') -or
+            @($actual.files).Count -ne @($preload.descriptor.files).Count) {
+            throw 'invalid_model_manifest'
+        }
+        foreach ($expected in @($preload.descriptor.files)) {
+            $artifact = @($actual.files | Where-Object filename -CEQ $expected.filename)
+            if ($artifact.Count -ne 1 -or $artifact[0].size -ne $expected.size -or
+                $artifact[0].sha256 -cne $expected.sha256 -or
+                $artifact[0].upstream_hash.algorithm -cne $expected.upstream_hash.algorithm -or
+                $artifact[0].upstream_hash.value -cne $expected.upstream_hash.value) {
+                throw 'invalid_model_manifest'
+            }
+        }
+    }
+    foreach ($item in Get-ChildItem -LiteralPath $store -Force) {
+        if ($item.Name -cne 'manifest.json' -and -not $directories.Contains($item.Name)) {
+            throw 'invalid_model_receipt'
+        }
+    }
+    return $registry
+}
 foreach ($relative in @('redactio.exe', 'sidecar/redactio-sidecar.exe',
-                       'models/manifest.json', 'models/biomedbert-de/config.json',
-                       'models/biomedbert-de/model.safetensors', 'models/biomedbert-de/redactio-model.json',
+                       'models/manifest.json',
                        'webview2/msedgewebview2.exe',
                        'THIRD-PARTY-NOTICES.txt', 'quick-start.de.md')) {
     if (-not (Test-Path -LiteralPath (Join-Path $PackageRoot $relative) -PathType Leaf)) {
@@ -71,7 +164,9 @@ foreach ($entry in $manifest.files) {
 $allFiles = @(Get-ChildItem -LiteralPath $PackageRoot -File -Recurse -Force)
 foreach ($file in $allFiles) {
     $relative = [IO.Path]::GetRelativePath($PackageRoot, $file.FullName).Replace('\', '/')
-    if ($relative -ne 'build-manifest.json' -and -not $seen.Contains($relative)) {
+    if ($relative -ne 'build-manifest.json' -and
+        -not $relative.StartsWith('models/', [StringComparison]::OrdinalIgnoreCase) -and
+        -not $seen.Contains($relative)) {
         throw 'unlisted_package_resource'
     }
 }
@@ -79,18 +174,7 @@ if (@(Get-ChildItem -LiteralPath $PackageRoot -Recurse -Force |
       Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }).Count) {
     throw 'redirected_package_resource'
 }
-$modelManifest = Get-Content -Raw -LiteralPath (Join-Path $PackageRoot 'models/manifest.json') | ConvertFrom-Json
-if ($modelManifest.models.Count -ne 1 -or $modelManifest.models[0].name -cne $manifest.inputs.model.name -or
-    $modelManifest.models[0].version -cne $manifest.inputs.model.revision -or
-    $modelManifest.models[0].path -cne 'biomedbert-de') { throw 'invalid_model_manifest' }
-foreach ($file in $manifest.inputs.model.files.PSObject.Properties) {
-    if ((Get-FileHash -LiteralPath (Join-Path $PackageRoot ('models/biomedbert-de/' + $file.Name))).Hash.ToLowerInvariant() -cne $file.Value) {
-        throw 'model_checksum_mismatch'
-    }
-}
-$modelConfig = Get-Content -Raw -LiteralPath (Join-Path $PackageRoot 'models/biomedbert-de/config.json') | ConvertFrom-Json
-$modelEntities = @($modelConfig.id2label.PSObject.Properties.Value | Where-Object { $_ -cne 'O' } |
-    ForEach-Object { $_ -creplace '^[BI]-', '' } | Sort-Object -Unique)
+$modelManifest = Test-ModelStore $PackageRoot $manifest
 $runtime = Get-Item -LiteralPath (Join-Path $PackageRoot 'webview2/msedgewebview2.exe')
 if ($runtime.VersionInfo.ProductVersion -cne $manifest.inputs.webview2.version) {
     throw 'webview_version_mismatch'
@@ -124,25 +208,60 @@ public static class RedactioSmokeFrame {
 '@
 $temporary = Join-Path ([IO.Path]::GetTempPath()) ('redactio-smoke-' + [guid]::NewGuid())
 New-Item -ItemType Directory -Path $temporary | Out-Null
-$process = [Diagnostics.Process]::new()
-$started = $false
-$process.StartInfo.FileName = Join-Path $PackageRoot 'sidecar/redactio-sidecar.exe'
-$process.StartInfo.ArgumentList.Add('--model-dir')
-$process.StartInfo.ArgumentList.Add((Join-Path $PackageRoot 'models'))
-$process.StartInfo.WorkingDirectory = $temporary
-$process.StartInfo.UseShellExecute = $false
-$process.StartInfo.CreateNoWindow = $true
-$process.StartInfo.RedirectStandardInput = $true
-$process.StartInfo.RedirectStandardOutput = $true
-$process.StartInfo.RedirectStandardError = $true
-$process.StartInfo.StandardInputEncoding = [Text.UTF8Encoding]::new($false)
-foreach ($variable in @('PYTHONPATH', 'PYTHONHOME', 'REDACTIO_MODEL_DIR', 'REDACTIO_SIDECAR_EXECUTABLE')) {
-    [void]$process.StartInfo.Environment.Remove($variable)
+function New-SidecarProcess([bool]$ManageModels) {
+    $child = [Diagnostics.Process]::new()
+    $child.StartInfo.FileName = Join-Path $PackageRoot 'sidecar/redactio-sidecar.exe'
+    if ($ManageModels) { $child.StartInfo.ArgumentList.Add('--manage-models') }
+    $child.StartInfo.ArgumentList.Add('--model-dir')
+    $child.StartInfo.ArgumentList.Add((Join-Path $PackageRoot 'models'))
+    $child.StartInfo.WorkingDirectory = $temporary
+    $child.StartInfo.UseShellExecute = $false
+    $child.StartInfo.CreateNoWindow = $true
+    $child.StartInfo.RedirectStandardInput = $true
+    $child.StartInfo.RedirectStandardOutput = $true
+    $child.StartInfo.RedirectStandardError = $true
+    $child.StartInfo.StandardInputEncoding = [Text.UTF8Encoding]::new($false)
+    foreach ($variable in @('PYTHONPATH', 'PYTHONHOME', 'REDACTIO_MODEL_DIR', 'REDACTIO_SIDECAR_EXECUTABLE')) {
+        [void]$child.StartInfo.Environment.Remove($variable)
+    }
+    $child.StartInfo.Environment['PATH'] = "$env:SystemRoot\System32;$env:SystemRoot"
+    $child.StartInfo.Environment['PYTHONUTF8'] = '1'
+    $child.StartInfo.Environment['HF_HUB_OFFLINE'] = '1'
+    $child.StartInfo.Environment['TRANSFORMERS_OFFLINE'] = '1'
+    return $child
 }
-$process.StartInfo.Environment['PATH'] = "$env:SystemRoot\System32;$env:SystemRoot"
-$process.StartInfo.Environment['PYTHONUTF8'] = '1'
-$process.StartInfo.Environment['HF_HUB_OFFLINE'] = '1'
-$process.StartInfo.Environment['TRANSFORMERS_OFFLINE'] = '1'
+$catalog = @{}
+foreach ($key in @('biomedbert', 'hugginglil')) {
+    $manager = New-SidecarProcess $true
+    try {
+        if (-not $manager.Start()) { throw 'sidecar_start_failed' }
+        $stderrDrain = $manager.StandardError.BaseStream.CopyToAsync([IO.Stream]::Null)
+        $id = [guid]::NewGuid().ToString()
+        $manager.StandardInput.WriteLine((@{ id = $id; type = 'check_model';
+            payload = @{ kind = 'catalog'; key = $key } } | ConvertTo-Json -Compress))
+        $manager.StandardInput.Close()
+        $reply = [RedactioSmokeFrame]::Read($manager.StandardOutput.BaseStream, 30).GetAwaiter().GetResult() |
+            ConvertFrom-Json -Depth 30
+        if ($reply.id -cne $id -or $reply.type -cne 'result' -or
+            -not $manager.WaitForExit(5000) -or $manager.ExitCode -ne 0) {
+            throw 'sidecar_catalog_check_failed'
+        }
+        $catalog[$key] = $reply.payload
+    } finally {
+        if (-not $manager.HasExited) { $manager.Kill($true); $manager.WaitForExit() }
+        $manager.Dispose()
+    }
+}
+foreach ($preload in @($manifest.inputs.models)) {
+    if (-not $catalog.ContainsKey($preload.key) -or
+        $catalog[$preload.key].name -cne $preload.descriptor.name -or
+        $catalog[$preload.key].version -cne $preload.descriptor.version -or
+        $catalog[$preload.key].repository -cne $preload.descriptor.repository) {
+        throw 'invalid_model_catalog'
+    }
+}
+$process = New-SidecarProcess $false
+$started = $false
 function Send-Request([string]$Type, [hashtable]$Payload, [int]$Seconds, [string]$ExpectedError = '') {
     $id = [guid]::NewGuid().ToString()
     $message = @{ id = $id; type = $Type; payload = $Payload } | ConvertTo-Json -Depth 20 -Compress
@@ -166,81 +285,74 @@ try {
     $stderrDrain = $process.StandardError.BaseStream.CopyToAsync([IO.Stream]::Null)
     $ping = Send-Request 'ping' @{} 180
     if ($ping.protocol_version -ne 1) { throw 'sidecar_protocol_version' }
-    $pair = [guid]::NewGuid().ToString()
-    $revision = [guid]::NewGuid().ToString()
-    $entities = @('EMAIL_ADDRESS', 'PHONE_NUMBER', 'IBAN_CODE', 'IP_ADDRESS', 'URL', 'DATE_TIME')
-    $config = @{ model = $modelManifest.models[0].name; model_entities = $modelEntities;
-        enabled_entities = $entities; include_positions = $true }
-    $baseRule = @{ id = [guid]::NewGuid().ToString(); entity_type = 'CUSTOM';
-        enabled = $true; kind = 'words'; words = @('anna.beispiel@example.invalid') }
-    function Configure-Engine {
+    $readyModels = @($modelManifest.models | Where-Object state -CEQ 'ready')
+    $processed = 0
+    $redactionCount = 0
+    if (-not $readyModels) {
+        Send-Request 'configure' @{ sync_pair_id = [guid]::NewGuid().ToString()
+            processing_revision = [guid]::NewGuid().ToString()
+            config = @{ model = $catalog.biomedbert.name; model_entities = @(); enabled_entities = @()
+                custom_rules = @(); include_positions = $true } } 30 'model_not_found'
+    }
+    foreach ($model in $readyModels) {
+        $pair = [guid]::NewGuid().ToString()
+        $revision = [guid]::NewGuid().ToString()
+        $config = @{ model = $model.descriptor.name; model_entities = @(); enabled_entities = @()
+            include_positions = $true; custom_rules = @(@{ id = [guid]::NewGuid().ToString()
+                entity_type = 'CUSTOM'; enabled = $true; kind = 'words'
+                words = @('anna.beispiel@example.invalid') }) }
         $configured = Send-Request 'configure' @{
             sync_pair_id = $pair; processing_revision = $revision; config = $config
         } 180
-        if ($configured.sync_pair_id -cne $pair -or $configured.processing_revision -cne $revision -or
-            $configured.engine.model_name -cne $modelManifest.models[0].name -or
-            $configured.engine.model_version -cne $manifest.inputs.model.revision) { throw 'sidecar_model_identity' }
-    }
-    $config.custom_rules = @($baseRule)
-    Configure-Engine
-    $previousProfile = ''
-    $processed = 0
-    $redactionCount = 0
-    foreach ($entry in $expectations.files) {
-        if ($entry.profile -eq 'repeated' -or $previousProfile -eq 'repeated') {
-            $revision = [guid]::NewGuid().ToString()
-            $config.custom_rules = @($baseRule)
-            if ($entry.profile -eq 'repeated') {
-                # Deterministic placeholder check; baseline NER recall is recorded separately.
-                $config.custom_rules += @{ id = [guid]::NewGuid().ToString(); entity_type = 'PERSON';
-                    enabled = $true; kind = 'words'; words = @('Max Mustermann') }
+        if ($configured.engine.model_name -cne $model.descriptor.name -or
+            $configured.engine.model_version -cne $model.descriptor.version) { throw 'sidecar_model_identity' }
+        $replayed = $false
+        foreach ($entry in $expectations.files) {
+            $source = Join-Path $CorpusRoot $entry.path
+            $sourceHash = $entry.sha256
+            $docId = 'doc-' + ($processed + 1).ToString('D4')
+            $expectedError = if ($entry.profile -eq 'corrupt') { 'invalid_docx' } else { '' }
+            $request = @{ sync_pair_id = $pair; processing_revision = $revision; doc_id = $docId
+                source_path = $source; source_hash_sha256 = $sourceHash
+                redacted_at = '2026-09-19T12:00:00Z' }
+            $result = Send-Request 'process_document' $request 120 $expectedError
+            if ((Get-FileHash -LiteralPath $source).Hash.ToLowerInvariant() -cne $sourceHash) {
+                throw 'source_modified'
             }
-            Configure-Engine
-        }
-        $previousProfile = $entry.profile
-        $source = Join-Path $CorpusRoot $entry.path
-        $sourceHash = $entry.sha256
-        $docId = 'doc-' + ($processed + 1).ToString('D4')
-        $expectedError = if ($entry.profile -eq 'corrupt') { 'invalid_docx' } else { '' }
-        $result = Send-Request 'process_document' @{
-            sync_pair_id = $pair; processing_revision = $revision; doc_id = $docId
-            source_path = $source; source_hash_sha256 = $sourceHash
-            redacted_at = '2026-09-19T12:00:00Z'
-        } 120 $expectedError
-        if ((Get-FileHash -LiteralPath $source).Hash.ToLowerInvariant() -cne $sourceHash) { throw 'source_modified' }
-        $processed++
-        if ($expectedError) { continue }
-        if ($result.sync_pair_id -cne $pair -or $result.processing_revision -cne $revision -or
-            $result.source_hash_sha256 -cne $sourceHash -or $result.doc_id -cne $docId -or
-            $result.body_was_empty -ne ($entry.profile -eq 'empty') -or
-            ($result.warnings -join ',') -cne ($entry.warnings -join ',')) { throw 'sidecar_process_identity' }
-        if ($entry.profile -ne 'empty') {
-            foreach ($entity in ($entities + 'CUSTOM')) {
-                if ($entity -cnotin $result.detections.entity_type) { throw 'smoke_missing_detection' }
+            $processed++
+            if ($expectedError) { continue }
+            if ($result.sync_pair_id -cne $pair -or $result.processing_revision -cne $revision -or
+                $result.source_hash_sha256 -cne $sourceHash -or $result.doc_id -cne $docId -or
+                $result.body_was_empty -ne ($entry.profile -eq 'empty') -or
+                ($result.warnings -join ',') -cne ($entry.warnings -join ',')) {
+                throw 'sidecar_process_identity'
             }
-            foreach ($canary in @('anna.beispiel@example.invalid', 'Max Mustermann', 'Berlin',
-                                 'max@example.com', '+49 30 12345678', 'DE89370400440532013000',
-                                 '192.168.1.1', 'https://example.de/path', '19.09.2026')) {
-                if ($result.body.Contains($canary) -or $result.markdown.Contains($canary)) {
-                    throw "smoke_unredacted_canary profile=$($entry.profile)"
+            if ($entry.profile -ne 'empty' -and
+                ('CUSTOM' -cnotin $result.detections.entity_type -or
+                 $result.body.Contains('anna.beispiel@example.invalid') -or
+                 $result.markdown.Contains('anna.beispiel@example.invalid'))) {
+                throw 'smoke_custom_rule_failed'
+            }
+            foreach ($redaction in $result.redactions) {
+                if (-not $result.body.Contains($redaction.placeholder)) { throw 'smoke_missing_placeholder' }
+            }
+            if (-not $replayed) {
+                $review = Send-Request 'render_review' ($request + @{
+                    detections = @($result.detections)
+                    decisions = @{ dismissed_ids = @(); manual = @() }; review_status = 'pending'
+                    reviewed_at = $null; acknowledged_warnings = @()
+                }) 120
+                if ($review.body -cne $result.body -or $review.markdown -cne $result.markdown) {
+                    throw 'smoke_review_replay_mismatch'
                 }
+                $replayed = $true
             }
+            $redactionCount += $result.redactions.Count
         }
-        foreach ($redaction in $result.redactions) {
-            if (-not $result.body.Contains($redaction.placeholder)) { throw 'smoke_missing_placeholder' }
-        }
-        if ($entry.profile -eq 'repeated') {
-            # The canary and both repeated names must reuse one PERSON placeholder.
-            $names = @($result.redactions | Where-Object entity_type -CEQ 'PERSON')
-            if ($names.Count -ne 3 -or @($names.placeholder | Select-Object -Unique).Count -ne 1) {
-                throw 'repeated_placeholder_mismatch'
-            }
-        }
-        $redactionCount += $result.redactions.Count
     }
     $process.StandardInput.Close()
     if (-not $process.WaitForExit(5000) -or $process.ExitCode -ne 0) { throw 'sidecar_shutdown_failed' }
-    Write-Output "package_smoke_ok documents=$processed redactions=$redactionCount"
+    Write-Output "package_smoke_ok models=$($readyModels.Count) documents=$processed redactions=$redactionCount"
 } finally {
     if ($started -and -not $process.HasExited) { $process.Kill($true); $process.WaitForExit() }
     $process.Dispose()

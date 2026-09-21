@@ -15,10 +15,8 @@
     "presidio-analyzer": "2.2.364",
     "tldextract": "5.3.2"
   },
-  "model": {
-    "catalog": "apps/sidecar/src/redactio_sidecar/model_catalog.json",
-    "key": "biomedbert"
-  },
+  "model_catalog": "apps/sidecar/src/redactio_sidecar/model_catalog.json",
+  "models": [],
   "webview2": {
     "version": "153.0.4234.48",
     "url": "https://msedge.sf.dl.delivery.mp.microsoft.com/filestreamingservice/files/08cd33ee-d109-49b8-9301-9f0bea43c575/Microsoft.WebView2.FixedVersionRuntime.153.0.4234.48.x64.cab",
@@ -32,6 +30,13 @@
     "source": "https://onyx.schwarz/development/#browser-support"
   },
   "notices": [
+    {
+      "package": "tokenizers",
+      "version": "0.22.2",
+      "path": "licenses/tokenizers-0.22.2-LICENSE",
+      "url": "https://raw.githubusercontent.com/huggingface/tokenizers/v0.22.2/LICENSE",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+    },
     {
       "path": "licenses/presidio-LICENSE.txt",
       "url": "https://raw.githubusercontent.com/data-privacy-stack/presidio/779dbd286d5ef4d1fbe2514275fb1bce358f2417/LICENSE",

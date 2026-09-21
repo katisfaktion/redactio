@@ -9,6 +9,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from docx import Document
@@ -17,6 +18,64 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class PackagingTests(unittest.TestCase):
+    def test_windows_package_defaults_to_no_models_and_bundles_runtime_support(self):
+        inputs = json.loads((ROOT / "packaging/build-inputs.json").read_text())
+        self.assertEqual(
+            inputs["model_catalog"],
+            "apps/sidecar/src/redactio_sidecar/model_catalog.json",
+        )
+        self.assertEqual(inputs["models"], [])
+        self.assertNotIn("model", inputs)
+        tokenizers = next(
+            notice for notice in inputs["notices"] if notice["package"] == "tokenizers"
+        )
+        license_path = ROOT / "packaging" / tokenizers["path"]
+        self.assertEqual(tokenizers["version"], "0.22.2")
+        self.assertEqual(
+            hashlib.sha256(license_path.read_bytes()).hexdigest(), tokenizers["sha256"]
+        )
+
+        package_script = (ROOT / "scripts/package-windows.ps1").read_text()
+        self.assertIn("[string[]]$PreloadModels = @()", package_script)
+        self.assertIn("'--model', $model", package_script)
+        self.assertIn("target-feature=+crt-static", package_script)
+
+        spec = (ROOT / "packaging/sidecar.spec").read_text()
+        for package in ("certifi", "spacy_legacy", "spacy_loggers", "tokenizers"):
+            self.assertIn(repr(package), spec)
+        for module in (
+            "transformers.models.bert.modeling_bert",
+            "transformers.models.deberta_v2.modeling_deberta_v2",
+        ):
+            self.assertIn(repr(module), spec)
+
+        workflow = (ROOT / ".github/workflows/windows-release.yml").read_text()
+        self.assertIn("preload_model:", workflow)
+        self.assertIn("default: none", workflow)
+
+    def test_python_notices_use_tracked_tokenizers_license(self):
+        spec = importlib.util.spec_from_file_location("notices", ROOT / "packaging/notices.py")
+        notices = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(notices)
+        distribution = SimpleNamespace(
+            metadata={"Name": "tokenizers", "License-Expression": "Apache-2.0"},
+            version="0.22.2",
+            files=[],
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            Path(directory, "LICENSE.txt").write_text("Synthetic CPython license")
+            with (
+                patch.object(sys, "base_prefix", directory),
+                patch.object(
+                    notices.importlib.metadata,
+                    "distributions",
+                    return_value=[distribution],
+                ),
+            ):
+                text = notices.python_notices()
+        self.assertIn("tokenizers 0.22.2", text)
+        self.assertIn("Apache License", text)
+
     def test_corpus_is_reproducible_and_edges_are_separate(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -27,6 +27,8 @@ def section(name: str, version: str, license_name: str, files: list[Path]) -> st
 
 
 def python_notices() -> str:
+    root = Path(__file__).resolve().parent
+    inputs = json.loads((root / "build-inputs.json").read_text())
     text = section(
         "CPython", sys.version.split()[0], "PSF-2.0", license_files(Path(sys.base_prefix))
     )
@@ -42,6 +44,12 @@ def python_notices() -> str:
             continue  # Repository MIT notice is included by desktop_notices.
         if distribution.metadata["Name"].replace("_", "-") == "presidio-analyzer":
             files.append(Path(__file__).parent / "licenses/presidio-LICENSE.txt")
+        files += [
+            root / entry["path"]
+            for entry in inputs["notices"]
+            if entry.get("package") == distribution.metadata["Name"]
+            and entry.get("version") == distribution.version
+        ]
         license_name = distribution.metadata.get("License-Expression") or distribution.metadata.get(
             "License", "See license text"
         )

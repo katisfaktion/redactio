@@ -1,20 +1,22 @@
 #requires -Version 7.0
-param([string]$DesktopExecutable, [string]$DesktopNotices)
+param([string]$DesktopExecutable, [string]$DesktopNotices,
+      [ValidateSet('biomedbert', 'hugginglil')][string[]]$PreloadModels = @())
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 if (-not $IsWindows -or -not [Environment]::Is64BitOperatingSystem) { throw 'Windows x64 build host required' }
 $root = Split-Path $PSScriptRoot -Parent
 $inputs = Get-Content -Raw -LiteralPath (Join-Path $root 'packaging/build-inputs.json') | ConvertFrom-Json
-$catalog = Get-Content -Raw -LiteralPath (Join-Path $root $inputs.model.catalog) | ConvertFrom-Json
-$entry = @($catalog.models | Where-Object { $_.key -ceq $inputs.model.key })
-if ($catalog.schema_version -ne 1 -or $entry.Count -ne 1) { throw 'invalid_model_catalog' }
-$descriptor = $entry[0].descriptor
-$modelFiles = [ordered]@{}
-foreach ($artifact in $descriptor.files) { $modelFiles[$artifact.filename] = $artifact.sha256 }
-$inputs.model = [pscustomobject]@{
-    name = $descriptor.name; repository = $descriptor.repository; revision = $descriptor.version
-    license = $descriptor.license; directory = $entry[0].directory; files = [pscustomobject]$modelFiles
+$catalog = Get-Content -Raw -LiteralPath (Join-Path $root $inputs.model_catalog) | ConvertFrom-Json
+if ($catalog.schema_version -ne 1 -or
+    @($PreloadModels | Select-Object -Unique).Count -ne $PreloadModels.Count) {
+    throw 'invalid_model_catalog'
 }
+$selected = foreach ($model in $PreloadModels) {
+    $entry = @($catalog.models | Where-Object { $_.key -ceq $model })
+    if ($entry.Count -ne 1) { throw 'invalid_model_catalog' }
+    $entry[0]
+}
+$inputs.models = @($selected)
 $work = Join-Path $root 'dist/windows'
 $package = Join-Path $work 'redactio'
 $desktopSupplied = [bool]$DesktopExecutable
@@ -53,6 +55,7 @@ try {
     $env:UV_PROJECT_ENVIRONMENT = Join-Path $work 'venv'
     $env:UV_PYTHON_INSTALL_DIR = Join-Path $work 'python'
     $env:PYINSTALLER_CONFIG_DIR = Join-Path $work 'pyinstaller-cache'
+    $env:CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS = '-C target-feature=+crt-static'
     Invoke-Checked uv @('--directory', 'apps/sidecar', 'sync', '--locked', '--no-dev', '--group', 'build', '--python', $inputs.tools.python)
     $python = Join-Path $env:UV_PROJECT_ENVIRONMENT 'Scripts/python.exe'
     $tools.python = & $python --version
@@ -88,13 +91,39 @@ try {
     }
     if (-not $DesktopNotices -or -not (Test-Path -LiteralPath $DesktopExecutable -PathType Leaf) -or
         -not (Test-Path -LiteralPath $DesktopNotices -PathType Leaf)) { throw 'Desktop executable and complete desktop notices required' }
+    Invoke-Checked $python @('-c', 'import pefile,sys; p=pefile.PE(sys.argv[1]); names=[e.dll.decode().lower() for e in p.DIRECTORY_ENTRY_IMPORT]; p.close(); assert not any(n.startswith(("vcruntime", "msvcp")) for n in names), names', $DesktopExecutable)
+    $tools.desktop_crt = 'static'
     $cab = Get-VerifiedArtifact $inputs.webview2
     Invoke-Checked $python @('-m', 'PyInstaller', '--noconfirm', '--clean', '--distpath', (Join-Path $work 'frozen'),
         '--workpath', (Join-Path $work 'freeze-work'), 'packaging/sidecar.spec')
+    $frozenExecutable = Join-Path $work 'frozen/redactio-sidecar/redactio-sidecar.exe'
+    $viewer = Join-Path $env:UV_PROJECT_ENVIRONMENT 'Scripts/pyi-archive_viewer.exe'
+    $archiveContents = & $viewer -r -b $frozenExecutable
+    if ($LASTEXITCODE) { throw 'Frozen sidecar import inspection failed' }
+    foreach ($module in @('transformers.models.bert.modeling_bert',
+                           'transformers.models.deberta_v2.modeling_deberta_v2',
+                           'spacy_legacy', 'spacy_loggers')) {
+        if (-not ($archiveContents -match [regex]::Escape($module))) {
+            throw "Frozen sidecar import missing: $module"
+        }
+    }
     New-Item -ItemType Directory -Path $package | Out-Null
     Copy-Item -LiteralPath $DesktopExecutable -Destination (Join-Path $package 'redactio.exe')
     Copy-Item -LiteralPath (Join-Path $work 'frozen/redactio-sidecar') -Destination (Join-Path $package 'sidecar') -Recurse
-    Invoke-Checked $python @('scripts/prepare-biomedbert.py', '--model-dir', (Join-Path $package 'models'))
+    foreach ($required in @('sidecar/_internal/certifi/cacert.pem',
+                             'sidecar/_internal/redactio_sidecar/model_catalog.json')) {
+        if (-not (Test-Path -LiteralPath (Join-Path $package $required) -PathType Leaf)) {
+            throw "Frozen sidecar resource missing: $required"
+        }
+    }
+    if (-not @(Get-ChildItem -LiteralPath (Join-Path $package 'sidecar/_internal/tokenizers')
+                 -Filter '*.pyd' -File).Count) { throw 'Frozen tokenizer support missing' }
+    $modelRoot = Join-Path $package 'models'
+    Invoke-Checked $python @('-c', 'from pathlib import Path; from redactio_sidecar.model_store import ModelRegistry, write_registry; write_registry(Path(__import__("sys").argv[1]), ModelRegistry(schema_version=2, models=[], legacy_unavailable=[]))', $modelRoot)
+    foreach ($model in $PreloadModels) {
+        Invoke-Checked $python @('scripts/prepare-biomedbert.py', '--model', $model,
+                                '--model-dir', $modelRoot)
+    }
     $runtimeStage = Join-Path $work 'runtime'
     New-Item -ItemType Directory -Path $runtimeStage | Out-Null
     Invoke-Checked "$env:SystemRoot\System32\expand.exe" @($cab, '-F:*', $runtimeStage)
@@ -106,7 +135,10 @@ try {
     Copy-Item -LiteralPath (Join-Path $root 'docs/quick-start.de.md') -Destination $package
     Invoke-Checked $python @('packaging/notices.py', '--output', (Join-Path $work 'python-notices.txt'))
     $notices = (Get-Content -Raw -LiteralPath $DesktopNotices) + (Get-Content -Raw -LiteralPath (Join-Path $work 'python-notices.txt'))
-    $notices += "`nOpenMed German BiomedBERT 340M ($($inputs.model.revision)), Apache-2.0.`nhttps://huggingface.co/$($inputs.model.repository)`n"
+    foreach ($entry in $inputs.models) {
+        $license = if ($entry.descriptor.license) { $entry.descriptor.license } else { 'No license declared in the model card' }
+        $notices += "`n$($entry.descriptor.title) ($($entry.descriptor.version)), $license.`nhttps://huggingface.co/$($entry.descriptor.repository)`n"
+    }
     foreach ($file in Get-ChildItem -LiteralPath (Join-Path $package 'models') -File -Recurse |
              Where-Object Name -Like 'LICENSE*') { $notices += "`n" + (Get-Content -Raw -LiteralPath $file.FullName) }
     Copy-Item -LiteralPath (Join-Path $root 'packaging/licenses/webview2-fixed-LICENSE.html') -Destination (Join-Path $package 'webview2/LICENSE.html')
@@ -118,8 +150,11 @@ try {
     Invoke-Checked $python @('scripts/generate-corpus.py', '--output', (Join-Path $work 'smoke'), '--count', '1')
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'check-package.ps1') -Destination $work
     $files = @(Get-ChildItem -LiteralPath $package -File -Recurse -Force | Sort-Object FullName | ForEach-Object {
-        @{ path = [IO.Path]::GetRelativePath($package, $_.FullName).Replace('\', '/')
-           sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() }
+        $relative = [IO.Path]::GetRelativePath($package, $_.FullName).Replace('\', '/')
+        if (-not $relative.StartsWith('models/', [StringComparison]::OrdinalIgnoreCase)) {
+            @{ path = $relative
+               sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() }
+        }
     })
     $locks = @('pnpm-lock.yaml', 'apps/sidecar/uv.lock', 'apps/desktop/src-tauri/Cargo.lock') | ForEach-Object {
         @{ path = $_; sha256 = (Get-FileHash -LiteralPath (Join-Path $root $_)).Hash.ToLowerInvariant() }
@@ -133,6 +168,7 @@ try {
        python_distributions = $distributions
        desktop = @{ mode = $(if ($desktopSupplied) { 'supplied' } else { 'built_here' })
                     provenance = $(if ($desktopSupplied) { 'caller_supplied_unverified' } else { 'local_build' })
+                    c_runtime = 'statically_linked'
                     sha256 = (Get-FileHash -LiteralPath (Join-Path $package 'redactio.exe')).Hash.ToLowerInvariant() }
        test_evaluation_references = @($references); acceptance = 'unverified'
     } | ConvertTo-Json -Depth 20 |

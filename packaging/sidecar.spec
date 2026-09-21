@@ -5,14 +5,16 @@ from PyInstaller.utils.hooks import collect_all, collect_data_files, copy_metada
 root = Path(SPECPATH).resolve().parent
 datas, binaries, hiddenimports = [], [], []
 datas += collect_data_files('redactio_sidecar', includes=['model_catalog.json'])
-for package in ('spacy', 'presidio_analyzer', 'thinc'):
+for package in ('spacy', 'presidio_analyzer', 'thinc', 'spacy_legacy', 'spacy_loggers', 'tokenizers'):
     package_data, package_binaries, package_imports = collect_all(package)
     datas += package_data
     binaries += package_binaries
     hiddenimports += package_imports
 # tldextract's dot-prefixed PSL snapshot is essential on a cold, offline machine.
 datas += collect_data_files('tldextract', includes=['.tld_set_snapshot'])
-for distribution in ('redactio-sidecar', 'spacy', 'presidio-analyzer', 'tldextract'):
+datas += collect_data_files('certifi', includes=['cacert.pem'])
+for distribution in ('redactio-sidecar', 'spacy', 'spacy-legacy', 'spacy-loggers',
+                     'presidio-analyzer', 'tldextract', 'tokenizers', 'certifi'):
     datas += copy_metadata(distribution, recursive=True)
 # Transformers loads model implementations lazily. Torch/transformers hooks
 # collect their runtime binaries, source files and dependency metadata.

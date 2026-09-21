@@ -1,6 +1,16 @@
 name: Build Windows ZIP
 on:
   workflow_dispatch:
+    inputs:
+      preload_model:
+        description: Optional catalog model to include for an offline demonstration
+        type: choice
+        required: true
+        default: none
+        options:
+          - none
+          - biomedbert
+          - hugginglil
 permissions:
   contents: read
 jobs:
@@ -35,7 +45,9 @@ jobs:
           npm install --global pnpm@${{ steps.tools.outputs.pnpm }}
           rustup toolchain install ${{ steps.tools.outputs.rust }} --profile minimal
           $env:RUSTUP_TOOLCHAIN = '${{ steps.tools.outputs.rust }}'
-          ./scripts/package-windows.ps1
+          $preload = '${{ inputs.preload_model }}'
+          if ($preload -eq 'none') { ./scripts/package-windows.ps1 }
+          else { ./scripts/package-windows.ps1 -PreloadModels $preload }
       - name: Upload retained CI artifact; public publication requires a separate action
         uses: actions/upload-artifact@v4
         with:

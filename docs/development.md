@@ -61,22 +61,32 @@ does not receive documents. Validate UI changes using synthetic fixtures. Use
 Onyx navigation, cards, headings, status tags and form controls; retain the
 existing review-selection behavior and guards when composing those components.
 
-## Offline German model
+## Local German models
 
-BiomedBERT is the default detector. Core-news models are retired and are no longer
-listed or bundled. Prepare the pinned model explicitly from the repository root
-(the same commands work in PowerShell):
+The Windows ZIP is model-free by default. On first use, installing a catalog model
+needs an internet connection; document processing, previews and review remain local.
+Core-news models are retired. Prepare the pinned BiomedBERT catalog entry explicitly
+from the repository root (the same commands work in PowerShell):
 
 ```sh
 uv --directory apps/sidecar sync --locked
 uv --directory apps/sidecar run --locked python ../../scripts/prepare-biomedbert.py
 ```
 
-Setup installs the CPU runtime and approximately 1.34 GB of model weights. The
-repository, revision and file hashes live in `packaging/biomedbert-inputs.json`.
-Preparation removes retired core-news entries from the model manifest while
-leaving their files untouched. Runtime processing loads local files only and
-fails if setup is incomplete. No `--extra` is needed.
+Setup installs approximately 1.34 GB of weights through the same installer used by
+the app. The repository, exact revision and file hashes live in
+`apps/sidecar/src/redactio_sidecar/model_catalog.json`. Installed files, receipts
+and `manifest.json` live below the selected `models` directory; portable builds use
+`<app>/models`. Runtime processing loads local files only and fails if setup is
+incomplete. No `--extra` is needed.
+
+Imported models must be public Hugging Face repositories with one
+`model.safetensors`, local tokenizer/config files and a supported
+`BertForTokenClassification` or `DebertaV2ForTokenClassification` architecture.
+Remote model code and package installation are disabled. Import resolves and records
+one exact revision; reinstall from the saved receipt or catalog entry to retain that
+revision. A read-only model store can use already installed valid models, but install,
+remove and receipt updates fail until the entire application folder is writable.
 
 Each model declares its own entity labels. BiomedBERT's installed `config.json`
 currently declares 54 types, including FIRSTNAME, LASTNAME, ZIPCODE, AGE and
@@ -112,11 +122,10 @@ alongside BiomedBERT for local comparison:
 uv --directory apps/sidecar run --locked python ../../scripts/prepare-biomedbert.py --model hugginglil
 ```
 
-This downloads approximately 1.11 GB of DeBERTa weights plus tokenizer files.
-`packaging/hugginglil-inputs.json` pins the revision and SHA-256 checksums. The
-existing CPU runtime loads its fast tokenizer without extra dependencies or
-remote model code. The optional alternative is not added to the default portable
-package.
+This downloads approximately 1.11 GB of DeBERTa weights plus tokenizer files. The
+canonical catalog pins its revision and SHA-256 checksums. The existing CPU runtime
+loads its fast tokenizer without remote model code. The default portable package
+contains neither model.
 
 In **Einstellungen**, choose **HuggingLil – Deutsch, PII**, review its native label
 selection, and save before reprocessing documents. Its metadata declares 20 types,
@@ -253,6 +262,19 @@ The script's native compiler route is:
 ```powershell
 pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/package-windows.ps1
 ```
+
+That command creates the ordinary model-free ZIP. For an offline demonstration,
+preload one or both fixed catalog entries at build time:
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/package-windows.ps1 -PreloadModels biomedbert
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/package-windows.ps1 -PreloadModels biomedbert,hugginglil
+```
+
+Copy or extract the entire `redactio` folder. Runtime hashes cover the immutable
+desktop, sidecar, WebView2, documentation and notices. The mutable `models` store is
+checked from its registry, exact artifact hashes and per-model receipt, so later
+explicit installs and removals do not invalidate the runtime manifest.
 
 This route is implemented but has **not** been verified end-to-end on a native
 MSVC build host in the recorded early package run. The route actually exercised

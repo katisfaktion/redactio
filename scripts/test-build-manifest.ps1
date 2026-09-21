@@ -55,18 +55,27 @@ try {
     if (-not $writer) { throw 'Missing build manifest writer' }
     $package = $temporary
     [IO.File]::WriteAllText((Join-Path $package 'redactio.exe'), 'abc')
-    $inputs = @{}; $locks = @(); $files = @(); $source = $identity
+    $inputs = [pscustomobject]@{ model_catalog = 'catalog.json'; models = @() }
+    $locks = @(); $files = @(); $source = $identity
     $tools = @{ python = 'Python 3.13.13' }; $distributions = @()
     $references = @(@{ path = 'synthetic-procedure'; kind = 'procedure_only' })
-    foreach ($desktopSupplied in @($true, $false)) {
-        & ([scriptblock]::Create($writer.Extent.Text))
-        $manifest = Get-Content -Raw -LiteralPath (Join-Path $package 'build-manifest.json') | ConvertFrom-Json
-        $mode, $provenance = if ($desktopSupplied) { 'supplied', 'caller_supplied_unverified' } else { 'built_here', 'local_build' }
-        if ($manifest.desktop.mode -cne $mode -or $manifest.desktop.provenance -cne $provenance -or
-            $manifest.desktop.sha256 -cne 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad' -or
-            $manifest.source.commit -cne $head -or $manifest.acceptance -cne 'unverified' -or
-            $manifest.test_evaluation_references[0].kind -cne 'procedure_only' -or
-            $manifest.observed_tools.python -cne 'Python 3.13.13') { throw 'incorrect_manifest_provenance' }
+    foreach ($modelCount in @(0, 1, 2)) {
+        $inputs.models = @()
+        if ($modelCount) {
+            $inputs.models = @(1..$modelCount | ForEach-Object { [pscustomobject]@{ key = "model-$_" } })
+        }
+        foreach ($desktopSupplied in @($true, $false)) {
+            & ([scriptblock]::Create($writer.Extent.Text))
+            $manifest = Get-Content -Raw -LiteralPath (Join-Path $package 'build-manifest.json') | ConvertFrom-Json
+            $mode, $provenance = if ($desktopSupplied) { 'supplied', 'caller_supplied_unverified' } else { 'built_here', 'local_build' }
+            if ($manifest.desktop.mode -cne $mode -or $manifest.desktop.provenance -cne $provenance -or
+                $manifest.desktop.c_runtime -cne 'statically_linked' -or
+                $manifest.desktop.sha256 -cne 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad' -or
+                $manifest.source.commit -cne $head -or $manifest.acceptance -cne 'unverified' -or
+                @($manifest.inputs.models).Count -ne $modelCount -or
+                $manifest.test_evaluation_references[0].kind -cne 'procedure_only' -or
+                $manifest.observed_tools.python -cne 'Python 3.13.13') { throw 'incorrect_manifest_provenance' }
+        }
     }
-    Write-Output 'build_manifest_tests_ok checks=9'
+    Write-Output 'build_manifest_tests_ok checks=15'
 } finally { Remove-Item -LiteralPath $temporary -Recurse -Force }

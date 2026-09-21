@@ -12,13 +12,18 @@ im eigenen Benutzerverzeichnis entpacken und darin `redactio.exe` öffnen.
 Nicht direkt aus dem ZIP oder von einem Netzlaufwerk starten. Administratorrechte
 und eine separate Installation von Python, Node oder WebView2 sind nicht nötig.
 
-Die Ordner `sidecar`, `models` und `webview2` müssen neben `redactio.exe` bleiben.
-Die Verarbeitung erfolgt lokal; Modelle werden nicht aus dem Internet nachgeladen.
+Den **gesamten entpackten Ordner** kopieren; `sidecar`, `models` und `webview2`
+müssen neben `redactio.exe` bleiben. Die Verarbeitung erfolgt lokal. Das normale
+Paket enthält zunächst keine Modellgewichte: Die erste Installation eines Modells
+benötigt eine Internetverbindung. Ein ausdrücklich vorab geladenes Demopaket kann
+ohne diesen ersten Download verwendet werden.
 Bei fehlenden oder beschädigten Ressourcen das vollständige Original-ZIP erneut
 in einen **neuen** lokalen Ordner entpacken. Eigene Quellen, Arbeitsausgaben und
 Einstellungen dabei nicht überschreiben. Bei einem fehlenden oder inkompatiblen
-Modell ein vorhandenes kompatibles Modell wählen oder das vollständige Paket
-wiederherstellen; es gibt keinen automatischen Modelldownload.
+Modell ein vorhandenes kompatibles Modell wählen, das Modell erneut installieren
+oder das vollständige Paket wiederherstellen. Modelle und ihre Prüfnachweise liegen
+unter `models` im entpackten App-Ordner. Ist dieser Ordner schreibgeschützt, bleiben
+bereits gültige Modelle nutzbar; Installation und Entfernen schlagen sicher fehl.
 
 ## 2. Private Ordner und Sammlung einrichten
 
@@ -52,8 +57,8 @@ deshalb nicht stillschweigend ersetzt.
 
 ## 3. Erkennung einstellen
 
-Die Einstellungen gehören jeweils zum ausgewählten Paar. Standardmodell ist
-**BiomedBERT**. Seine Modelltypen werden aus dem installierten Modell geladen,
+Die Einstellungen gehören jeweils zum ausgewählten Paar. **BiomedBERT** ist das
+Standardmodell, sobald es installiert ist. Seine Modelltypen werden aus dem Modell geladen,
 zurzeit 54 Typen wie Vorname (FIRSTNAME), Nachname (LASTNAME) und Postleitzahl
 (ZIPCODE). Neue Paare aktivieren alle Modelltypen. Zusätzliche Erkennung für
 E-Mail-Adressen, Telefonnummern, IBANs, IP-Adressen, URLs und Datum/Zeit lässt
@@ -64,7 +69,7 @@ Bei bestehenden BiomedBERT-Paaren die Modelltypen prüfen, speichern und Dokumen
 erneut verarbeiten. Bis zum Speichern bleibt die bisherige Erkennung aktiv.
 Core-news-Modelle stehen nicht mehr zur Auswahl; betroffene Paare auf BiomedBERT
 umstellen. Frühere Ergebnisse werden dabei nicht stillschweigend überschrieben.
-Für eine Entwicklungsinstallation zuerst die [Modelleinrichtung](development.md#offline-german-model)
+Für eine Entwicklungsinstallation zuerst die [Modelleinrichtung](development.md#local-german-models)
 durchführen. Auch BiomedBERT kann Namen und Adressbestandteile übersehen.
 
 Wenn zusätzlich eingerichtet, steht **HuggingLil – Deutsch, PII** als zweites
@@ -73,6 +78,13 @@ Das Modell pro Ordnerpaar auswählen, die gewünschten Typen prüfen, speichern 
 vorhandene Dokumente erneut verarbeiten. Die bisherigen Ergebnisse werden nicht
 automatisch umgeschrieben. Die [Einrichtung der Alternative](development.md#hugginglil-alternative)
 erfolgt ausdrücklich vor der lokalen Nutzung.
+
+Neben den festen Katalogeinträgen werden öffentliche Hugging-Face-Repository-URLs
+unterstützt, wenn sie genau eine `model.safetensors`, lokale Tokenizerdateien und
+eine unterstützte BERT- oder DeBERTa-v2-Tokenklassifikation enthalten. Redactio
+führt keinen fremden Modellcode aus und installiert keine Pakete. Der Import bindet
+eine exakte Revision; bei einer Reparatur dieselbe gespeicherte Revision erneut
+installieren und nicht stillschweigend den aktuellen Stand des Repositorys wählen.
 
 Benötigte Kategorien aktivieren und bei Bedarf eigene Wortlisten oder reguläre
 Ausdrücke ergänzen. Wortlisten suchen wörtlich und unterscheiden Groß-/Kleinschreibung;
